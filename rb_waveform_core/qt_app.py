@@ -677,6 +677,7 @@ def main():
     parser = argparse.ArgumentParser(description='Rekordbox Wave')
     parser.add_argument('--demo', action='store_true', help='Use labelled synthetic waveform analysis')
     parser.add_argument('--config', type=Path, help='Use a specific settings file')
+    parser.add_argument('--smoke-test', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     app = QApplication(sys.argv[:1])
     app.setApplicationName('Rekordbox Wave')
@@ -685,4 +686,15 @@ def main():
     session = Session(demo=args.demo, config_path=args.config)
     window = MainWindow(session)
     window.show()
+    if args.smoke_test:
+        def capture_and_close():
+            try:
+                args.smoke_test.parent.mkdir(parents=True, exist_ok=True)
+                if not window.isVisible() or not window.grab().save(str(args.smoke_test)):
+                    raise RuntimeError('Packaged window did not render')
+            except Exception:
+                app.exit(1)
+                return
+            window.close()
+        QTimer.singleShot(750, capture_and_close)
     return app.exec()

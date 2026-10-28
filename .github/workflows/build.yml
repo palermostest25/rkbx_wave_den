@@ -50,3 +50,9 @@ jobs:
           import pathlib, subprocess, sys
           binary = pathlib.Path('dist/Rekordbox Wave.exe') if sys.platform == 'win32' else pathlib.Path('dist/Rekordbox Wave.app/Contents/MacOS/Rekordbox Wave')
           subprocess.run([str(binary.resolve()), '--help'], check=True, timeout=120)
+          subprocess.run([str(binary.resolve()), '--demo', '--config', 'validation/smoke-profile.json', '--smoke-test', 'validation/packaged-native.png'], check=True, timeout=120)
+          assert pathlib.Path('validation/packaged-native.png').stat().st_size > 1000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaged-interface-${{ matrix.os }}
+          path: validation/packaged-native.png
