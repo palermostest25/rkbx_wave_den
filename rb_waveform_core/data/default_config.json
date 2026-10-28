@@ -6,9 +6,9 @@
       255
     ],
     "mid_color": [
-      150,
-      90,
-      40
+      212,
+      155,
+      70
     ],
     "high_color": [
       255,
@@ -29,7 +29,8 @@
       150,
       90,
       40
-    ]
+    ],
+    "rgb_mode": false
   },
   "render": {
     "image_width": 898,
@@ -48,7 +49,7 @@
     "mid_gain": 1.1860465116279069,
     "high_gain": 1.3255813953488373,
     "prerender_detail": 20117,
-    "deck_count": 2,
+    "deck_count": 4,
     "render_mode": "default",
     "overview_low_gain": 0.38372093023255816,
     "overview_mid_gain": 0.45348837209302323,
@@ -56,6 +57,10 @@
     "lowmid_gain": 0.1,
     "midhigh_gain": 1.8294117647058827,
     "overview_lowmid_gain": 1.0,
-    "overview_midhigh_gain": 1.0
+    "overview_midhigh_gain": 1.0,
+    "deck_order": "3,1,2,4",
+    "display_key": "",
+    "fill_display": false,
+    "ui_scale": 1.0
   }
 }

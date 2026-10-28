@@ -8,7 +8,7 @@ ReadProcessMemory (using pymem), removing the rkbx_link subprocess and OSC hop.
 Pointer offsets are version-keyed and loaded from a data file (see
 ``rb_waveform_core/data/offsets``), not hard-coded. The target Rekordbox version
 is auto-detected from the running rekordbox.exe file version, falling back to the
-newest version present in the offsets file (or an explicit override).
+explicitly selected known version. Unknown versions are rejected.
 
 Exposes the same public API as RekordboxLinkListener:
     reader = RekordboxMemoryReader(deck_count=2)
@@ -210,7 +210,7 @@ def _select_version(detected: Optional[str], available: List[str]) -> Optional[s
     """Pick the best matching offsets version for a detected version string.
 
     Tries the detected version trimmed to progressively fewer dotted components
-    (e.g. 7.2.2.x -> 7.2.2 -> 7.2 -> 7); falls back to the newest available.
+    (e.g. 7.2.2.x -> 7.2.2 -> 7.2 -> 7); rejects unsupported versions.
     """
     if not available:
         return None
@@ -220,7 +220,7 @@ def _select_version(detected: Optional[str], available: List[str]) -> Optional[s
             cand = ".".join(parts[:n])
             if cand in available:
                 return cand
-    return max(available, key=_version_key)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +404,7 @@ class RekordboxMemoryReader:
                 if slow_counter == 0:
                     for deck in range(self.deck_count):
                         path = self._read_anlz_path(pm, base, deck)
-                        if path and path != prev_anlz[deck]:
+                        if path is not None and path != prev_anlz[deck]:
                             prev_anlz[deck] = path
                             state = self._state[deck]
                             state.anlz_path = path
@@ -448,7 +448,7 @@ class RekordboxMemoryReader:
             addr = _resolve_chain(pm, base, deref_offsets, final)
             path = _read_ntstring(pm, addr, maxlen=500)
             if not path:
-                return None
+                return ""
             # Rekordbox reports the .DAT file path; the app loads the containing
             # ANLZ folder, so strip the filename (matches the old OSC listener's
             # _normalize_anlz_path behaviour).

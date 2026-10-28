@@ -15,12 +15,6 @@ from __future__ import annotations
 
 import sys
 
-# Windows-only check
-if sys.platform != "win32":
-    print("Error: rkbx_wave is Windows-only due to rkbx_link.exe dependency.")
-    print("This application requires Windows to communicate with Rekordbox.")
-    sys.exit(1)
-
 import ctypes
 import json
 import shutil
@@ -45,6 +39,9 @@ from rb_waveform_core.config import (
 from rb_waveform_core.deck_controller import DeckController
 from rb_waveform_core.rkbx_link_listener import DeckEvent
 from rb_waveform_core.rb_memory_reader import RekordboxMemoryReader
+from rb_waveform_core.rkbx_link_listener import RekordboxLinkListener
+from rb_waveform_core.displays import list_displays, deck_order
+from concurrent.futures import ThreadPoolExecutor
 
 
 LIBRARY_SEARCH_ROOT: Optional[Path] = Path(r"C:\Rekordbox")
@@ -99,7 +96,8 @@ class ToolTip:
 
 
 # User config directory in AppData
-USER_CONFIG_DIR = Path(os.environ.get("APPDATA", Path.home())) / "rkbx_wave"
+USER_CONFIG_DIR = ((Path.home() / "Library" / "Application Support") if sys.platform == "darwin"
+                   else Path(os.environ.get("APPDATA", Path.home()))) / "rkbx_wave"
 USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 LAST_CONFIG_PATH = USER_CONFIG_DIR / "last_config.txt"
 USER_DEFAULT_CONFIG_PATH = USER_CONFIG_DIR / "default_config.json"
@@ -139,7 +137,7 @@ def _get_default_config_path() -> Path:
 DEFAULT_CONFIG_PATH = _get_default_config_path()
 
 # Match tuning_gui: discrete zoom levels in seconds
-ZOOM_LEVELS_SECONDS = [256, 196, 128, 96, 64, 48, 32, 24, 16]
+ZOOM_LEVELS_SECONDS = [256, 196, 128, 96, 64, 48, 32, 24, 16, 12, 8, 6, 4]
 NUM_ZOOM_STEPS = len(ZOOM_LEVELS_SECONDS) - 1
 
 # Friendly labels for Windows virtual-key codes used by the zoom hotkeys.
@@ -175,9 +173,13 @@ GPU_OVERSAMPLE = 2.0
 
 
 class WaveformSyncApp:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, demo=False):
         self.root = root
-        self.root.title("WaveformSync - Dual Deck Display")
+        self.root.title("Rekordbox Wave · Settings")
+        self._loader = ThreadPoolExecutor(max_workers=1, thread_name_prefix="anlz")
+        self._load_jobs = {}
+        self._pending_paths = {}
+        self._input_source = "Memory" if sys.platform == "win32" and not demo else "Offline"
         
         # Shared config (loaded from file)
         self.color_cfg: WaveformColorConfig = DEFAULT_COLOR_CONFIG
@@ -224,7 +226,7 @@ class WaveformSyncApp:
         # (borderless can't be dragged - reposition with the border on first).
         self.gpu_on_top_var = tk.BooleanVar(value=True)
         self.gpu_border_var = tk.BooleanVar(value=True)
-        self.zoom_var = tk.IntVar(value=0)  # index into fixed zoom levels
+        self.zoom_var = tk.IntVar(value=8)  # index into fixed zoom levels
         self.link_status_var = tk.StringVar(value="RB Link: disabled")
         
         # Tuning panel variables
@@ -238,6 +240,10 @@ class WaveformSyncApp:
         self.smoothing_var = tk.IntVar(value=1)
         
         self._load_last_or_default_config()
+        self.decks = {i: DeckController(LIBRARY_SEARCH_ROOT) for i in range(self.deck_count)}
+        self._deck_play_time = {i: None for i in range(self.deck_count)}
+        self._deck_play_wall = {i: None for i in range(self.deck_count)}
+        self._deck_play_rate = {i: 0.0 for i in range(self.deck_count)}
         self._build_ui()
         self._create_gpu_window()
         self._start_link_listener()
@@ -248,6 +254,12 @@ class WaveformSyncApp:
         self._resize_to_content()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        if demo:
+            from rb_waveform_core.demo import populate_demo
+            populate_demo(self.decks)
+            self._demo_started = time.monotonic()
+            self._refresh_all_textures()
+            self.link_status_var.set("SYNTHETIC DEMO · No Rekordbox connection")
 
     def _resize_to_content(self) -> None:
         """Shrink/grow the tk window to fit its current widgets."""
@@ -273,6 +285,8 @@ class WaveformSyncApp:
             borderless=not self.gpu_border_var.get(),
             always_on_top=self.gpu_on_top_var.get(),
             on_close=self._on_gpu_window_closed,
+            row_order=deck_order(self.render_cfg.deck_order, self.deck_count),
+            ui_scale=self.render_cfg.ui_scale,
         )
         # Borderless windows can't be dragged by a titlebar, so place it at the top
         # centre of the screen by default (a sensible spot for an always-on-top bar).
@@ -282,15 +296,77 @@ class WaveformSyncApp:
             pass
         print(f"[GPU] Renderer hardware-accelerated: {self.gpu.hardware}")
         self._on_gpu_window_opts()
+        self._apply_display_settings()
         self._refresh_all_textures()
 
     def _on_gpu_window_opts(self) -> None:
         """Apply the GPU window border / always-on-top toggles."""
         if self.gpu is None:
             return
-        self.gpu.set_borderless(not self.gpu_border_var.get())
+        self.gpu.set_borderless(self.render_cfg.fill_display or not self.gpu_border_var.get())
         self.gpu.set_always_on_top(self.gpu_on_top_var.get())
     
+
+    def _refresh_displays(self):
+        self._displays = list_displays()
+        self.display_combo["values"] = ["Windowed"] + [d.label for d in self._displays]
+
+    def _select_display(self, _event=None):
+        selected = next((d for d in self._displays if d.label == self.display_var.get()), None)
+        self.render_cfg.display_key = selected.key if selected else ""
+        self._apply_display_settings()
+
+    def _apply_display_settings(self, _event=None):
+        if hasattr(self, "fill_var"):
+            self.render_cfg.fill_display = self.fill_var.get()
+            self.render_cfg.ui_scale = float(self.scale_var.get())
+        if self.gpu:
+            self.gpu.ui_scale = self.render_cfg.ui_scale
+            self.gpu.bind_display(self.render_cfg.display_key, self.render_cfg.fill_display)
+            self._on_gpu_window_opts()
+
+    def _apply_order(self, _event=None):
+        try:
+            order = deck_order(self.order_var.get(), self.deck_count)
+        except ValueError as exc:
+            self.order_var.set(self.render_cfg.deck_order)
+            self.link_status_var.set(str(exc))
+            return
+        self.render_cfg.deck_order = self.order_var.get()
+        if self.gpu:
+            self.gpu.row_order = order
+
+    def _change_source(self, _event=None):
+        if self.link_listener:
+            self.link_listener.stop()
+            self.link_listener = None
+        self._demo_started = None
+        self._input_source = self.source_var.get()
+        self._connect_source()
+
+    def _connect_source(self):
+        try:
+            if self._input_source == "Memory":
+                self.link_listener = RekordboxMemoryReader(deck_count=self.deck_count)
+            elif self._input_source == "OSC":
+                self.link_listener = RekordboxLinkListener(decks=range(self.deck_count))
+            else:
+                self.link_status_var.set("Offline preview · Open a track's ANLZ folder")
+                return
+            self.link_listener.start()
+            self.link_status_var.set(f"{self._input_source}: waiting for playback data")
+        except Exception as exc:
+            self.link_listener = None
+            self.link_status_var.set(f"Cannot start {self._input_source}: {exc}")
+
+    def _open_anlz(self):
+        idx = int(self.preview_deck.get()) - 1
+        if idx >= self.deck_count:
+            self.link_status_var.set("Switch to four decks to preview deck 3 or 4")
+            return
+        folder = filedialog.askdirectory(title="Choose the track's ANLZ folder (DAT / EXT / 2EX)")
+        if folder:
+            self._load_deck_anlz(self.decks[idx], Path(folder), self.deck_infos[idx], idx)
 
     def _load_last_or_default_config(self) -> None:
         """Load configuration from last_config.txt if it exists, else from default."""
@@ -328,6 +404,12 @@ class WaveformSyncApp:
         
         # Create style for black frame
         style = ttk.Style()
+        style.theme_use("clam")
+        style.configure(".", background="#14191f", foreground="#edf1f5", fieldbackground="#202730")
+        style.map("TCombobox", fieldbackground=[("readonly", "#202730")], foreground=[("readonly", "#edf1f5")])
+        style.map("TButton", background=[("active", "#344151")])
+        style.configure("TButton", padding=(8, 5))
+        style.configure("TCheckbutton", padding=3)
         style.configure("Black.TFrame", background="black")
         style.configure("Black.TLabel", background="black", foreground="white")
         style.configure("Tune.TFrame", background="#1a1a1a")
@@ -402,6 +484,46 @@ class WaveformSyncApp:
         save_btn = ttk.Button(r3, text="Save", width=7, command=self._on_save_config)
         save_btn.pack(side="left")
         ToolTip(save_btn, "Save current waveform settings to a JSON file")
+
+        display_row = ttk.Frame(controls)
+        display_row.pack(fill="x", pady=(12, 3))
+        ttk.Label(display_row, text="Display").pack(side="left", padx=(0, 6))
+        self._displays = list_displays()
+        selected = next((d.label for d in self._displays if d.key == self.render_cfg.display_key), "Windowed")
+        self.display_var = tk.StringVar(value=selected)
+        self.display_combo = ttk.Combobox(display_row, textvariable=self.display_var,
+            values=["Windowed"] + [d.label for d in self._displays], state="readonly", width=32)
+        self.display_combo.pack(side="left", fill="x", expand=True)
+        self.display_combo.bind("<<ComboboxSelected>>", self._select_display)
+        ttk.Button(display_row, text="Refresh", command=self._refresh_displays).pack(side="left", padx=4)
+        layout = ttk.Frame(controls)
+        layout.pack(fill="x", pady=3)
+        self.fill_var = tk.BooleanVar(value=self.render_cfg.fill_display)
+        ttk.Checkbutton(layout, text="Fill display", variable=self.fill_var, command=self._apply_display_settings).pack(side="left")
+        ttk.Label(layout, text="Row order").pack(side="left", padx=(8, 4))
+        self.order_var = tk.StringVar(value=self.render_cfg.deck_order)
+        order_entry = ttk.Entry(layout, textvariable=self.order_var, width=10)
+        order_entry.pack(side="left")
+        order_entry.bind("<Return>", self._apply_order)
+        order_entry.bind("<FocusOut>", self._apply_order)
+        ttk.Label(layout, text="Scale").pack(side="left", padx=(8, 4))
+        self.scale_var = tk.StringVar(value=str(self.render_cfg.ui_scale))
+        scale_combo = ttk.Combobox(layout, textvariable=self.scale_var, values=["0.75", "1.0", "1.25", "1.5", "2.0"], width=5, state="readonly")
+        scale_combo.pack(side="left")
+        scale_combo.bind("<<ComboboxSelected>>", self._apply_display_settings)
+        source_row = ttk.Frame(controls)
+        source_row.pack(fill="x", pady=4)
+        ttk.Label(source_row, text="Input").pack(side="left", padx=(0, 6))
+        self.source_var = tk.StringVar(value=self._input_source)
+        sources = ["Memory", "OSC", "Offline"] if sys.platform == "win32" else ["Offline", "OSC"]
+        source_combo = ttk.Combobox(source_row, textvariable=self.source_var, values=sources, state="readonly", width=9)
+        source_combo.pack(side="left")
+        source_combo.bind("<<ComboboxSelected>>", self._change_source)
+        self.preview_deck = tk.StringVar(value="1")
+        ttk.Combobox(source_row, textvariable=self.preview_deck, values=["1", "2", "3", "4"], state="readonly", width=3).pack(side="left", padx=6)
+        ttk.Button(source_row, text="Open ANLZ folder…", command=self._open_anlz).pack(side="left")
+        if sys.platform == "darwin":
+            ttk.Label(controls, text="Mac viewer: direct Rekordbox sync is not available.\nOSC requires a separate compatible data sender.", wraplength=460).pack(anchor="w", pady=6)
 
         ttk.Label(controls, textvariable=self.link_status_var).pack(anchor="w", pady=(4, 0))
 
@@ -737,6 +859,15 @@ class WaveformSyncApp:
             except Exception as e:
                 print(f"[Config] Failed to update last_config.txt: {e}")
             # Sync tuning panel variables
+            if self.render_cfg.deck_count != self.deck_count:
+                self._set_deck_count(self.render_cfg.deck_count)
+                self.deck_count_var.set(str(self.deck_count))
+            self.order_var.set(self.render_cfg.deck_order)
+            self.fill_var.set(self.render_cfg.fill_display)
+            self.scale_var.set(str(self.render_cfg.ui_scale))
+            self._apply_order()
+            self.display_var.set(next((d.label for d in self._displays if d.key == self.render_cfg.display_key), "Windowed"))
+            self._apply_display_settings()
             self._sync_tuning_vars_from_config()
             self._sync_visual_vars_from_config()
             self._update_rgb_color_buttons()
@@ -892,9 +1023,9 @@ class WaveformSyncApp:
             self.gpu.clear_track(deck_num)
             return
         image, pps_out, total_out = result
-        downbeats = deck.get_downbeat_times() if self.beat_grid_var.get() else ()
+        beats = deck.get_beat_markers() if self.beat_grid_var.get() else ()
         cues = deck.get_cue_markers() if self.cue_var.get() else ()
-        self.gpu.set_track(deck_num, image, pps_out, total_out, downbeats_sec=downbeats, cues=cues)
+        self.gpu.set_track(deck_num, image, pps_out, total_out, beats=beats, cues=cues)
 
     def _on_deck_count_change(self) -> None:
         new_count = int(self.deck_count_var.get())
@@ -908,6 +1039,11 @@ class WaveformSyncApp:
         if self.link_listener is not None:
             self.link_listener.stop()
             self.link_listener = None
+
+        for job in self._load_jobs.values():
+            job.cancel()
+        self._load_jobs.clear()
+        self._pending_paths.clear()
 
         # 2. Update in-memory state
         old_count = self.deck_count
@@ -969,6 +1105,8 @@ class WaveformSyncApp:
             borderless=not self.gpu_border_var.get(),
             always_on_top=self.gpu_on_top_var.get(),
             on_close=self._on_gpu_window_closed,
+            row_order=deck_order(self.render_cfg.deck_order, self.deck_count),
+            ui_scale=self.render_cfg.ui_scale,
         )
         if old_pos is not None:
             try:
@@ -976,17 +1114,14 @@ class WaveformSyncApp:
             except Exception:
                 pass
         self._on_gpu_window_opts()
+        self._apply_display_settings()
         self._refresh_all_textures()
-        self.link_listener = RekordboxMemoryReader(deck_count=count)
-        self.link_listener.start()
-        self.link_status_var.set("RB Memory: connecting...")
+        self._connect_source()
         print(f"[Decks] Switched to {count}-deck mode")
 
     def _start_link_listener(self) -> None:
         """Start the Rekordbox memory reader and the GPU render/poll tick."""
-        self.link_listener = RekordboxMemoryReader(deck_count=self.deck_count)
-        self.link_listener.start()
-        self.link_status_var.set("RB Memory: connecting...")
+        self._connect_source()
         self._tick()
 
     def _cancel_tick(self) -> None:
@@ -1003,6 +1138,10 @@ class WaveformSyncApp:
         self.gpu.pump()
         if self.gpu is None:  # closed during pump
             return
+        if self.gpu.zoom_delta:
+            self._nudge_zoom(self.gpu.zoom_delta)
+            self.gpu.zoom_delta = 0
+        self._finish_track_loads()
         # 1b) rebuild textures if the window was resized (debounced)
         self._maybe_rebuild_on_resize()
         # 1c) global numpad +/- zoom (works while Rekordbox has focus)
@@ -1014,6 +1153,10 @@ class WaveformSyncApp:
                 if event is None:
                     break
                 self._handle_link_event(event)
+        if getattr(self, "_demo_started", None) is not None:
+            t = 40.0 + (time.monotonic() - self._demo_started) % 100
+            for i in range(self.deck_count):
+                self._record_play_time(i, t)
         # 3) draw the GPU frame (scroll/zoom existing textures - no resize/upload)
         self._render_gpu_frame()
         # 4) periodically re-assert topmost and update connection status (~0.5s)
@@ -1021,7 +1164,9 @@ class WaveformSyncApp:
         if self._topmost_tick == 0:
             self.gpu.reassert_topmost()
             if self.link_listener is not None:
-                status = "RB Memory: connected" if self.link_listener.connected else "RB Memory: waiting..."
+                status = f"{self._input_source}: connected" if self.link_listener.connected else f"{self._input_source}: waiting for data"
+                if not self.gpu.display_available:
+                    status += " · Selected display disconnected; using primary"
                 self.link_status_var.set(status)
         self._tick_job = self.root.after(GPU_TICK_MS, self._tick)
 
@@ -1086,7 +1231,8 @@ class WaveformSyncApp:
             frames.append(DeckFrame(
                 current_time=self._deck_display_time(i),
                 visible_seconds=visible,
-                label=f"Deck {i+1}: {deck.song_name}" if deck.analysis is not None else "",
+                label=deck.song_name if deck.analysis is not None else "",
+                bpm=deck.current_bpm,
             ))
         self.gpu.render_frame(frames)
 
@@ -1114,6 +1260,8 @@ class WaveformSyncApp:
         if t is None:
             return None
         rate = self._deck_play_rate[deck_num]
+        if self.link_listener is not None and not self.link_listener.connected:
+            return t
         if rate <= 0.05:
             return t  # paused / unknown -> hold position
         wall = self._deck_play_wall[deck_num]
@@ -1156,30 +1304,65 @@ class WaveformSyncApp:
         ctrl.update_live_bpm(getattr(event, "current_bpm", None))
         ctrl.update_time_scale_fallback(getattr(event, "time_scale", None))
 
-        # Load new track if path changed
-        if event.anlz_path and (ctrl.anlz_path is None or Path(event.anlz_path) != ctrl.anlz_path):
+        if event.source == "anlz_path" and not event.anlz_path:
+            old = self._load_jobs.pop(deck_num, None)
+            if old:
+                old.cancel()
+            self._pending_paths.pop(deck_num, None)
+            self.decks[deck_num] = DeckController(LIBRARY_SEARCH_ROOT)
+            self.gpu.clear_track(deck_num)
+            self._deck_play_time[deck_num] = None
+            self._deck_play_rate[deck_num] = 0.0
+            info_label.configure(text=f"Deck {deck_num + 1}: No track loaded")
+            return
+
+        # Load new track if path changed; keep parsing away from the render thread.
+        if event.anlz_path and str(event.anlz_path) != self._pending_paths.get(deck_num) and (ctrl.anlz_path is None or Path(event.anlz_path) != ctrl.anlz_path):
             print(f"[Deck {deck_num}] New track: {event.anlz_path}")
             self._load_deck_anlz(ctrl, Path(event.anlz_path), info_label, deck_num)
 
     def _load_deck_anlz(self, ctrl: DeckController, anlz_folder: Path, info_label: ttk.Label, deck_num: int) -> None:
         """Load ANLZ data for a deck and (re)build its GPU texture."""
         if not anlz_folder.is_dir():
+            self.gpu.clear_track(deck_num)
+            self.decks[deck_num] = DeckController(LIBRARY_SEARCH_ROOT)
+            info_label.configure(text=f"Deck {deck_num + 1}: ANLZ folder unavailable")
             print(f"[Deck {deck_num}] ANLZ folder not found: {anlz_folder}")
             return
-        try:
-            ctrl.load_anlz(anlz_folder)
-            info_label.configure(text=f"Deck {deck_num+1}: {ctrl.song_name}")
-            if ctrl.cached_waveform is not None and ctrl.cached_duration is not None:
-                print(f"[Deck {deck_num}] Loaded: {len(ctrl.cached_waveform)} bins, {ctrl.cached_duration:.1f}s")
-            else:
-                print(f"[Deck {deck_num}] Loaded ANLZ")
-            # Reset playhead extrapolation for the new track.
-            self._deck_play_time[deck_num] = ctrl.current_time
-            self._deck_play_wall[deck_num] = time.monotonic()
-            self._deck_play_rate[deck_num] = 0.0
-            self._refresh_deck_texture(deck_num)
-        except Exception as e:
-            print(f"[Deck {deck_num}] Failed to load ANLZ: {e}")
+        old = self._load_jobs.pop(deck_num, None)
+        if old:
+            old.cancel()
+        self._pending_paths[deck_num] = str(anlz_folder)
+        info_label.configure(text=f"Deck {deck_num + 1}: Loading…")
+        self.gpu.clear_track(deck_num)
+        self.decks[deck_num] = DeckController(LIBRARY_SEARCH_ROOT)
+        def load():
+            loaded = DeckController(LIBRARY_SEARCH_ROOT)
+            loaded.load_anlz(anlz_folder)
+            if loaded.analysis is None:
+                raise ValueError("No supported detailed waveform in this folder")
+            return loaded
+        self._load_jobs[deck_num] = self._loader.submit(load)
+
+    def _finish_track_loads(self):
+        for idx, job in list(self._load_jobs.items()):
+            if not job.done():
+                continue
+            del self._load_jobs[idx]
+            if idx >= self.deck_count:
+                continue
+            try:
+                loaded = job.result()
+                if self._input_source != "Offline":
+                    loaded.update_live_bpm(self.decks[idx].current_bpm)
+                self.decks[idx] = loaded
+                if self._deck_play_time[idx] is None:
+                    self._record_play_time(idx, 0.0)
+                self.deck_infos[idx].configure(text=f"Deck {idx + 1}: {loaded.song_name}")
+                self._refresh_deck_texture(idx)
+            except Exception as exc:
+                self.deck_infos[idx].configure(text=f"Deck {idx + 1}: {exc}")
+
 
     def _on_gpu_window_closed(self) -> None:
         """The GPU waveform window was closed -> shut the whole app down (deferred)."""
@@ -1188,6 +1371,15 @@ class WaveformSyncApp:
     def _on_close(self) -> None:
         """Clean up on window close."""
         self._cancel_tick()
+        try:
+            # Persist to the app-owned default; named profiles are never overwritten.
+            temp = USER_DEFAULT_CONFIG_PATH.with_suffix(".tmp")
+            temp.write_text(json.dumps(config_to_dict(self.color_cfg, self.render_cfg), indent=2))
+            temp.replace(USER_DEFAULT_CONFIG_PATH)
+            LAST_CONFIG_PATH.write_text(str(USER_DEFAULT_CONFIG_PATH))
+        except OSError as exc:
+            print(f"[Config] Cannot save session: {exc}")
+        self._loader.shutdown(wait=False, cancel_futures=True)
         if self.gpu is not None:
             gpu = self.gpu
             self.gpu = None
@@ -1198,9 +1390,13 @@ class WaveformSyncApp:
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Rekordbox Wave display")
+    parser.add_argument("--demo", action="store_true", help="Show synthetic waveforms without Rekordbox")
+    args = parser.parse_args()
     root = tk.Tk()
     root.geometry("1000x800")
-    app = WaveformSyncApp(root)
+    app = WaveformSyncApp(root, demo=args.demo)
     root.mainloop()
 
 

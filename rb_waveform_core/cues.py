@@ -16,6 +16,7 @@ Both hot cues and memory cues are returned.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
@@ -47,10 +48,13 @@ class CueMarker:
     color: tuple          # (r, g, b)
     is_memory: bool        # True = memory cue, False = hot cue
     number: int = 0        # hot-cue slot (1-8) when applicable
+    end_sec: float | None = None
 
 
 # Local rekordbox analysis root (cues are NOT stored in these ANLZ files).
-_LOCAL_SHARE = Path(os.environ.get("APPDATA", str(Path.home()))) / "Pioneer" / "rekordbox" / "share"
+_LOCAL_SHARE = ((Path.home() / "Library" / "Pioneer" / "rekordbox" / "share")
+                if sys.platform == "darwin" else
+                Path(os.environ.get("APPDATA", str(Path.home()))) / "Pioneer" / "rekordbox" / "share")
 
 _DB = None
 _DB_FAILED = False
@@ -125,6 +129,7 @@ def _cues_from_db(folder: Path) -> List[CueMarker]:
             color=_marker_color(is_mem, number),
             is_memory=is_mem,
             number=number,
+            end_sec=_loop_end(in_ms, getattr(cue, "OutMsec", None)),
         ))
     return out
 
@@ -133,36 +138,47 @@ def _cues_from_db(folder: Path) -> List[CueMarker]:
 # Exported USB stick: cues live in the (populated) ANLZ files
 # ---------------------------------------------------------------------------
 
-def _cues_from_anlz(folder: Path) -> List[CueMarker]:
-    anlz_file = _pick_anlz_file_for_beatgrid(folder) or _pick_anlz_file(folder)
-    if anlz_file is None:
-        return []
+def _loop_end(start_ms, end_ms):
     try:
-        tags = getattr(AnlzFile.parse_file(str(anlz_file)), "tags", []) or []
-    except Exception:
-        return []
+        value = float(end_ms)
+        if float(start_ms) < value < 0xffffffff:
+            return value / 1000.0
+    except (TypeError, ValueError):
+        pass
+    return None
 
-    out: List[CueMarker] = []
-    seen = set()
-    for tag in tags:
-        name = type(tag).__name__
-        if not (name.startswith("PCOB") or name.startswith("PCO2")):
-            continue
-        content = getattr(getattr(tag, "struct", None), "content", None)
-        if content is None:
-            continue
-        # Memory vs hot from the tag's type/cue_type enum.
-        type_val = getattr(content, "type", None) or getattr(content, "cue_type", None)
-        is_mem = str(type_val).endswith("memory") or str(type_val) == "0"
-        for e in getattr(content, "entries", None) or []:
-            t = getattr(e, "time", None)
-            if t is None:
+
+def _cues_from_anlz(folder: Path) -> List[CueMarker]:
+    # PCO2 (usually EXT) carries colours and comments missing from PCOB (DAT).
+    # Scan every file; richer entries replace the legacy record for the same slot.
+    found = {}
+    for suffix in ("DAT", "EXT", "2EX"):
+        for path in sorted(folder.glob(f"*.{suffix}")):
+            try:
+                tags = AnlzFile.parse_file(str(path)).tags or []
+            except Exception as exc:
+                print(f"[Cues] Cannot parse {path}: {exc}")
                 continue
-            time_sec = float(t) / 1000.0
-            key = (round(time_sec, 3), is_mem)
-            if key in seen:
-                continue
-            seen.add(key)
-            number = int(getattr(e, "hot_cue", 0) or 0)
-            out.append(CueMarker(time_sec, _marker_color(is_mem, number), is_mem, number))
-    return out
+            for tag in tags:
+                name = type(tag).__name__
+                if not name.startswith(("PCOB", "PCO2")):
+                    continue
+                content = tag.struct.content
+                for e in content.entries or []:
+                    t = getattr(e, "time", None)
+                    if t is None or t == 0xffffffff:
+                        continue
+                    number = int(getattr(e, "hot_cue", 0) or 0)
+                    is_mem = number == 0
+                    key = (int(t), is_mem, number)
+                    rich = name.startswith("PCO2")
+                    if key in found and found[key][0] and not rich:
+                        continue
+                    rgb = tuple(int(getattr(e, "color_" + c, 0)) for c in ("red", "green", "blue"))
+                    color = rgb if rich and any(rgb) else _marker_color(is_mem, number)
+                    is_loop = str(getattr(e, "type", "")) in ("loop", "2")
+                    found[key] = (rich, CueMarker(
+                        time_sec=float(t) / 1000.0, color=color,
+                        is_memory=is_mem, number=number,
+                        end_sec=_loop_end(t, getattr(e, "loop_time", None)) if is_loop else None))
+    return sorted((item[1] for item in found.values()), key=lambda cue: (cue.time_sec, cue.number))

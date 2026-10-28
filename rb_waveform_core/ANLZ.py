@@ -222,7 +222,14 @@ def analyze_anlz_folder(folder: Path | str) -> AnlzAnalysisResult:
     if anlz_file is None:
         return AnlzAnalysisResult(None, None, None)
 
-    return _parse_anlz_file(anlz_file)
+    result = _parse_anlz_file(anlz_file)
+    if result.waveform is not None:
+        return result
+    for candidate in sorted(folder_path.glob("*.EXT")):
+        result = _parse_anlz_file(candidate)
+        if result.waveform is not None:
+            return result
+    return result
 
 
 def extract_beat_grid(folder: Path | str) -> Optional[list[BeatGridEntry]]:
@@ -338,25 +345,21 @@ def _extract_rb_path(tags: Iterable[object]) -> Optional[Path]:
 
 
 def _extract_waveform(tags: Iterable[object]) -> Optional[np.ndarray]:
-    for wanted in ("PWV7", "PWV6", "PWV5"):
-        for tag in tags:
-            if not type(tag).__name__.startswith(wanted):
-                continue
-            try:
-                raw_entries = tag.struct.content.entries
-            except AttributeError:
-                continue
-            if isinstance(raw_entries, (bytes, bytearray, memoryview)):
-                byte_data = bytes(raw_entries)
-            else:
-                try:
-                    byte_data = bytes(int(val) & 0xFF for val in raw_entries)
-                except TypeError:
-                    continue
-            data = np.frombuffer(byte_data, dtype=np.uint8)
-            if data.size % 3 != 0:
-                continue
-            return data.reshape(-1, 3).astype(np.float32)
+    tags = list(tags)
+    for tag in tags:
+        if not type(tag).__name__.startswith("PWV7"):
+            continue
+        data = np.frombuffer(bytes(tag.struct.content.entries), dtype=np.uint8)
+        if data.size and data.size % 3 == 0:
+            # PWV7 stores mid, high, low, at 150 entries/second.
+            return data.reshape(-1, 3)[:, [2, 0, 1]].astype(np.float32)
+    for tag in tags:
+        if type(tag).__name__.startswith("PWV5"):
+            # Legacy RGB detail is packed 16-bit colour/height, not three bands.
+            # Show its actual amplitude in monochrome rather than inventing bands.
+            entries = np.asarray(tag.struct.content.entries, dtype=np.uint16)
+            heights = ((entries & 0x7c) >> 2).astype(np.float32)
+            return np.repeat(heights[:, None], 3, axis=1)
     return None
 
 

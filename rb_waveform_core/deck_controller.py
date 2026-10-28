@@ -231,9 +231,13 @@ class DeckController:
             return []
         return [float(getattr(e, "time_ms", 0)) / 1000.0 for e in self.beat_grid_downbeats]
 
+    def get_beat_markers(self) -> list:
+        return [(e.time_ms / 1000.0, e.beat_number == 1)
+                for e in (self.beat_grid_full or [])]
+
     def get_cue_markers(self) -> list:
         """Cue markers as (time_sec, (r,g,b), is_memory, number) tuples for the GPU."""
-        return [(c.time_sec, c.color, c.is_memory, c.number) for c in self.cues]
+        return [(c.time_sec, c.color, c.is_memory, c.number, c.end_sec) for c in self.cues]
 
     def build_full_track_image(
         self,

@@ -272,10 +272,19 @@ def render_waveform_image(
 			palette.append(tuple(band_color_map[band_name]))
 			idx_map[mask] = len(palette) - 1
 
+		# The low/mid overlap is brown; highs remain white above both.
+		if set(render_band_order) == {"low", "mid", "high"}:
+			low_h = (_reduce(np.clip(analysis.low, 0, 1)) * half_h).astype(int)
+			mid_h = (_reduce(np.clip(analysis.mid, 0, 1)) * half_h).astype(int)
+			high_h = (_reduce(np.clip(analysis.high, 0, 1)) * half_h).astype(int)
+			overlap = (dist <= np.minimum(low_h, mid_h)[None, :]) & (dist > high_h[None, :])
+			palette.append((150, 97, 59))
+			idx_map[overlap] = len(palette) - 1
+
 	if not getattr(color_cfg, "rgb_mode", False):
 		palette_arr = np.array(palette, dtype=np.uint8)
 		arr = palette_arr[idx_map]
-	img = Image.fromarray(arr, "RGB")
+	img = Image.fromarray(arr)
 	draw = ImageDraw.Draw(img)
 
 	if render_cfg.center_line:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rkbx_wave"
-version = "1.1.0"
+version = "1.2.0"
 description = "Real-time, zoomable multi-deck waveform display for Rekordbox (reads Rekordbox memory directly)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -23,6 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS :: MacOS X",
     "Environment :: Win32 (MS Windows)",
 ]
 dependencies = [
@@ -30,15 +31,16 @@ dependencies = [
     "numpy>=1.24.0",
     "scipy>=1.10.0",
     "pygame>=2.6.0",
-    "pymem>=1.13",
+    "pymem>=1.13; sys_platform == 'win32'",
+    "screeninfo>=0.8.1",
     "psutil>=5.9.0",
     "pyrekordbox>=0.4.0",
     "python-osc>=1.9.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/mrmilbe/rkbx_wave"
-Repository = "https://github.com/mrmilbe/rkbx_wave"
+Homepage = "https://github.com/palermostest25/rkbx_wave_den"
+Repository = "https://github.com/palermostest25/rkbx_wave_den"
 
 [project.scripts]
 rkbx_wave = "rkbx_wave:main"

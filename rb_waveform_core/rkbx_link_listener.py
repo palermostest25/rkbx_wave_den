@@ -154,6 +154,10 @@ class RekordboxLinkListener:
     def __exit__(self, exc_type, exc, tb) -> None:  # pragma: no cover - convenience wrapper
         self.stop()
 
+    @property
+    def connected(self):
+        return self._server is not None and any(time.time() - s.last_update < 2.0 for s in self._state.values())
+
     def get_state(self, deck: int) -> DeckState:
         """Return a copy of the current state for ``deck``."""
 
@@ -175,7 +179,7 @@ class RekordboxLinkListener:
     # ------------------------------------------------------------------
     def _handle_time(self, address: str, *args: float) -> None:
         deck = self._deck_from_address(address)
-        if deck is None:
+        if deck not in self._state:
             return
         value = float(args[0]) if args else None
         state = self._state[deck]
@@ -185,7 +189,7 @@ class RekordboxLinkListener:
 
     def _handle_anlz_path(self, address: str, *args: str) -> None:
         deck = self._deck_from_address(address)
-        if deck is None:
+        if deck not in self._state:
             return
         path = args[0] if args else None
         state = self._state[deck]
@@ -201,7 +205,7 @@ class RekordboxLinkListener:
 
     def _handle_bpm_current(self, address: str, *args: float) -> None:
         deck = self._deck_from_address(address)
-        if deck is None:
+        if deck not in self._state:
             return
         value = float(args[0]) if args else None
         state = self._state[deck]
@@ -211,7 +215,7 @@ class RekordboxLinkListener:
 
     def _handle_bpm_original(self, address: str, *args: float) -> None:
         deck = self._deck_from_address(address)
-        if deck is None:
+        if deck not in self._state:
             return
         value = float(args[0]) if args else None
         state = self._state[deck]

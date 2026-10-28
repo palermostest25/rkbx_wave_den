@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
+import time
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
 
@@ -37,12 +39,33 @@ from pygame._sdl2.video import Renderer, Texture, Window
 from PIL import Image
 
 
+def place_cue_flag(preferred, width, viewport_width, occupied):
+    """Choose a free position on two flag rails, retaining the closest anchor."""
+    candidates = []
+    for row in (0, 1):
+        anchors = [max(0, min(preferred, viewport_width - width)), 0]
+        anchors += [x + w + 2 for x, r, w in occupied if r == row]
+        for x in anchors:
+            if x + width > viewport_width:
+                continue
+            if all(r != row or x + width + 1 <= ox or x >= ox + ow + 1
+                   for ox, r, ow in occupied):
+                candidates.append((abs(x - preferred) + row * width / 2, x, row))
+    if not candidates:
+        return None
+    _, x, row = min(candidates)
+    occupied.append((x, row, width))
+    return x, row
+
+
 @dataclass
 class _DeckTexture:
     texture: Texture
     pixels_per_second: float
     total_duration: float
     downbeats: tuple = ()   # downbeat times in seconds (drawn as overlay lines)
+    tiles: tuple = ()
+    beats: tuple = ()
     cues: tuple = ()        # (time_sec, (r,g,b), is_memory) cue markers
 
 
@@ -52,6 +75,7 @@ class DeckFrame:
     current_time: Optional[float]   # playhead time in seconds, or None if no position yet
     visible_seconds: float          # width of the visible window (zoom x tempo)
     label: str = ""
+    bpm: Optional[float] = None
 
 
 class WaveformGpuWindow:
@@ -72,8 +96,18 @@ class WaveformGpuWindow:
         borderless: bool = True,
         always_on_top: bool = True,
         on_close=None,
+        row_order=None,
+        ui_scale=1.0,
     ) -> None:
         self.deck_count = max(1, int(deck_count))
+        self.row_order = tuple(row_order or range(self.deck_count))
+        self.ui_scale = ui_scale
+        self._font_size = 0
+        self.zoom_delta = 0
+        self._bound_display = ""
+        self._fill_display = False
+        self._display_check = 0.0
+        self.display_available = True
         self.background = pygame.Color(*background)
         self.playhead_color = pygame.Color(*playhead_color)
         self.beat_color = pygame.Color(*beat_color)
@@ -99,7 +133,8 @@ class WaveformGpuWindow:
             self.hardware = False
 
         # Conservative max texture width; long tracks reduce pixels/second to fit.
-        self.max_texture_width = 8192
+        self.max_texture_width = 4096
+        self.max_track_width = 32768
 
         try:
             pygame.font.init()
@@ -153,6 +188,8 @@ class WaveformGpuWindow:
     def set_always_on_top(self, enabled: bool) -> None:
         """Make the waveform window topmost (or not) via Win32 SetWindowPos."""
         self._on_top = bool(enabled)
+        if sys.platform != "win32":
+            return
         try:
             hwnd = self._get_hwnd()
             if not hwnd:
@@ -180,6 +217,30 @@ class WaveformGpuWindow:
         """Periodically re-apply topmost so it can't be stolen by other windows."""
         if self._on_top:
             self.set_always_on_top(True)
+
+    def bind_display(self, key, fill):
+        self._bound_display = key
+        self._fill_display = bool(fill)
+        self._display_check = 0.0
+        self.check_display()
+
+    def check_display(self):
+        if not self._bound_display or time.monotonic() < self._display_check:
+            return
+        self._display_check = time.monotonic() + 2.0
+        from .displays import list_displays
+        displays = list_displays()
+        selected = next((d for d in displays if d.key == self._bound_display), None)
+        self.display_available = selected is not None
+        target = selected or displays[0]
+        bounds = (target.x, target.y, target.width, target.height, self._fill_display)
+        if bounds == getattr(self, "_display_bounds", None):
+            return
+        self._display_bounds = bounds
+        self.window.position = (target.x, target.y)
+        if self._fill_display:
+            self.window.size = (target.width, target.height)
+            self.set_borderless(True)
 
     def _make_beat_texture(self) -> Optional[Texture]:
         """A 3px-wide soft vertical line (alpha falloff at the edges). Drawn at a
@@ -241,7 +302,7 @@ class WaveformGpuWindow:
     def choose_pixels_per_second(self, total_duration: float, base: float = 50.0) -> float:
         """Pick a texture density that keeps the whole-track texture within GPU limits."""
         total_duration = max(float(total_duration), 1e-3)
-        max_pps = self.max_texture_width / total_duration
+        max_pps = self.max_track_width / total_duration
         return max(1.0, min(base, max_pps))
 
     def clamp_pixels_per_second(self, desired: float, total_duration: float) -> float:
@@ -251,8 +312,8 @@ class WaveformGpuWindow:
         minification aliasing: the GPU then scales ~1:1 instead of skipping texels.
         """
         total_duration = max(float(total_duration), 1e-3)
-        cap = self.max_texture_width / total_duration
-        return max(1.0, min(float(desired), cap))
+        cap = self.max_track_width / total_duration
+        return max(0.01, min(float(desired), 150.0, cap))
 
     def set_track(
         self,
@@ -262,17 +323,24 @@ class WaveformGpuWindow:
         total_duration: float,
         downbeats_sec: Sequence[float] = (),
         cues: Sequence = (),
+        beats: Sequence = (),
     ) -> None:
         """Upload a full-track waveform image to a GPU texture for the given deck."""
         if deck_idx not in self._decks:
             return
-        surface = pygame.image.frombuffer(image.tobytes(), image.size, "RGB")
-        texture = Texture.from_surface(self.renderer, surface)
+        tiles = []
+        for offset in range(0, image.width, self.max_texture_width):
+            tile = image.crop((offset, 0, min(image.width, offset + self.max_texture_width), image.height))
+            surface = pygame.image.frombuffer(tile.tobytes(), tile.size, "RGB")
+            tiles.append((offset, Texture.from_surface(self.renderer, surface)))
+        texture = tiles[0][1]
         self._decks[deck_idx] = _DeckTexture(
             texture=texture,
+            tiles=tuple(tiles),
             pixels_per_second=float(pixels_per_second),
             total_duration=max(float(total_duration), 1e-6),
             downbeats=tuple(float(t) for t in downbeats_sec),
+            beats=tuple(beats) or tuple((float(t), True) for t in downbeats_sec),
             cues=tuple(cues),
         )
 
@@ -282,88 +350,132 @@ class WaveformGpuWindow:
     # ------------------------------------------------------------------
     # Per-frame rendering
     # ------------------------------------------------------------------
-    def render_frame(self, frames: Sequence[DeckFrame]) -> None:
+    def render_frame(self, frames: Sequence[DeckFrame], *, present=True, output_size=None) -> None:
         if self._closed:
             return
-        w, h = self.window.size
+        w, h = output_size or self.window.size
         deck_h = max(1, h // self.deck_count)
 
         self.renderer.draw_color = self.background
         self.renderer.clear()
 
-        for idx in range(self.deck_count):
-            viewport = pygame.Rect(0, idx * deck_h, w, deck_h)
+        font_size = max(11, min(24, round(deck_h * 0.065 * self.ui_scale)))
+        if font_size != self._font_size:
+            self._font_size = font_size
+            self._font = pygame.font.SysFont("Helvetica,Arial", font_size)
+            self._cue_font = pygame.font.SysFont("Helvetica,Arial", max(10, font_size - 2), bold=True)
+            self._label_cache.clear()
+            self._cue_label_cache.clear()
+        for row, idx in enumerate(self.row_order):
+            top = row * deck_h
+            viewport = pygame.Rect(0, top, w, deck_h if row < self.deck_count - 1 else h - top)
             frame = frames[idx] if idx < len(frames) else None
             deck = self._decks.get(idx)
+            self.renderer.draw_color = pygame.Color(41, 48, 57)
+            self.renderer.fill_rect((0, top, w, 1))
+            rail = max(38, int(font_size * 2.5))
+            header = font_size + 14
+            self._text(str(idx + 1), 12, top + header + (deck_h - header) / 2 - font_size / 2, (237, 241, 245))
             if frame is not None and deck is not None and frame.current_time is not None:
-                self._draw_deck(deck, frame, viewport)
-            if frame is not None and frame.label:
-                self._draw_label(frame.label, viewport)
+                title = frame.label or f"Deck {idx + 1}"
+                # Title is clipped to its own region so it never overlaps BPM.
+                old = self.renderer.get_viewport()
+                self.renderer.set_viewport(pygame.Rect(rail, top, max(1, w - rail - 150), header))
+                self._text(title, 0, 6, (166, 177, 189))
+                self.renderer.set_viewport(old)
+                if frame.bpm:
+                    self._text(f"{frame.bpm:.2f} BPM", w - 138, top + 6, (237, 241, 245))
+                signal = pygame.Rect(rail, top + header, max(1, w - rail), max(1, viewport.height - header - 4))
+                self._draw_deck(deck, frame, signal)
+            else:
+                self._text("Waiting for track", rail, top + deck_h / 2 - font_size / 2, (166, 177, 189))
+        if present:
+            self.renderer.present()
 
-        self.renderer.present()
+    def _text(self, text, x, y, color=(237, 241, 245)):
+        if self._font is None:
+            return
+        key = (text, color)
+        tex = self._label_cache.get(key)
+        if tex is None:
+            if len(self._label_cache) >= 128:
+                self._label_cache.clear()
+            tex = Texture.from_surface(self.renderer, self._font.render(text, True, color))
+            tex.blend_mode = pygame.BLENDMODE_BLEND
+            self._label_cache[key] = tex
+        tex.draw(dstrect=(x, y, tex.width, tex.height))
 
     def _draw_deck(self, deck: _DeckTexture, frame: DeckFrame, viewport: pygame.Rect) -> None:
-        total = deck.total_duration
         visible = max(frame.visible_seconds, 1e-3)
         start_time = frame.current_time - visible / 2.0
         px_per_sec = viewport.width / visible
         vh = float(viewport.height)
-
-        # Clip + offset to the deck viewport so we can draw in deck-local coords and
-        # let off-screen parts of the (wide) quad be clipped away cheaply by the GPU.
+        flag_h = max(16, self._font_size + 2)
+        bottom = vh - flag_h - 3
+        signal_h = max(1, bottom - flag_h)
         prev_vp = self.renderer.get_viewport()
         self.renderer.set_viewport(viewport)
         try:
-            # Whole-track texture as ONE float-positioned quad. Float dst = sub-pixel
-            # scrolling (no 1px snapping/jitter); linear filtering keeps it smooth.
-            full_w = total * px_per_sec
-            full_x = (0.0 - start_time) * px_per_sec
-            deck.texture.draw(dstrect=(full_x, 0.0, full_w, vh))
-
-            # Beat markers: soft anti-aliased vertical lines at exact time->x, drawn
-            # at float x so they glide sub-pixel-smoothly with the waveform.
-            if deck.downbeats and self._beat_tex is not None:
-                lo, hi = start_time, start_time + visible
-                bw = self._beat_width
-                draw_tris = self._beat_triangles and self._tri_top is not None
-                for bt in deck.downbeats:
-                    if bt < lo or bt > hi:
-                        continue
-                    bx = (bt - start_time) * px_per_sec
-                    self._beat_tex.draw(dstrect=(bx - bw / 2.0, 0.0, bw, vh))
-                    if draw_tris:
-                        tw, th = self._tri_top.width, self._tri_top.height
-                        self._tri_top.draw(dstrect=(bx - tw / 2.0, 0.0, tw, th))
-                        self._tri_bottom.draw(dstrect=(bx - tw / 2.0, vh - th, tw, th))
-
-            # Cue markers: a vertical line in the cue colour, with a small flag at the
-            # top. Hot cues get a thicker line + larger flag; memory cues a thinner one.
-            if deck.cues:
-                lo, hi = start_time, start_time + visible
-                for ct, color, is_memory, number in deck.cues:
-                    if ct < lo or ct > hi:
-                        continue
-                    cx = (ct - start_time) * px_per_sec
-                    self.renderer.draw_color = pygame.Color(*color)
-                    lw = 1.0 if is_memory else 2.0
-                    self.renderer.fill_rect((cx - lw / 2.0, 0.0, lw, vh))
-                    # Square marker at the top, centred on the cue line (double height).
-                    sq = 10.0 if is_memory else 14.0
-                    self.renderer.fill_rect((cx - sq / 2.0, 0.0, sq, sq))
-                    # Hot cues (A-H): draw the slot letter inside the square, in a
-                    # contrasting colour (black on light fills, white on dark).
-                    if not is_memory and 1 <= number <= 8:
-                        fg = (0, 0, 0) if (color[0] + color[1] + color[2]) > 384 else (255, 255, 255)
-                        lt = self._cue_letter_texture("ABCDEFGH"[number - 1], fg)
-                        if lt is not None:
-                            lx = cx - lt.width / 2.0
-                            ly = (sq - lt.height) / 2.0
-                            lt.draw(dstrect=(lx, ly, lt.width, lt.height))
-
-            # Playhead: fixed at viewport center (link-follow keeps current_time there).
-            cx = viewport.width / 2.0
+            full_w = deck.total_duration * px_per_sec
+            for offset, texture in deck.tiles:
+                x = (offset / deck.pixels_per_second - start_time) * px_per_sec
+                width = texture.width / deck.pixels_per_second * px_per_sec
+                if x + width >= 0 and x <= viewport.width:
+                    texture.draw(dstrect=(x, flag_h, width, signal_h))
+            lo, hi = start_time, start_time + visible
+            # Full grid: first beat is red, remaining beats are quiet white ticks.
+            for bt, downbeat in deck.beats:
+                if not lo <= bt <= hi:
+                    continue
+                bx = (bt - start_time) * px_per_sec
+                self.renderer.draw_color = self.beat_end_color if downbeat else self.beat_color
+                bw = self._beat_width if downbeat else max(1, self._beat_width / 2)
+                tick = 12 if downbeat else 5
+                self.renderer.fill_rect((bx - bw / 2, flag_h, bw, tick))
+                self.renderer.fill_rect((bx - bw / 2, bottom - tick, bw, tick))
+                if downbeat:
+                    self.renderer.fill_rect((bx - 0.5, flag_h + tick, 1, max(1, signal_h - tick * 2)))
+                    if self._beat_triangles and self._tri_top:
+                        self._tri_top.draw(dstrect=(bx - 4, flag_h, 9, 6))
+            occupied = []
+            for cue in deck.cues:
+                ct, color, is_memory, number = cue[:4]
+                end = cue[4] if len(cue) > 4 else None
+                self.renderer.draw_color = pygame.Color(*color)
+                if end is not None and end > ct and end >= lo and ct <= hi:
+                    left = max(0, (ct - lo) * px_per_sec)
+                    right = min(viewport.width, (end - lo) * px_per_sec)
+                    self.renderer.fill_rect((left, bottom + 4, max(1, right - left), 2))
+                    for edge in (ct, end):
+                        ex = (edge - lo) * px_per_sec
+                        if 0 <= ex <= viewport.width:
+                            self.renderer.fill_rect((ex, bottom, 2, flag_h - 2))
+                if not lo <= ct <= hi:
+                    continue
+                cx = (ct - start_time) * px_per_sec
+                self.renderer.fill_rect((cx, flag_h, 1 if is_memory else 2, signal_h))
+                # Stagger neighbouring labels instead of painting one over another.
+                fw = flag_h + (8 if end else 0)
+                placement = place_cue_flag(cx, fw, viewport.width, occupied)
+                if placement is None:
+                    continue  # Stems remain visible when every flag position is occupied.
+                fx, row = placement
+                fy = row * flag_h
+                if abs(fx - cx) > 1:
+                    self.renderer.fill_rect((min(cx, fx), fy + flag_h - 1, abs(fx - cx) + 1, 1))
+                self.renderer.fill_rect((fx, fy, fw, flag_h))
+                letter = ("ABCDEFGH"[number - 1] if not is_memory and 1 <= number <= 8 else "M")
+                if end:
+                    letter += "L"
+                fg = (7, 9, 12) if sum(color) > 380 else (255, 255, 255)
+                lt = self._cue_letter_texture(letter, fg)
+                if lt:
+                    lt.draw(dstrect=(fx + (fw - lt.width) / 2, fy + (flag_h - lt.height) / 2, lt.width, lt.height))
+            # One fixed rail spans the same relative position in every row.
+            cx = viewport.width / 2
             self.renderer.draw_color = self.playhead_color
-            self.renderer.fill_rect((cx - 0.5, 0.0, 1.0, vh))
+            self.renderer.fill_rect((cx - 1, 0, 2, vh))
+            self.renderer.fill_rect((cx - 4, 0, 8, 3))
         finally:
             self.renderer.set_viewport(prev_vp)
 
@@ -398,7 +510,16 @@ class WaveformGpuWindow:
         """Process window events; invoke on_close when the user closes the window."""
         if self._closed:
             return
+        self.check_display()
         for event in pygame.event.get():
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self._fill_display = False
+                    self.set_borderless(False)
+                elif event.key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS):
+                    self.zoom_delta += 1
+                elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
+                    self.zoom_delta -= 1
             if event.type == pygame.QUIT:
                 self._request_close()
             elif event.type == getattr(pygame, "WINDOWEVENT", -1):

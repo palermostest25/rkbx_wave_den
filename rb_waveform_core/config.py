@@ -41,7 +41,7 @@ class RenderMode(Enum):
 @dataclass
 class WaveformColorConfig:
     low_color: Tuple[int, int, int] = (0, 120, 255)
-    mid_color: Tuple[int, int, int] = (150, 90, 40)  # Mid frequencies
+    mid_color: Tuple[int, int, int] = (212, 155, 70)  # Mid frequencies
     high_color: Tuple[int, int, int] = (255, 255, 255)
 
     # RGB-mode band colours (separate from the 3-band display colours). Defaults
@@ -54,9 +54,9 @@ class WaveformColorConfig:
     band_order: Tuple[str, ...] = ("low", "mid", "high")  # 3-band default
     overview_mode: bool = False  # asymmetric multi-band overview vs symmetric
     stack_bands: bool = False    # true vertical stacking (no overlap)
-    rgb_mode: bool = True        # single waveform colored by per-column band blend
+    rgb_mode: bool = False        # single waveform colored by per-column band blend
     blend_bands: bool = True
-    band_order_string_default: str = "h,m,l"  # default for normal mode
+    band_order_string_default: str = "l,m,h"  # default for normal mode
     band_order_string_overview: str = "l,m,h"  # default for overview mode
     # Beat grid marker colour (downbeat lines)
     beat_color: Tuple[int, int, int] = (235, 235, 235)
@@ -79,11 +79,15 @@ class WaveformRenderConfig:
 	mid_gain: float = 1.0
 	high_gain: float = 1.0
 	prerender_detail: int = 20000  # Max prerender width in pixels
-	deck_count: int = 2  # Number of decks to display in GUI
+	deck_count: int = 4  # Number of decks to display in GUI
 	render_mode: RenderMode = RenderMode.DEFAULT
 	# Beat grid marker geometry
 	beat_width: float = 2.0          # on-screen width of each beat line, in pixels
 	beat_triangles: bool = False     # draw RB-style end markers at top/bottom of beats
+	deck_order: str = "3,1,2,4"
+	display_key: str = ""
+	fill_display: bool = False
+	ui_scale: float = 1.0
 	# Global zoom hotkeys, as Windows virtual-key codes (default numpad + / -).
 	# Common: numpad+ = 0x6B, numpad- = 0x6D, '+' = 0xBB, '-' = 0xBD, PgUp = 0x21,
 	# PgDn = 0x22. Edit here to remap, or assign in the Tune panel.
@@ -170,6 +174,10 @@ def config_to_dict(color_cfg: WaveformColorConfig, render_cfg: WaveformRenderCon
 			"high_gain": render_cfg.high_gain,
 			"prerender_detail": render_cfg.prerender_detail,
 			"deck_count": render_cfg.deck_count,
+			"deck_order": render_cfg.deck_order,
+			"display_key": render_cfg.display_key,
+			"fill_display": render_cfg.fill_display,
+			"ui_scale": render_cfg.ui_scale,
 			"render_mode": render_cfg.render_mode.value,
 			"beat_width": render_cfg.beat_width,
 			"beat_triangles": render_cfg.beat_triangles,
@@ -239,6 +247,10 @@ def dict_to_config(data: dict) -> tuple[WaveformColorConfig, WaveformRenderConfi
 		high_gain=render_data.get("high_gain", DEFAULT_RENDER_CONFIG.high_gain),
 		prerender_detail=render_data.get("prerender_detail", DEFAULT_RENDER_CONFIG.prerender_detail),
 		deck_count=render_data.get("deck_count", DEFAULT_RENDER_CONFIG.deck_count),
+		deck_order=render_data.get("deck_order", "3,1,2,4"),
+		display_key=str(render_data.get("display_key", "")),
+		fill_display=bool(render_data.get("fill_display", False)),
+		ui_scale=max(0.5, min(2.0, float(render_data.get("ui_scale", 1.0)))),
 		render_mode=render_mode,
 		beat_width=render_data.get("beat_width", DEFAULT_RENDER_CONFIG.beat_width),
 		beat_triangles=render_data.get("beat_triangles", DEFAULT_RENDER_CONFIG.beat_triangles),
@@ -249,4 +261,8 @@ def dict_to_config(data: dict) -> tuple[WaveformColorConfig, WaveformRenderConfi
 		overview_high_gain=render_data.get("overview_high_gain", DEFAULT_RENDER_CONFIG.overview_high_gain),
 	)
 	
+	from .displays import deck_order
+	if render_cfg.deck_count not in (2, 4):
+		raise ValueError("Deck count must be 2 or 4")
+	deck_order(render_cfg.deck_order, render_cfg.deck_count)
 	return color_cfg, render_cfg

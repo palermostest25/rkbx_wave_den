@@ -66,9 +66,8 @@ def analysis_from_rb_waveform(
 		)
 
 	data = np.clip(waveform.astype(np.float32), 0.0, None)
-	max_vals = np.max(data, axis=0)
-	max_vals[max_vals == 0.0] = 1.0
-	normalized = data / max_vals
+	peak = max(1.0, float(np.max(data)))
+	normalized = data / peak
 	estimated_duration = duration if (duration and duration > 0.0) else len(data) / 75.0
 
 	return WaveformAnalysis(
