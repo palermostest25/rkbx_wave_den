@@ -82,6 +82,8 @@ class Session(QObject):
     def load_config(self, path, initial=False):
         try:
             data = json.loads(Path(path).read_text())
+            if not isinstance(data, dict) or any(not isinstance(data.get(k, {}), dict) for k in ("color", "render", "view")):
+                raise ValueError("Profile sections must be JSON objects")
             colors, render = dict_to_config(data)
             view = dict(self.view)
             view.update(data.get('view', {}))

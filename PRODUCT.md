@@ -1,7 +1,7 @@
 # Rekordbox Wave
 
 ## Platform
-Desktop: Windows and macOS (Python, Tk, SDL2/pygame).
+Desktop: Windows and macOS (Python, native Qt/PySide6).
 
 ## Users and purpose
 A DJ using a DDJ-FLX10 wants four enlarged waveforms on a separate 15.6-inch 1920 × 1080 display. Rekordbox retains browsing and deck controls on the main display.
@@ -15,3 +15,6 @@ A DJ using a DDJ-FLX10 wants four enlarged waveforms on a separate 15.6-inch 192
 
 ## Boundaries
 The application displays playback; audio, browsing and performance controls stay in Rekordbox. Streaming analysis availability and native macOS live integration remain open technical constraints. Do not claim compatibility without testing.
+
+## Revised acceptance requirements
+One native window with integrated readable settings. Selecting a monitor fills the full panel, including Windows taskbar area. Use the existing project source and build/test workflow; further binary investigation was stopped at the user’s request.

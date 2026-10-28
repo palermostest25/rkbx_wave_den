@@ -158,14 +158,15 @@ class RekordboxLinkListener:
         """Stop the OSC listener and wait for the thread to finish."""
 
         with self._lock:
-            if self._server is None:
-                return
-            self._server.shutdown()
-            self._server.server_close()
+            server, thread = self._server, self._thread
             self._server = None
-            if self._thread is not None:
-                self._thread.join(timeout=1.0)
-                self._thread = None
+            self._thread = None
+        # Handlers also acquire the state lock; joining while holding it deadlocks.
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        if thread is not None:
+            thread.join(timeout=1.0)
 
     def __enter__(self) -> "RekordboxLinkListener":  # pragma: no cover - convenience wrapper
         self.start()

@@ -1,59 +1,51 @@
 # Rekordbox Wave
 
-A dedicated waveform monitor for a Rekordbox / DDJ-FLX10 setup. Keep browsing and deck controls in Rekordbox; show two or four scrolling waveforms on a second display.
+A dedicated two- or four-deck waveform display for a separate monitor, with an AZ-style three-band canvas. Rekordbox retains browsing, audio and performance controls.
 
-## 1.2 preview — compatibility
+## Native Qt application
 
-| Platform | Viewer | Direct Rekordbox playback connection |
-| --- | --- | --- |
-| Windows x64 | Standalone `.exe` | Existing memory layouts for 7.2.2 and 7.2.14 |
-| macOS Apple Silicon | Native `.app` | **Not implemented**; offline preview or external OSC sender only |
-| macOS Intel | Native `.app` | **Not implemented**; offline preview or external OSC sender only |
+The 2.0 interface uses one Qt window. **SETTINGS** or **F2** opens its integrated settings page; there is no separate options application. Settings start at 22 logical pixels and have their own text-size control. Qt handles Windows/macOS display scaling.
 
-This is a **prerelease**, not a completed Mac live integration. Streaming waveforms depend on accessible ANLZ analysis files. Saved loop boundaries are displayed; **currently engaged live loops are not yet available from the existing memory reader**. No controller-specific USB driver is required by the viewer. Live FLX10 timing, external-monitor hotplug, and Windows audio-session behavior need testing on the actual rig. Exact pixel fidelity to an XDJ-AZ is not claimed.
+Selecting a physical **Monitor** automatically enters full screen. It covers the complete panel, including the area normally occupied by the Windows taskbar. Windows uses a Per-Monitor-V2 DPI manifest and native monitor bounds. Full screen persists while settings are open. **Escape** returns from settings to waves; press it again to leave full screen. **F11** toggles full screen.
 
-## Downloads
+- **2 DECK / 4 DECK:** switch without rebuilding the window or discarding tracks. Default four-deck order is **3,1,2,4**. Use a preset or type any permutation of 1–4 into **Deck order**.
+- **Waveform:** zoom in bars/beats, playhead placement, beat/bar markers, cue and loop visibility, colours and per-band levels.
+- **Display:** monitor binding and separate settings/cue text scales. A disconnected monitor falls back to the primary; the selected monitor is restored when it returns.
+- **Connection:** native playback, compatible OSC input, or offline ANLZ inspection.
+- **Profiles:** import/export JSON. Changes are saved atomically to the app-owned settings file.
 
-Use the assets on [GitHub Releases](https://github.com/palermostest25/rkbx_wave_den/releases). On Windows, launch `Rekordbox-Wave-Windows-x64.exe`. On Mac, unzip the archive for your processor and open `Rekordbox Wave.app`. Mac preview builds are ad-hoc signed, not notarized with an Apple Developer identity. Use macOS Privacy & Security's Open Anyway flow if Gatekeeper blocks the downloaded build.
+`+` / `−` zoom while focused. The existing Windows global numpad zoom keys also work while Rekordbox has focus. Double-click the canvas to open settings. The display has no controls that seek or change audio playback.
 
-## Display setup
+## Waveforms, cues and loops
 
-- Select **2** or **4** decks. Four decks default to **3,1,2,4**; enter a permutation of 1–4 under **Row order**. Two-deck mode shows decks 1 and 2.
-- Choose a **Display**, then **Fill display** for a borderless waveform screen. The app remembers the choice; disconnected displays fall back to the primary monitor and rebind on reconnection. **Refresh** updates the selector. Display names are supplied by the OS; identical monitors without unique names may need reselection.
-- Use **Scale** for cue labels and deck text. Layout follows the available resolution; 1920 × 1080 is the main target.
-- Use **Zoom**, or `+` / `−` while the waveform window has focus. Windows global zoom hotkeys continue to work while Rekordbox has focus. Global hotkeys on macOS are not implemented.
-- **Escape** restores the waveform window border. Settings remain in a separate window.
-- **Save / Load** manage named profiles. The current session is saved to the app-owned default on exit; named profiles are never overwritten automatically.
+PWV7 detail uses its actual mid/high/low byte ordering, fixed seven-bit heights and separate frequency-band scaling. Blue lows, amber mids, brown overlap and a small white high-frequency layer replace the old track-normalized rendering. The fixed white playhead is distinct from red first-beat ticks. Non-downbeats remain visible and bar numbers are drawn below the signal.
 
-The default waveform is three-band: blue lows, amber mids, white highs and brown low/mid overlap. The first beat of a bar is red; other beats have quieter ticks. `RGB`, `Overview` and separate-band `Stack` remain optional modes. Beat colours, line width, smoothing and band gains remain configurable under **Tune**.
+Hot-cue flags and memory cues retain exact track positions. Nearby labels use free positions rather than overwriting one another. Saved loop boundaries are bracketed below the waveform. USB cues are combined from DAT/EXT/2EX, preferring richer PCO2 colours. Native-resolution cached tiles retain detail on long tracks; reduced peak-preserving tiles are used when zoomed out. Local database loading supports current and older pyrekordbox API layouts.
 
-Hot-cue flags carry A–H; memory cues use M. An `L` suffix and a bracket below the signal identify a saved loop. Exported USB cues are read from DAT, EXT and 2EX together, preferring the richer PCO2 colours. Legacy RGB-only analysis is displayed in monochrome rather than treated as fabricated frequency bands. Cue edits made after loading currently require reloading the track. Local library cue colours fall back to slot colours; native database colour mapping is not yet implemented.
+## Playback compatibility
 
-## Offline setup and demo
+| Input | Available data |
+| --- | --- |
+| Windows native | Existing Rekordbox 7.2.2 / 7.2.14.0 playback-position, BPM and analysis-path layouts |
+| Apple Silicon native | Community source layouts for 7.2.8 / 7.2.17 / 7.2.18; requires macOS permission to read the target process |
+| Intel Mac | Qt viewer and OSC/offline input; no validated native memory layout |
+| OSC | Position, BPM and optional authoritative playing/rate/live-loop state |
 
-From source:
+The original native Windows reader does **not** expose live engaged-loop fields. Saved loops are rendered; live-loop highlighting requires a sender that supplies live state. No saved loop is falsely presented as currently engaged. Unknown native versions fail with an explanatory connection status. Streaming analysis depends on accessible ANLZ files.
+
+The installed vendor-signed Mac Rekordbox can deny process access. This application never modifies its signature, entitlements, security settings or library. A Mac binary alone does not remove that OS restriction. Native Mac 7.2.19 and Intel playback support are not claimed.
+
+## Run and build
+
+Use Python 3.10+; native build jobs use Python 3.12.
 
 ```sh
 python -m pip install .
+python rkbx_wave.py
 python rkbx_wave.py --demo
 ```
 
-The demo uses explicitly labelled synthetic waveforms and never controls Rekordbox or audio. To inspect a real exported USB track, select **Offline**, choose its deck, then **Open ANLZ folder…** and choose the directory containing that track's DAT / EXT / 2EX files. Offline previews show a static playhead.
-
-## OSC input
-
-OSC is an alternative for an existing compatible sender, **not an automatic Mac connection to Rekordbox**. Choose **OSC** to listen on localhost UDP port 4460. Deck IDs are zero-based:
-
-- `/track/0/anlz_path` — string path to an ANLZ folder (or its DAT file)
-- `/time/0` — floating-point playback position in seconds
-- `/bpm/0/current` — current BPM
-- `/bpm/0/original` — original BPM
-
-Repeat for decks 1–3. Sender paths must exist on the viewer's computer. Empty ANLZ paths clear the loaded deck. Rekordbox itself does not provide these OSC messages; a compatible sender must supply them.
-
-## Build and verify
-
-Use Python 3.9+ for source; automated native bundles use Python 3.12. Build on the target OS:
+The demo is explicitly labelled and uses synthetic analysis. For a real offline waveform, choose **Offline**, then select a deck and **OPEN ANALYSIS FILE** in Settings. Offline inspection has a static playhead.
 
 ```sh
 python -m pip install . pyinstaller
@@ -61,10 +53,20 @@ python -m unittest discover -s tests -v
 python scripts/build_app.py
 ```
 
-Windows produces a single-file executable; macOS produces an application bundle. GitHub Actions builds Windows x64, macOS Intel and macOS Apple Silicon separately. The source and release tag identify the same commit as the binaries. Screenshots can be reproduced with `python scripts/capture_demo.py --out work/screenshots`.
+Windows produces one `.exe`; Mac produces an `.app`. Native CI tests the integrated UI and full-screen bounds; an additional Windows pass uses 150% scale and checks ownership of the bottom monitor corners. `scripts/capture_demo.py --out work/captures` captures the actual Qt surface. `QT_QPA_PLATFORM=offscreen` allows layout-only captures on a headless system.
 
-Settings: `%APPDATA%/rkbx_wave` on Windows; `~/Library/Application Support/rkbx_wave` on Mac.
+Settings are in `%APPDATA%/rkbx_wave` on Windows and `~/Library/Application Support/rkbx_wave` on Mac. `--config <file>` selects another profile location.
 
-## Credits and license
+## OSC protocol
 
-Fork of [mrmilbe/rkbx_wave](https://github.com/mrmilbe/rkbx_wave). Original copyright notices and MIT license are retained. ANLZ/database parsing uses [pyrekordbox](https://github.com/dylanljones/pyrekordbox). Format references: [Deep Symmetry's three-band analysis](https://djl-analysis.deepsymmetry.org/djl-analysis/track_metadata.html) and the [AlphaTheta XDJ-AZ manual](https://downloads.support.alphatheta.com/manuals/all-in-one-dj-systems/XDJ-AZ/html/en/000COV_en/Part_names/Part_names.htm).
+Choose **OSC** to listen on localhost UDP 4460. A separate compatible sender is required; Rekordbox does not supply this protocol itself. Deck IDs are zero-based:
+
+- `/track/0/anlz_path`: local folder or DAT-file path; empty clears the deck.
+- `/time/0`: playback seconds.
+- `/bpm/0/current`, `/bpm/0/original`: BPM.
+- `/playing/0`: 0 or 1; `/rate/0`: playback multiplier, including reverse.
+- `/loop/0`: start seconds, end seconds, enabled (0 or 1).
+
+## Credits and licences
+
+Fork of [mrmilbe/rkbx_wave](https://github.com/mrmilbe/rkbx_wave), with original MIT notices retained. Uses [pyrekordbox](https://github.com/dylanljones/pyrekordbox), Qt/PySide6 under its LGPL terms, and community memory layouts from [rkbx_link](https://github.com/grufkork/rkbx_link). Waveform format/calibration references: [Deep Symmetry](https://djl-analysis.deepsymmetry.org/djl-analysis/track_metadata.html) and the [AlphaTheta XDJ-AZ manual](https://downloads.support.alphatheta.com/manuals/all-in-one-dj-systems/XDJ-AZ/html/en/000COV_en/Part_names/Part_names.htm). Qt sources and licence information are available at [Qt](https://www.qt.io/licensing/open-source-lgpl-obligations).

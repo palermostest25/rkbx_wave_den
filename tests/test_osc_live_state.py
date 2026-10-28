@@ -1,3 +1,4 @@
+from pathlib import Path
 import math
 import unittest
 from rb_waveform_core.rkbx_link_listener import DeckState, RekordboxLinkListener
@@ -43,7 +44,7 @@ class OscLiveStateTests(unittest.TestCase):
         self.event()
         self.reader._handle_anlz_path('/track/0/anlz_path', '/track-b/ANLZ0000.DAT')
         event = self.event()
-        self.assertEqual(event.anlz_path, '/track-b')
+        self.assertEqual(Path(event.anlz_path), Path('/track-b'))
         self.assertIsNone(event.loop_active)
         self.assertIsNone(event.time_seconds)
         self.reader._handle_anlz_path('/track/0/anlz_path', '')
