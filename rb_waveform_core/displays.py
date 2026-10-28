@@ -1,5 +1,6 @@
 """Cross-platform monitor bounds, with an SDL fallback when enumeration fails."""
 from dataclasses import dataclass
+import sys
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,11 @@ class Display:
 
 def list_displays():
     try:
+        if sys.platform == "darwin":
+            from AppKit import NSScreen
+            screens = NSScreen.screens()
+            primary_height = screens[0].frame().size.height
+            return [mac_display(screen, primary_height) for screen in screens]
         from screeninfo import get_monitors
         monitors = get_monitors()
         result = []
@@ -32,6 +38,16 @@ def list_displays():
     import pygame
     w, h = pygame.display.get_desktop_sizes()[0]
     return [Display("primary", f"Primary · {w} × {h}", 0, 0, w, h)]
+
+
+def mac_display(screen, primary_height):
+    frame = screen.frame()
+    name = str(screen.localizedName())
+    number = int(screen.deviceDescription()["NSScreenNumber"])
+    # AppKit uses a bottom-left origin; SDL uses primary-screen top-left.
+    return Display(f"mac:{name}:{number}", f"{name} · {int(frame.size.width)} × {int(frame.size.height)}",
+                   int(frame.origin.x), int(primary_height - frame.origin.y - frame.size.height),
+                   int(frame.size.width), int(frame.size.height))
 
 
 def deck_order(raw, count):

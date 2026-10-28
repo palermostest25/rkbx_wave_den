@@ -31,3 +31,9 @@ jobs:
             dist/*.exe
             dist/*.zip
           if-no-files-found: error
+      - name: Smoke test packaged imports and entry point
+        shell: python
+        run: |
+          import pathlib, subprocess, sys
+          binary = pathlib.Path('dist/Rekordbox Wave.exe') if sys.platform == 'win32' else pathlib.Path('dist/Rekordbox Wave.app/Contents/MacOS/Rekordbox Wave')
+          subprocess.run([str(binary.resolve()), '--help'], check=True, timeout=120)

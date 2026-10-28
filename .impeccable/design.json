@@ -1,0 +1,503 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-28T12:58:20.725138+00:00",
+  "title": "Design System: Rekordbox Wave",
+  "extensions": {
+    "colorMeta": {
+      "wave-bg": {
+        "role": "neutral",
+        "displayName": "Wave Bg",
+        "tonalRamp": [
+          "oklch(15% 0.0000 89.88)",
+          "oklch(26% 0.0000 89.88)",
+          "oklch(38% 0.0000 89.88)",
+          "oklch(49% 0.0000 89.88)",
+          "oklch(61% 0.0000 89.88)",
+          "oklch(72% 0.0000 89.88)",
+          "oklch(84% 0.0000 89.88)",
+          "oklch(95% 0.0000 89.88)"
+        ]
+      },
+      "separator": {
+        "role": "neutral",
+        "displayName": "Separator",
+        "tonalRamp": [
+          "oklch(15% 0.0190 254.80)",
+          "oklch(26% 0.0190 254.80)",
+          "oklch(38% 0.0190 254.80)",
+          "oklch(49% 0.0190 254.80)",
+          "oklch(61% 0.0190 254.80)",
+          "oklch(72% 0.0190 254.80)",
+          "oklch(84% 0.0190 254.80)",
+          "oklch(95% 0.0190 254.80)"
+        ]
+      },
+      "text-primary": {
+        "role": "neutral",
+        "displayName": "Text Primary",
+        "tonalRamp": [
+          "oklch(15% 0.0069 247.90)",
+          "oklch(26% 0.0069 247.90)",
+          "oklch(38% 0.0069 247.90)",
+          "oklch(49% 0.0069 247.90)",
+          "oklch(61% 0.0069 247.90)",
+          "oklch(72% 0.0069 247.90)",
+          "oklch(84% 0.0069 247.90)",
+          "oklch(95% 0.0069 247.90)"
+        ]
+      },
+      "text-secondary": {
+        "role": "neutral",
+        "displayName": "Text Secondary",
+        "tonalRamp": [
+          "oklch(15% 0.0212 250.44)",
+          "oklch(26% 0.0212 250.44)",
+          "oklch(38% 0.0212 250.44)",
+          "oklch(49% 0.0212 250.44)",
+          "oklch(61% 0.0212 250.44)",
+          "oklch(72% 0.0212 250.44)",
+          "oklch(84% 0.0212 250.44)",
+          "oklch(95% 0.0212 250.44)"
+        ]
+      },
+      "playhead": {
+        "role": "primary",
+        "displayName": "Playhead",
+        "tonalRamp": [
+          "oklch(15% 0.2577 29.23)",
+          "oklch(26% 0.2577 29.23)",
+          "oklch(38% 0.2577 29.23)",
+          "oklch(49% 0.2577 29.23)",
+          "oklch(61% 0.2577 29.23)",
+          "oklch(72% 0.2577 29.23)",
+          "oklch(84% 0.2577 29.23)",
+          "oklch(95% 0.2577 29.23)"
+        ]
+      },
+      "downbeat": {
+        "role": "primary",
+        "displayName": "Downbeat",
+        "tonalRamp": [
+          "oklch(15% 0.2301 26.33)",
+          "oklch(26% 0.2301 26.33)",
+          "oklch(38% 0.2301 26.33)",
+          "oklch(49% 0.2301 26.33)",
+          "oklch(61% 0.2301 26.33)",
+          "oklch(72% 0.2301 26.33)",
+          "oklch(84% 0.2301 26.33)",
+          "oklch(95% 0.2301 26.33)"
+        ]
+      },
+      "beat": {
+        "role": "primary",
+        "displayName": "Beat",
+        "tonalRamp": [
+          "oklch(15% 0.0000 89.88)",
+          "oklch(26% 0.0000 89.88)",
+          "oklch(38% 0.0000 89.88)",
+          "oklch(49% 0.0000 89.88)",
+          "oklch(61% 0.0000 89.88)",
+          "oklch(72% 0.0000 89.88)",
+          "oklch(84% 0.0000 89.88)",
+          "oklch(95% 0.0000 89.88)"
+        ]
+      },
+      "low": {
+        "role": "primary",
+        "displayName": "Low",
+        "tonalRamp": [
+          "oklch(15% 0.2200 257.83)",
+          "oklch(26% 0.2200 257.83)",
+          "oklch(38% 0.2200 257.83)",
+          "oklch(49% 0.2200 257.83)",
+          "oklch(61% 0.2200 257.83)",
+          "oklch(72% 0.2200 257.83)",
+          "oklch(84% 0.2200 257.83)",
+          "oklch(95% 0.2200 257.83)"
+        ]
+      },
+      "mid": {
+        "role": "primary",
+        "displayName": "Mid",
+        "tonalRamp": [
+          "oklch(15% 0.1217 74.51)",
+          "oklch(26% 0.1217 74.51)",
+          "oklch(38% 0.1217 74.51)",
+          "oklch(49% 0.1217 74.51)",
+          "oklch(61% 0.1217 74.51)",
+          "oklch(72% 0.1217 74.51)",
+          "oklch(84% 0.1217 74.51)",
+          "oklch(95% 0.1217 74.51)"
+        ]
+      },
+      "overlap": {
+        "role": "primary",
+        "displayName": "Overlap",
+        "tonalRamp": [
+          "oklch(15% 0.0870 55.36)",
+          "oklch(26% 0.0870 55.36)",
+          "oklch(38% 0.0870 55.36)",
+          "oklch(49% 0.0870 55.36)",
+          "oklch(61% 0.0870 55.36)",
+          "oklch(72% 0.0870 55.36)",
+          "oklch(84% 0.0870 55.36)",
+          "oklch(95% 0.0870 55.36)"
+        ]
+      },
+      "high": {
+        "role": "primary",
+        "displayName": "High",
+        "tonalRamp": [
+          "oklch(15% 0.0000 89.88)",
+          "oklch(26% 0.0000 89.88)",
+          "oklch(38% 0.0000 89.88)",
+          "oklch(49% 0.0000 89.88)",
+          "oklch(61% 0.0000 89.88)",
+          "oklch(72% 0.0000 89.88)",
+          "oklch(84% 0.0000 89.88)",
+          "oklch(95% 0.0000 89.88)"
+        ]
+      },
+      "memory": {
+        "role": "secondary",
+        "displayName": "Memory",
+        "tonalRamp": [
+          "oklch(15% 0.1722 83.57)",
+          "oklch(26% 0.1722 83.57)",
+          "oklch(38% 0.1722 83.57)",
+          "oklch(49% 0.1722 83.57)",
+          "oklch(61% 0.1722 83.57)",
+          "oklch(72% 0.1722 83.57)",
+          "oklch(84% 0.1722 83.57)",
+          "oklch(95% 0.1722 83.57)"
+        ]
+      },
+      "cue-a": {
+        "role": "secondary",
+        "displayName": "Cue A",
+        "tonalRamp": [
+          "oklch(15% 0.2226 27.34)",
+          "oklch(26% 0.2226 27.34)",
+          "oklch(38% 0.2226 27.34)",
+          "oklch(49% 0.2226 27.34)",
+          "oklch(61% 0.2226 27.34)",
+          "oklch(72% 0.2226 27.34)",
+          "oklch(84% 0.2226 27.34)",
+          "oklch(95% 0.2226 27.34)"
+        ]
+      },
+      "cue-b": {
+        "role": "secondary",
+        "displayName": "Cue B",
+        "tonalRamp": [
+          "oklch(15% 0.1206 205.23)",
+          "oklch(26% 0.1206 205.23)",
+          "oklch(38% 0.1206 205.23)",
+          "oklch(49% 0.1206 205.23)",
+          "oklch(61% 0.1206 205.23)",
+          "oklch(72% 0.1206 205.23)",
+          "oklch(84% 0.1206 205.23)",
+          "oklch(95% 0.1206 205.23)"
+        ]
+      },
+      "cue-c": {
+        "role": "secondary",
+        "displayName": "Cue C",
+        "tonalRamp": [
+          "oklch(15% 0.1394 143.26)",
+          "oklch(26% 0.1394 143.26)",
+          "oklch(38% 0.1394 143.26)",
+          "oklch(49% 0.1394 143.26)",
+          "oklch(61% 0.1394 143.26)",
+          "oklch(72% 0.1394 143.26)",
+          "oklch(84% 0.1394 143.26)",
+          "oklch(95% 0.1394 143.26)"
+        ]
+      },
+      "cue-d": {
+        "role": "secondary",
+        "displayName": "Cue D",
+        "tonalRamp": [
+          "oklch(15% 0.2194 313.13)",
+          "oklch(26% 0.2194 313.13)",
+          "oklch(38% 0.2194 313.13)",
+          "oklch(49% 0.2194 313.13)",
+          "oklch(61% 0.2194 313.13)",
+          "oklch(72% 0.2194 313.13)",
+          "oklch(84% 0.2194 313.13)",
+          "oklch(95% 0.2194 313.13)"
+        ]
+      },
+      "cue-e": {
+        "role": "secondary",
+        "displayName": "Cue E",
+        "tonalRamp": [
+          "oklch(15% 0.2387 142.98)",
+          "oklch(26% 0.2387 142.98)",
+          "oklch(38% 0.2387 142.98)",
+          "oklch(49% 0.2387 142.98)",
+          "oklch(61% 0.2387 142.98)",
+          "oklch(72% 0.2387 142.98)",
+          "oklch(84% 0.2387 142.98)",
+          "oklch(95% 0.2387 142.98)"
+        ]
+      },
+      "cue-f": {
+        "role": "secondary",
+        "displayName": "Cue F",
+        "tonalRamp": [
+          "oklch(15% 0.1745 59.67)",
+          "oklch(26% 0.1745 59.67)",
+          "oklch(38% 0.1745 59.67)",
+          "oklch(49% 0.1745 59.67)",
+          "oklch(61% 0.1745 59.67)",
+          "oklch(72% 0.1745 59.67)",
+          "oklch(84% 0.1745 59.67)",
+          "oklch(95% 0.1745 59.67)"
+        ]
+      },
+      "cue-g": {
+        "role": "secondary",
+        "displayName": "Cue G",
+        "tonalRamp": [
+          "oklch(15% 0.2112 266.25)",
+          "oklch(26% 0.2112 266.25)",
+          "oklch(38% 0.2112 266.25)",
+          "oklch(49% 0.2112 266.25)",
+          "oklch(61% 0.2112 266.25)",
+          "oklch(72% 0.2112 266.25)",
+          "oklch(84% 0.2112 266.25)",
+          "oklch(95% 0.2112 266.25)"
+        ]
+      },
+      "cue-h": {
+        "role": "secondary",
+        "displayName": "Cue H",
+        "tonalRamp": [
+          "oklch(15% 0.1756 102.28)",
+          "oklch(26% 0.1756 102.28)",
+          "oklch(38% 0.1756 102.28)",
+          "oklch(49% 0.1756 102.28)",
+          "oklch(61% 0.1756 102.28)",
+          "oklch(72% 0.1756 102.28)",
+          "oklch(84% 0.1756 102.28)",
+          "oklch(95% 0.1756 102.28)"
+        ]
+      },
+      "cue-fallback": {
+        "role": "secondary",
+        "displayName": "Cue Fallback",
+        "tonalRamp": [
+          "oklch(15% 0.1679 159.34)",
+          "oklch(26% 0.1679 159.34)",
+          "oklch(38% 0.1679 159.34)",
+          "oklch(49% 0.1679 159.34)",
+          "oklch(61% 0.1679 159.34)",
+          "oklch(72% 0.1679 159.34)",
+          "oklch(84% 0.1679 159.34)",
+          "oklch(95% 0.1679 159.34)"
+        ]
+      },
+      "flag-ink": {
+        "role": "neutral",
+        "displayName": "Flag Ink",
+        "tonalRamp": [
+          "oklch(15% 0.0077 255.50)",
+          "oklch(26% 0.0077 255.50)",
+          "oklch(38% 0.0077 255.50)",
+          "oklch(49% 0.0077 255.50)",
+          "oklch(61% 0.0077 255.50)",
+          "oklch(72% 0.0077 255.50)",
+          "oklch(84% 0.0077 255.50)",
+          "oklch(95% 0.0077 255.50)"
+        ]
+      },
+      "settings-bg": {
+        "role": "neutral",
+        "displayName": "Settings Bg",
+        "tonalRamp": [
+          "oklch(15% 0.0141 253.14)",
+          "oklch(26% 0.0141 253.14)",
+          "oklch(38% 0.0141 253.14)",
+          "oklch(49% 0.0141 253.14)",
+          "oklch(61% 0.0141 253.14)",
+          "oklch(72% 0.0141 253.14)",
+          "oklch(84% 0.0141 253.14)",
+          "oklch(95% 0.0141 253.14)"
+        ]
+      },
+      "field-bg": {
+        "role": "neutral",
+        "displayName": "Field Bg",
+        "tonalRamp": [
+          "oklch(15% 0.0196 254.83)",
+          "oklch(26% 0.0196 254.83)",
+          "oklch(38% 0.0196 254.83)",
+          "oklch(49% 0.0196 254.83)",
+          "oklch(61% 0.0196 254.83)",
+          "oklch(72% 0.0196 254.83)",
+          "oklch(84% 0.0196 254.83)",
+          "oklch(95% 0.0196 254.83)"
+        ]
+      },
+      "button-active": {
+        "role": "neutral",
+        "displayName": "Button Active",
+        "tonalRamp": [
+          "oklch(15% 0.0325 253.86)",
+          "oklch(26% 0.0325 253.86)",
+          "oklch(38% 0.0325 253.86)",
+          "oklch(49% 0.0325 253.86)",
+          "oklch(61% 0.0325 253.86)",
+          "oklch(72% 0.0325 253.86)",
+          "oklch(84% 0.0325 253.86)",
+          "oklch(95% 0.0325 253.86)"
+        ]
+      },
+      "tuning-bg": {
+        "role": "neutral",
+        "displayName": "Tuning Bg",
+        "tonalRamp": [
+          "oklch(15% 0.0000 89.88)",
+          "oklch(26% 0.0000 89.88)",
+          "oklch(38% 0.0000 89.88)",
+          "oklch(49% 0.0000 89.88)",
+          "oklch(61% 0.0000 89.88)",
+          "oklch(72% 0.0000 89.88)",
+          "oklch(84% 0.0000 89.88)",
+          "oklch(95% 0.0000 89.88)"
+        ]
+      },
+      "tuning-button": {
+        "role": "neutral",
+        "displayName": "Tuning Button",
+        "tonalRamp": [
+          "oklch(15% 0.0000 89.88)",
+          "oklch(26% 0.0000 89.88)",
+          "oklch(38% 0.0000 89.88)",
+          "oklch(49% 0.0000 89.88)",
+          "oklch(61% 0.0000 89.88)",
+          "oklch(72% 0.0000 89.88)",
+          "oklch(84% 0.0000 89.88)",
+          "oklch(95% 0.0000 89.88)"
+        ]
+      },
+      "button-bg": {
+        "role": "neutral",
+        "displayName": "Button Background",
+        "tonalRamp": [
+          "oklch(15% 0.027 250)",
+          "oklch(26% 0.027 250)",
+          "oklch(38% 0.027 250)",
+          "oklch(49% 0.027 250)",
+          "oklch(61% 0.027 250)",
+          "oklch(72% 0.027 250)",
+          "oklch(84% 0.027 250)",
+          "oklch(95% 0.027 250)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "body": {
+        "displayName": "Scaled signal labels",
+        "purpose": "Deck identity, title, BPM and waiting copy; pixel size derives from lane height and UI scale."
+      },
+      "label": {
+        "displayName": "Cue lettering",
+        "purpose": "Bold cue letters and saved-loop suffixes."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "playback-scroll",
+        "value": "16ms render/poll target",
+        "purpose": "Playback-driven signal motion only; refresh performance is host dependent."
+      }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Settings button",
+      "kind": "button",
+      "refersTo": "settings-button",
+      "description": "Visual translation of the flat native Tk clam action control. Browser focus is preview affordance only.",
+      "html": "<button class=\"ds-button\">Refresh</button>",
+      "css": ".ds-button{background:#26313d;color:#edf1f5;padding:5px 8px;border:0;font:14px sans-serif;border-radius:0}.ds-button:hover,.ds-button:active{background:#344151}.ds-button:focus-visible{outline:2px solid #edf1f5;outline-offset:2px}"
+    },
+    {
+      "name": "Settings field",
+      "kind": "input",
+      "refersTo": "settings-field",
+      "description": "Editable row-order field; native focus and borders remain platform controlled.",
+      "html": "<label class=\"ds-field-label\">Row order <input class=\"ds-field\" value=\"3,1,2,4\" aria-label=\"Row order\"></label>",
+      "css": ".ds-field-label{color:#edf1f5;font:14px sans-serif}.ds-field{background:#202730;color:#edf1f5;border:1px solid #a6b1bd;padding:4px;width:110px;font:14px sans-serif;border-radius:0}.ds-field:hover{border-color:#edf1f5}.ds-field:focus-visible{outline:2px solid #edf1f5;outline-offset:2px}"
+    },
+    {
+      "name": "Waveform lane",
+      "kind": "custom",
+      "refersTo": "waveform-lane",
+      "description": "Static semantic band sample; real amplitudes come from analysis, not this preview.",
+      "html": "<div class=\"ds-lane\"><span class=\"ds-deck\">3</span><div class=\"ds-signal\"><div class=\"ds-low\"></div><div class=\"ds-mid\"></div><div class=\"ds-high\"></div><div class=\"ds-playhead\"></div></div></div>",
+      "css": ".ds-lane{display:flex;background:#050505;color:#edf1f5;border-top:1px solid #293039;height:120px;font:18px Helvetica,Arial,sans-serif}.ds-deck{width:45px;align-self:center;text-align:center}.ds-signal{position:relative;flex:1}.ds-low{position:absolute;inset:25px 0;background:#0078ff;clip-path:polygon(0 50%,10% 0,20% 50%,35% 20%,50% 50%,70% 0,80% 50%,95% 20%,100% 50%,95% 80%,80% 50%,70% 100%,50% 50%,35% 80%,20% 50%,10% 100%)}.ds-mid{position:absolute;left:0;right:0;top:49px;height:22px;background:#d49b46}.ds-high{position:absolute;left:0;right:0;top:58px;height:4px;background:white}.ds-playhead{position:absolute;left:50%;top:0;bottom:0;width:2px;background:#ff0000}"
+    },
+    {
+      "name": "Lane header",
+      "kind": "custom",
+      "refersTo": "lane-title",
+      "description": "Track title yields space to fixed BPM information.",
+      "html": "<div class=\"ds-header\"><span class=\"ds-title\">SYNTHETIC DEMO \u00b7 Track 3</span><span>128.00 BPM</span></div>",
+      "css": ".ds-header{display:flex;justify-content:space-between;gap:20px;background:#050505;color:#edf1f5;padding:6px 12px;font:18px Helvetica,Arial,sans-serif}.ds-title{overflow:hidden;white-space:nowrap;color:#a6b1bd}"
+    },
+    {
+      "name": "Cue flag",
+      "kind": "custom",
+      "refersTo": "cue-flag",
+      "description": "Slot letter and time-anchored stem; bright-color dark ink follows renderer contrast choice.",
+      "html": "<div class=\"ds-cue\"><b class=\"ds-flag\">B</b></div>",
+      "css": ".ds-cue{height:80px;background:#050505;border-left:2px solid #32c8d7}.ds-flag{display:inline-block;background:#32c8d7;color:#07090c;padding:1px 3px;font:bold 16px Helvetica,Arial,sans-serif}"
+    },
+    {
+      "name": "Saved-loop bracket",
+      "kind": "custom",
+      "description": "Stored endpoints in the cue color, without an active-state claim.",
+      "html": "<div class=\"ds-loop\"><b class=\"ds-loop-label\">BL</b><span class=\"ds-bracket\"></span></div>",
+      "css": ".ds-loop{height:100px;background:#050505;position:relative;color:#07090c;border-left:2px solid #32c8d7}.ds-loop-label{font:bold 16px Helvetica,Arial,sans-serif;background:#32c8d7}.ds-bracket{position:absolute;left:0;right:25%;bottom:5px;height:12px;border-bottom:2px solid #32c8d7;border-right:2px solid #32c8d7}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Performance Rail",
+    "overview": "The waveform display acts like an instrument: quiet near-black structure makes frequency bands, timing and cue positions immediately legible. The user selected the XDJ-AZ as the visual reference. This documents the implemented Python/Tk/SDL system, not a claim of pixel-identical hardware reproduction.\n\nDensity comes from aligned signal and marker rails, with native controls in a separate settings window. The provisional draft is refreshed from `rb_waveform_core/config.py`, `render.py`, `rb_waveform_gpu.py`, `cues.py`, and `rkbx_wave.py`; the source now takes precedence over its earlier proposed palette. Native fonts and widget chrome may vary by platform.",
+    "keyCharacteristics": [
+      "Signal first, with restrained structural chrome.",
+      "Consistent timing geometry across equal-height deck lanes.",
+      "Frequency and cue colors carry meaning.",
+      "Playback drives motion; controls remain native and separate."
+    ],
+    "rules": [
+      {
+        "name": "The Semantic Color Rule",
+        "body": "Frequency, cue and timing colors identify data; do not reuse them as decorative accents.",
+        "section": "colors"
+      },
+      {
+        "name": "The Saved Is Not Active Rule",
+        "body": "A saved-loop bracket indicates stored endpoints only. No active-loop engagement state is supplied to this renderer; do not imply that the loop is currently running.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "**Do** preserve the shared track-time transform for waveform, beat, cue and loop positions.",
+      "**Do** retain physical deck identity when rows are reordered or the deck count changes.",
+      "**Do** keep native focus and labels usable in the separate settings window.",
+      "**Do** distinguish synthetic demo, offline analysis and live input states."
+    ],
+    "donts": [
+      "**Don't** use semantic signal and cue colors as decorative accents.",
+      "**Don't** imply a saved loop is engaged without a verified active-loop state.",
+      "**Don't** claim direct macOS live synchronization from a successful demo render.",
+      "**Don't** introduce decorative motion or elevation into the waveform canvas."
+    ]
+  }
+}

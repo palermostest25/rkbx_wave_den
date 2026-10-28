@@ -29,3 +29,20 @@ for width, height, count in [(1920, 1080, 4), (1280, 720, 4), (1920, 1080, 2)]:
     win.render_frame(frames, present=False, output_size=(width, height))
     pygame.image.save(win.renderer.to_surface(), str(args.out / f'demo-{width}x{height}-{count}deck.png'))
     win.close()
+
+# Edge states exercise coincident cues and a disconnected/unloaded display.
+from rb_waveform_core.cues import CueMarker
+win = WaveformGpuWindow(4, size=(1280, 720), row_order=(2, 0, 1, 3), always_on_top=False)
+target = Texture(win.renderer, (1280, 720), target=True)
+win.renderer.target = target
+win.render_frame([DeckFrame(None, 16) for _ in range(4)], present=False, output_size=(1280, 720))
+pygame.image.save(win.renderer.to_surface(), str(args.out / 'empty.png'))
+decks = {i: DeckController() for i in range(4)}
+populate_demo(decks)
+for idx, deck in decks.items():
+    deck.cues.extend([CueMarker(41.25, (255, 190, 54), True), CueMarker(41.25, (150, 100, 250), False, 3)])
+    image, pps, total = deck.build_full_track_image(WaveformColorConfig(), WaveformRenderConfig(), height=256, pixels_per_second=100, reduce='max')
+    win.set_track(idx, image, pps, total, beats=deck.get_beat_markers(), cues=deck.get_cue_markers())
+win.render_frame([DeckFrame(40, 16, d.song_name, d.current_bpm) for d in decks.values()], present=False, output_size=(1280, 720))
+pygame.image.save(win.renderer.to_surface(), str(args.out / 'clustered-cues.png'))
+win.close()

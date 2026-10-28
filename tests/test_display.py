@@ -34,6 +34,14 @@ class DisplayTests(unittest.TestCase):
             for ox, other_row, other_width in occupied[i + 1:]:
                 self.assertTrue(row != other_row or x + width < ox or ox + other_width < x)
 
+    def test_mac_monitor_coordinates(self):
+        from rb_waveform_core.displays import mac_display
+        screen = NS(frame=lambda: NS(origin=NS(x=-1920, y=1080), size=NS(width=1920, height=1080)),
+                    localizedName=lambda: "Portable", deviceDescription=lambda: {"NSScreenNumber": 7})
+        display = mac_display(screen, 1080)
+        self.assertEqual((display.x, display.y), (-1920, -1080))
+        self.assertEqual(display.key, 'mac:Portable:7')
+
     def test_pwv7_band_order(self):
         waveform = _extract_waveform([tag('PWV7AnlzTag', entries=bytes([20, 5, 100, 40, 9, 80]))])
         np.testing.assert_array_equal(waveform, [[100, 20, 5], [80, 40, 9]])

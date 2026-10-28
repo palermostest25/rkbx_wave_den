@@ -257,6 +257,8 @@ class WaveformSyncApp:
         if demo:
             from rb_waveform_core.demo import populate_demo
             populate_demo(self.decks)
+            for i, deck in self.decks.items():
+                self.deck_infos[i].configure(text=f"Deck {i + 1}: {deck.song_name}")
             self._demo_started = time.monotonic()
             self._refresh_all_textures()
             self.link_status_var.set("SYNTHETIC DEMO · No Rekordbox connection")
@@ -408,7 +410,7 @@ class WaveformSyncApp:
         style.configure(".", background="#14191f", foreground="#edf1f5", fieldbackground="#202730")
         style.map("TCombobox", fieldbackground=[("readonly", "#202730")], foreground=[("readonly", "#edf1f5")])
         style.map("TButton", background=[("active", "#344151")])
-        style.configure("TButton", padding=(8, 5))
+        style.configure("TButton", padding=(8, 5), borderwidth=0, relief="flat", background="#26313d")
         style.configure("TCheckbutton", padding=3)
         style.configure("Black.TFrame", background="black")
         style.configure("Black.TLabel", background="black", foreground="white")
@@ -582,6 +584,14 @@ class WaveformSyncApp:
         )
         row += 1
         
+        ttk.Label(panel, text="3-band colors:", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        band_buttons = ttk.Frame(panel, style="Tune.TFrame")
+        band_buttons.grid(row=row, column=1, sticky="w", padx=8, pady=2)
+        for band in ("low", "mid", "high"):
+            ttk.Button(band_buttons, text=band.capitalize(), width=5,
+                       command=lambda b=band: self._pick_band_color(b)).pack(side="left", padx=2)
+        row += 1
+
         # RGB-mode band colours (used by the RGB waveform mode)
         ttk.Label(panel, text="RGB Colors:", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=2)
         rgb_btn_frame = ttk.Frame(panel, style="Tune.TFrame")
@@ -891,6 +901,12 @@ class WaveformSyncApp:
             fg = "#000000" if (r + g + b) > 384 else "#ffffff"
             btn.configure(bg=hexc, activebackground=hexc, fg=fg)
 
+    def _pick_band_color(self, band):
+        rgb, _ = colorchooser.askcolor(color=getattr(self.color_cfg, band + "_color"), title=f"{band.capitalize()} band color")
+        if rgb:
+            setattr(self.color_cfg, band + "_color", tuple(int(c) for c in rgb))
+            self._invalidate_caches_and_render()
+
     def _on_pick_rgb_color(self, band: str) -> None:
         """Open a color chooser for an RGB-mode band color and rebuild textures."""
         attr = f"rgb_{band}_color"
@@ -1117,6 +1133,7 @@ class WaveformSyncApp:
         self._apply_display_settings()
         self._refresh_all_textures()
         self._connect_source()
+        self._resize_to_content()
         print(f"[Decks] Switched to {count}-deck mode")
 
     def _start_link_listener(self) -> None:
