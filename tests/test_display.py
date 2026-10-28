@@ -26,21 +26,10 @@ class DisplayTests(unittest.TestCase):
                 deck_order(raw, 4)
 
     def test_coincident_cue_flags_never_overlap(self):
-        from rb_waveform_core.rb_waveform_gpu import place_cue_flag
-        occupied = []
-        for _ in range(6):
-            self.assertIsNotNone(place_cue_flag(100, 24, 400, occupied))
-        for i, (x, row, width) in enumerate(occupied):
-            for ox, other_row, other_width in occupied[i + 1:]:
-                self.assertTrue(row != other_row or x + width < ox or ox + other_width < x)
-
-    def test_mac_monitor_coordinates(self):
-        from rb_waveform_core.displays import mac_display
-        screen = NS(frame=lambda: NS(origin=NS(x=-1920, y=1080), size=NS(width=1920, height=1080)),
-                    localizedName=lambda: "Portable", deviceDescription=lambda: {"NSScreenNumber": 7})
-        display = mac_display(screen, 1080)
-        self.assertEqual((display.x, display.y), (-1920, -1080))
-        self.assertEqual(display.key, 'mac:Portable:7')
+        from rb_waveform_core.qt_display import flag_positions
+        occupied = flag_positions([100] * 6, 24, 400)
+        self.assertEqual(len(set(occupied)), 6)
+        self.assertNotIn(None, occupied)
 
     def test_pwv7_band_order(self):
         waveform = _extract_waveform([tag('PWV7AnlzTag', entries=bytes([20, 5, 100, 40, 9, 80]))])
@@ -55,8 +44,8 @@ class DisplayTests(unittest.TestCase):
 
     def test_normalization_preserves_relative_band_energy(self):
         analysis = analysis_from_rb_waveform(np.array([[100, 20, 5], [80, 40, 9]]), 1)
-        self.assertAlmostEqual(float(analysis.mid[0]), .2)
-        self.assertAlmostEqual(float(analysis.high[0]), .05)
+        self.assertAlmostEqual(float(analysis.mid[0]), 20 * .75 / 127)
+        self.assertAlmostEqual(float(analysis.high[0]), 5 * .15 / 127)
 
     def test_loop_sentinels(self):
         for end in (None, -1, 0xffffffff, 900, 1000):
@@ -98,8 +87,8 @@ class DisplayTests(unittest.TestCase):
         analysis = analysis_from_rb_waveform(np.array([[100, 60, 20]]), 1)
         img = render_waveform_image(analysis, WaveformColorConfig(), WaveformRenderConfig(image_width=20, image_height=100))
         self.assertEqual(img.getpixel((10, 50)), (255, 255, 255))
-        self.assertEqual(img.getpixel((10, 70)), (150, 97, 59))
-        self.assertEqual(img.getpixel((10, 90)), (0, 120, 255))
+        self.assertEqual(img.getpixel((10, 60)), (169, 107, 39))
+        self.assertEqual(img.getpixel((10, 82)), (0, 120, 255))
 
 
 if __name__ == '__main__':

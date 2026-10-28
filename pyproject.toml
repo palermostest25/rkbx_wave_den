@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rkbx_wave"
-version = "1.2.0"
+version = "2.0.0"
 description = "Real-time, zoomable multi-deck waveform display for Rekordbox (reads Rekordbox memory directly)"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 authors = [
     {name = "mrmilbe"}
@@ -18,7 +18,6 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "Topic :: Multimedia :: Sound/Audio",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -30,9 +29,8 @@ dependencies = [
     "Pillow>=10.0.0",
     "numpy>=1.24.0",
     "scipy>=1.10.0",
-    "pygame>=2.6.0",
+    "PySide6>=6.8,<7",
     "pymem>=1.13; sys_platform == 'win32'",
-    "screeninfo>=0.8.1",
     "psutil>=5.9.0",
     "pyrekordbox>=0.4.0",
     "python-osc>=1.9.0",
@@ -51,4 +49,4 @@ packages = ["rb_waveform_core"]
 
 [tool.setuptools.package-data]
 # Ship the version-keyed memory offsets and the default config with the wheel.
-rb_waveform_core = ["data/offsets", "data/default_config.json"]
+rb_waveform_core = ["data/*"]

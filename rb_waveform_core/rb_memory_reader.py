@@ -19,6 +19,7 @@ Exposes the same public API as RekordboxLinkListener:
 
 from __future__ import annotations
 
+import math
 import struct
 import threading
 import time
@@ -263,6 +264,7 @@ class RekordboxMemoryReader:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self.connected = False
+        self.status = "Waiting for Rekordbox"
 
     # ------------------------------------------------------------------
     # Public API (matches RekordboxLinkListener)
@@ -294,34 +296,30 @@ class RekordboxMemoryReader:
 
     def _run(self) -> None:
         if not self._all_offsets:
-            print("[MemReader] No offsets available — cannot read Rekordbox memory.")
+            self.status = "No supported Rekordbox memory layouts are installed"
             return
         while not self._stop_event.is_set():
             pm = self._wait_for_rekordbox()
             if pm is None:
-                break
-            base = self._get_module_base(pm)
-            if base is None:
-                print("[MemReader] Could not find rekordbox.exe module base")
-                pm.close_process()
-                time.sleep(_RECONNECT_INTERVAL)
-                continue
-            if not self._select_offsets(pm):
-                pm.close_process()
-                time.sleep(_RECONNECT_INTERVAL)
-                continue
-            print(f"[MemReader] Connected to Rekordbox (base=0x{base:X}, "
-                  f"version={self.version})")
-            self.connected = True
-            self._poll_loop(pm, base)
-            self.connected = False
-            if not self._stop_event.is_set():
-                print("[MemReader] Lost Rekordbox, reconnecting...")
+                return
+            try:
+                base = self._get_module_base(pm)
+                if base is None:
+                    self.status = "Cannot locate the Rekordbox process module"
+                elif self._select_offsets(pm):
+                    self.status = f"Rekordbox {self.version}: waiting for readable deck data"
+                    self._poll_loop(pm, base)
+            except Exception as exc:
+                self.status = f"Rekordbox memory connection failed: {exc}"
+                print(f"[MemReader] {self.status}")
+            finally:
+                self.connected = False
                 try:
                     pm.close_process()
                 except Exception:
                     pass
-                time.sleep(_RECONNECT_INTERVAL)
+            if self._stop_event.wait(_RECONNECT_INTERVAL):
+                return
 
     def _select_offsets(self, pm) -> bool:
         """Detect the Rekordbox version and select its offset table. Returns success."""
@@ -335,7 +333,8 @@ class RekordboxMemoryReader:
                 print("[MemReader] Could not detect Rekordbox version from process")
         chosen = _select_version(detected, available)
         if chosen is None:
-            print("[MemReader] No usable offsets version available")
+            self.status = f"Unsupported Rekordbox {detected or 'version'}; supported: {', '.join(sorted(available))}"
+            print(f"[MemReader] {self.status}")
             return False
         if detected and chosen not in (detected, ".".join(detected.split(".")[:3])):
             print(f"[MemReader] No exact offsets for {detected}; using closest: {chosen}")
@@ -353,7 +352,8 @@ class RekordboxMemoryReader:
         try:
             import pymem
         except ImportError:
-            print("[MemReader] pymem not installed — run: pip install pymem")
+            self.status = "Windows memory component missing: pymem"
+            print(f"[MemReader] {self.status}")
             return None
 
         while not self._stop_event.is_set():
@@ -361,7 +361,8 @@ class RekordboxMemoryReader:
                 pm = pymem.Pymem("rekordbox.exe")
                 return pm
             except Exception:
-                print("[MemReader] Waiting for Rekordbox...")
+                self.status = "Waiting for Rekordbox (or permission to read its process)"
+                print(f"[MemReader] {self.status}")
                 self._stop_event.wait(timeout=_RECONNECT_INTERVAL)
         return None
 
@@ -377,6 +378,7 @@ class RekordboxMemoryReader:
         slow_counter = 0
         prev_anlz: Dict[int, str] = {i: "" for i in range(self.deck_count)}
         debugged = False
+        last_success = time.monotonic()
 
         while not self._stop_event.is_set():
             tick_start = time.monotonic()
@@ -386,8 +388,11 @@ class RekordboxMemoryReader:
                 for deck in range(self.deck_count):
                     bpm = self._read_f32(pm, base, *self._offsets["bpm"][deck])
                     sample_pos = self._read_i64(pm, base, *self._offsets["sample_pos"][deck])
-                    if bpm is None or sample_pos is None:
+                    if bpm is None or not 0 <= bpm <= 1000 or sample_pos is None:
                         continue
+                    last_success = time.monotonic()
+                    self.connected = True
+                    self.status = f"Rekordbox {self.version}: connected"
                     if not debugged:
                         debugged = True
                         path = self._read_anlz_path(pm, base, deck)
@@ -412,9 +417,13 @@ class RekordboxMemoryReader:
                             self._queue.put(state.snapshot(source="anlz_path"))
 
                 slow_counter = (slow_counter + 1) % _SLOW_EVERY_N
+                if time.monotonic() - last_success > 2.0:
+                    self.status = "Rekordbox deck data is unreadable; reconnecting"
+                    return
 
             except Exception as e:
-                print(f"[MemReader] Read error: {e}")
+                self.status = f"Rekordbox read error: {e}"
+                print(f"[MemReader] {self.status}")
                 return  # triggers reconnect
 
             elapsed = time.monotonic() - tick_start
@@ -430,7 +439,8 @@ class RekordboxMemoryReader:
         try:
             addr = _resolve_chain(pm, base, deref_offsets, final)
             raw = pm.read_bytes(addr, 4)
-            return struct.unpack_from("<f", raw)[0]
+            value = struct.unpack_from("<f", raw)[0]
+            return value if math.isfinite(value) else None
         except Exception:
             return None
 

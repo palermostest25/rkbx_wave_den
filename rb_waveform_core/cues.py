@@ -23,7 +23,6 @@ from typing import List
 
 from pyrekordbox.anlz import AnlzFile
 
-from .ANLZ import _pick_anlz_file_for_beatgrid, _pick_anlz_file
 
 
 # Fixed hot-cue colours by slot (A=1 .. H=8).
@@ -94,8 +93,11 @@ def _get_db():
     global _DB, _DB_FAILED
     if _DB is None and not _DB_FAILED:
         try:
-            from pyrekordbox import Rekordbox6Database
-            _DB = Rekordbox6Database()
+            try:
+                from pyrekordbox import MasterDatabase
+            except ImportError:
+                from pyrekordbox import Rekordbox6Database as MasterDatabase
+            _DB = MasterDatabase()
         except Exception as e:
             print(f"[Cues] Could not open Rekordbox database: {e}")
             _DB_FAILED = True
@@ -106,7 +108,11 @@ def _cues_from_db(folder: Path) -> List[CueMarker]:
     db = _get_db()
     if db is None:
         return []
-    from pyrekordbox.db6.tables import DjmdContent
+    try:
+        from pyrekordbox.masterdb.models import DjmdContent
+    except ImportError:
+        from pyrekordbox.db6.tables import DjmdContent
+    db.session.expire_all()
 
     # ANLZ folder names are unique content GUIDs; match the AnalysisDataPath.
     content = (

@@ -23,3 +23,5 @@ dist/
 .DS_Store
 .impeccable/review/
 *.spec
+
+work/

@@ -88,7 +88,7 @@ class DeckController:
         print(f"folder={folder}, path={info.song_path}")
         self.resolved_audio_path = resolve_audio_path(info.song_path, folder, self.library_root)
 
-        self.analysis = analysis_from_rb_waveform(self.cached_waveform, self.cached_duration)
+        self.analysis = analysis_from_rb_waveform(self.cached_waveform, self.cached_duration, style=info.waveform_style)
 
         self.beat_grid_full = extract_beat_grid(folder)
         self.beat_grid_downbeats = _downbeats_only(self.beat_grid_full)

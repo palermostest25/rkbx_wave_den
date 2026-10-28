@@ -26,6 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 from queue import Empty, Queue
+import math
 import threading
 import time
 from typing import Callable, Dict, Iterable, Optional
@@ -47,6 +48,11 @@ class DeckEvent:
     time_scale: Optional[float]
     source: str
     received_at: float
+    playing: Optional[bool] = None
+    rate: Optional[float] = None
+    loop_start: Optional[float] = None
+    loop_end: Optional[float] = None
+    loop_active: Optional[bool] = None
 
 
 def format_link_status(
@@ -72,6 +78,11 @@ class DeckState:
     current_bpm: Optional[float] = None
     original_bpm: Optional[float] = None
     last_update: float = 0.0
+    playing: Optional[bool] = None
+    rate: Optional[float] = None
+    loop_start: Optional[float] = None
+    loop_end: Optional[float] = None
+    loop_active: Optional[bool] = None
 
     def snapshot(self, source: str, when: Optional[float] = None) -> DeckEvent:
         return DeckEvent(
@@ -83,6 +94,11 @@ class DeckState:
             time_scale=self._time_scale(),
             source=source,
             received_at=when if when is not None else time.time(),
+            playing=self.playing,
+            rate=self.rate,
+            loop_start=self.loop_start,
+            loop_end=self.loop_end,
+            loop_active=self.loop_active,
         )
 
     def _time_scale(self) -> Optional[float]:
@@ -116,10 +132,14 @@ class RekordboxLinkListener:
             self._dispatcher.map(f"/track/{deck}/anlz_path", self._handle_anlz_path)
             self._dispatcher.map(f"/bpm/{deck}/current", self._handle_bpm_current)
             self._dispatcher.map(f"/bpm/{deck}/original", self._handle_bpm_original)
+            self._dispatcher.map(f"/playing/{deck}", self._handle_playing)
+            self._dispatcher.map(f"/rate/{deck}", self._handle_rate)
+            self._dispatcher.map(f"/loop/{deck}", self._handle_loop)
 
         self._server: Optional[osc_server.ThreadingOSCUDPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._state_lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -177,51 +197,83 @@ class RekordboxLinkListener:
     # ------------------------------------------------------------------
     # OSC handlers
     # ------------------------------------------------------------------
-    def _handle_time(self, address: str, *args: float) -> None:
-        deck = self._deck_from_address(address)
+    @staticmethod
+    def _finite_argument(args):
+        if len(args) != 1:
+            return None
+        try:
+            value = float(args[0])
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return value if math.isfinite(value) else None
+
+    @staticmethod
+    def _flag(value):
+        if isinstance(value, (bool, int, float)) and value in (0, 1):
+            return bool(value)
+        return None
+
+    def _update_state(self, deck, source, **values):
         if deck not in self._state:
             return
-        value = float(args[0]) if args else None
-        state = self._state[deck]
-        state.time_seconds = value
-        state.last_update = time.time()
-        self._emit(state, source="time")
+        with self._state_lock:
+            state = self._state[deck]
+            for key, value in values.items():
+                setattr(state, key, value)
+            state.last_update = time.time()
+            self._emit(state, source=source)
+
+    def _handle_time(self, address: str, *args: float) -> None:
+        value = self._finite_argument(args)
+        if value is not None:
+            self._update_state(self._deck_from_address(address), "time", time_seconds=value)
 
     def _handle_anlz_path(self, address: str, *args: str) -> None:
         deck = self._deck_from_address(address)
-        if deck not in self._state:
+        if deck not in self._state or len(args) != 1:
             return
-        path = args[0] if args else None
-        state = self._state[deck]
-        if path:
-            normalized = self._normalize_anlz_path(Path(path))
-            if DEBUG and normalized != Path(path):
-                print(f"[RB Link] Normalized DAT path -> {normalized}")
-            state.anlz_path = str(normalized)
-        else:
-            state.anlz_path = None
-        state.last_update = time.time()
-        self._emit(state, source="anlz_path")
+        path = args[0]
+        if path is not None and not isinstance(path, str):
+            return
+        normalized = str(self._normalize_anlz_path(Path(path))) if path else None
+        with self._state_lock:
+            changed = normalized != self._state[deck].anlz_path
+            reset = dict(playing=None, rate=None, loop_start=None, loop_end=None,
+                         loop_active=None, time_seconds=None) if changed or not normalized else {}
+            self._update_state(deck, "anlz_path", anlz_path=normalized, **reset)
 
     def _handle_bpm_current(self, address: str, *args: float) -> None:
-        deck = self._deck_from_address(address)
-        if deck not in self._state:
-            return
-        value = float(args[0]) if args else None
-        state = self._state[deck]
-        state.current_bpm = value
-        state.last_update = time.time()
-        self._emit(state, source="bpm_current")
+        value = self._finite_argument(args)
+        if value is not None and 0 <= value <= 1000:
+            self._update_state(self._deck_from_address(address), "bpm_current", current_bpm=value)
 
     def _handle_bpm_original(self, address: str, *args: float) -> None:
-        deck = self._deck_from_address(address)
-        if deck not in self._state:
+        value = self._finite_argument(args)
+        if value is not None and 0 <= value <= 1000:
+            self._update_state(self._deck_from_address(address), "bpm_original", original_bpm=value)
+
+    def _handle_playing(self, address: str, *args) -> None:
+        flag = self._flag(args[0]) if len(args) == 1 else None
+        if flag is not None:
+            self._update_state(self._deck_from_address(address), "playing", playing=flag)
+
+    def _handle_rate(self, address: str, *args: float) -> None:
+        value = self._finite_argument(args)
+        if value is not None and -4 <= value <= 4:
+            self._update_state(self._deck_from_address(address), "rate", rate=value)
+
+    def _handle_loop(self, address: str, *args) -> None:
+        """Receive authoritative live loop [start seconds, end seconds, enabled]."""
+        if len(args) != 3:
             return
-        value = float(args[0]) if args else None
-        state = self._state[deck]
-        state.original_bpm = value
-        state.last_update = time.time()
-        self._emit(state, source="bpm_original")
+        start, end = self._finite_argument(args[:1]), self._finite_argument(args[1:2])
+        enabled = self._flag(args[2])
+        if start is None or end is None or enabled is None:
+            return
+        if enabled and not 0 <= start < end:
+            return
+        self._update_state(self._deck_from_address(address), "loop", loop_active=enabled,
+                           loop_start=start if enabled else None, loop_end=end if enabled else None)
 
     def _handle_default(self, address: str, *args) -> None:
         # Ignore noisy topics by default; hook here if needed for debugging.

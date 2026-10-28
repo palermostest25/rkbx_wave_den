@@ -1,48 +1,42 @@
-"""Render the real SDL viewer at acceptance sizes. Data is explicitly synthetic."""
+"""Capture the production Qt surface; no raster or browser stand-in."""
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import pygame
-from pygame._sdl2.video import Texture
-from rb_waveform_core.rb_waveform_gpu import WaveformGpuWindow, DeckFrame
-from rb_waveform_core.deck_controller import DeckController
-from rb_waveform_core.demo import populate_demo
-from rb_waveform_core.config import WaveformColorConfig, WaveformRenderConfig
-from rb_waveform_core.displays import deck_order
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--out', type=Path, required=True)
-args = parser.parse_args()
-args.out.mkdir(parents=True, exist_ok=True)
-for width, height, count in [(1920, 1080, 4), (1280, 720, 4), (1920, 1080, 2)]:
-    win = WaveformGpuWindow(count, size=(width, height), row_order=deck_order('3,1,2,4', count), always_on_top=False, borderless=False)
-    decks = {i: DeckController() for i in range(count)}
-    populate_demo(decks)
-    for idx, deck in decks.items():
-        image, pps, total = deck.build_full_track_image(WaveformColorConfig(), WaveformRenderConfig(), height=256, pixels_per_second=40, reduce='max')
-        win.set_track(idx, image, pps, total, beats=deck.get_beat_markers(), cues=deck.get_cue_markers())
-    frames = [DeckFrame(40 + i * .08, 16, d.song_name, d.current_bpm) for i, d in decks.items()]
-    win.pump()
-    target = Texture(win.renderer, (width, height), target=True)
-    win.renderer.target = target
-    win.render_frame(frames, present=False, output_size=(width, height))
-    pygame.image.save(win.renderer.to_surface(), str(args.out / f'demo-{width}x{height}-{count}deck.png'))
-    win.close()
-
-# Edge states exercise coincident cues and a disconnected/unloaded display.
+from PySide6.QtWidgets import QApplication
+from PySide6.QtTest import QTest
+from rb_waveform_core.qt_app import Session, MainWindow
 from rb_waveform_core.cues import CueMarker
-win = WaveformGpuWindow(4, size=(1280, 720), row_order=(2, 0, 1, 3), always_on_top=False)
-target = Texture(win.renderer, (1280, 720), target=True)
-win.renderer.target = target
-win.render_frame([DeckFrame(None, 16) for _ in range(4)], present=False, output_size=(1280, 720))
-pygame.image.save(win.renderer.to_surface(), str(args.out / 'empty.png'))
-decks = {i: DeckController() for i in range(4)}
-populate_demo(decks)
-for idx, deck in decks.items():
-    deck.cues.extend([CueMarker(41.25, (255, 190, 54), True), CueMarker(41.25, (150, 100, 250), False, 3)])
-    image, pps, total = deck.build_full_track_image(WaveformColorConfig(), WaveformRenderConfig(), height=256, pixels_per_second=100, reduce='max')
-    win.set_track(idx, image, pps, total, beats=deck.get_beat_markers(), cues=deck.get_cue_markers())
-win.render_frame([DeckFrame(40, 16, d.song_name, d.current_bpm) for d in decks.values()], present=False, output_size=(1280, 720))
-pygame.image.save(win.renderer.to_surface(), str(args.out / 'clustered-cues.png'))
-win.close()
+
+parser=argparse.ArgumentParser()
+parser.add_argument('--out',type=Path,required=True)
+args=parser.parse_args()
+args.out.mkdir(parents=True,exist_ok=True)
+app=QApplication([])
+app.setStyle('Fusion')
+app.setQuitOnLastWindowClosed(False)
+with tempfile.TemporaryDirectory() as temp:
+    session=Session(demo=True,config_path=Path(temp)/'settings.json')
+    window=MainWindow(session)
+    for width,height,count in [(1920,1080,4),(1280,720,4),(1920,1080,2)]:
+        window.resize(width,height)
+        window.set_count(count)
+        window.show()
+        QTest.qWait(50)
+        window.grab().save(str(args.out/f'qt-{width}x{height}-{count}deck.png'))
+    window.set_count(4)
+    window.resize(1280,720)
+    window.toggle_settings()
+    QTest.qWait(40)
+    window.grab().save(str(args.out/'qt-settings-1280.png'))
+    window.toggle_settings()
+    for deck in session.decks.values():
+        deck.cues.extend([CueMarker(41.25,(255,190,54),True),CueMarker(41.25,(130,80,255),False,3)])
+    QTest.qWait(40)
+    window.grab().save(str(args.out/'qt-clustered-cues.png'))
+    for deck in session.decks.values():
+        deck.analysis=None
+    QTest.qWait(40)
+    window.grab().save(str(args.out/'qt-empty.png'))
+    window.close()

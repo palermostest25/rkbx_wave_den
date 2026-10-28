@@ -46,6 +46,7 @@ def _resample_bins(x: np.ndarray, target_bins: int) -> np.ndarray:
 def analysis_from_rb_waveform(
 	waveform: np.ndarray,
 	duration: float | None,
+	style: str = "three_band",
 ) -> WaveformAnalysis:
 	"""Convert a Rekordbox PWV waveform array (N x 3) to WaveformAnalysis.
 
@@ -66,8 +67,13 @@ def analysis_from_rb_waveform(
 		)
 
 	data = np.clip(waveform.astype(np.float32), 0.0, None)
-	peak = max(1.0, float(np.max(data)))
-	normalized = data / peak
+	# PWV7 heights are stored as fixed seven-bit values, not track-normalized.
+	# Documented detail calibration: low .4, mid .3, high .06 relative units.
+	# Preserve those ratios rather than making every high-frequency peak white.
+	if style == "monochrome":
+		normalized = np.clip(data / 31.0, 0.0, 1.0)
+	else:
+		normalized = np.clip(data / 127.0 * np.array([1.0, .75, .15]), 0.0, 1.0)
 	estimated_duration = duration if (duration and duration > 0.0) else len(data) / 75.0
 
 	return WaveformAnalysis(

@@ -43,6 +43,7 @@ class AnlzAnalysisResult:
     waveform: Optional[np.ndarray]
     song_path: Optional[Path]  # Raw path from PPTH tag (not resolved)
     duration: Optional[float]  # Calculated from PWV at 150 fps
+    waveform_style: str = "three_band"
 
 
 @dataclass(frozen=True)
@@ -328,7 +329,8 @@ def _parse_anlz_file(anlz_path: Path) -> AnlzAnalysisResult:
     if waveform is not None and len(waveform) > 0:
         duration = len(waveform) / 150.0
     
-    return AnlzAnalysisResult(waveform, song_path, duration)
+    style = "three_band" if any(type(tag).__name__.startswith("PWV7") for tag in tags) else "monochrome"
+    return AnlzAnalysisResult(waveform, song_path, duration, style)
 
 
 def _extract_rb_path(tags: Iterable[object]) -> Optional[Path]:
