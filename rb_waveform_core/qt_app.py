@@ -735,7 +735,10 @@ class MainWindow(QMainWindow):
             return
         if self.hold_windowed:
             return
-        if screen is not self.connected_screen or not self.isFullScreen() or self.geometry() != screen.geometry():
+        # macOS animates into full screen; re-binding mid-animation would restart it. Only
+        # Windows needs the size check, where the taskbar can take part of the monitor back.
+        resized = sys.platform == 'win32' and self.geometry() != screen.geometry()
+        if screen is not self.connected_screen or not self.isFullScreen() or resized:
             bind_fullscreen(self, screen)
             self.connected_screen = screen
 
