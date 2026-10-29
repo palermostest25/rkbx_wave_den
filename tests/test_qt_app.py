@@ -6,7 +6,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from PySide6.QtCore import QPoint, Qt
+from unittest.mock import Mock, patch
+from PySide6.QtCore import QPoint, QRectF, Qt
 from PySide6.QtWidgets import QApplication, QCheckBox
 from PySide6.QtTest import QTest
 from rb_waveform_core.qt_app import Session, MainWindow
@@ -41,6 +42,15 @@ class QtAppTests(unittest.TestCase):
         self.assertIn('font-size:33px', self.window.styleSheet())
         self.window.escape()
         self.assertEqual(self.window.pages.currentIndex(), 0)
+
+    def test_connection_failure_is_visible_in_empty_lanes(self):
+        self.session.demo = False
+        self.session.decks[0].analysis = None
+        message = 'No Mac memory layout for Rekordbox 7.2.19.0342'
+        self.session.set_status(message)
+        painter = Mock()
+        self.window.canvas.draw_deck(painter, 0, QRectF(0, 0, 1280, 180))
+        self.assertEqual(painter.drawText.call_args.args[-1], message)
 
     def test_two_and_four_decks_reuse_the_same_window(self):
         handle = self.window.winId()
@@ -121,6 +131,14 @@ class QtAppTests(unittest.TestCase):
         places=flag_positions([100]*8,24,600)
         self.assertEqual(len(places),len(set(places)))
         self.assertNotIn(None,places)
+
+    def test_manual_analysis_keeps_native_playback_connection(self):
+        self.session.demo = False
+        with patch('rb_waveform_core.qt_app.QFileDialog.getOpenFileName', return_value=('/music/ANLZ.DAT','')), \
+             patch.object(self.session,'open_track') as load:
+            self.window.open_analysis()
+        self.assertEqual(self.session.view['source'],'Native')
+        load.assert_called_once_with(0,'/music/ANLZ.DAT')
 
 
 if __name__=='__main__':

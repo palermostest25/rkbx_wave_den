@@ -4,7 +4,7 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from rb_waveform_core.mac_reader import (MachProcess, MacMemoryAccessError,
     MAC_LAYOUTS, RekordboxMacMemoryReader, app_version)
@@ -92,6 +92,26 @@ class MacReaderTests(unittest.TestCase):
         self.assertEqual(len(events), 4)
         self.assertEqual(events[0].time_seconds, 10)
         self.assertEqual(events[-1].anlz_path, '/USB/PIONEER/USBANLZ/P001/test')
+
+    def test_authorized_copy_is_preferred_and_explicit_target_does_not_fallback(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            targets = []
+            for pid, name, identifier in ((10, 'Original', 'com.pioneerdj.rekordboxdj'),
+                                           (20, 'Calibration', 'dev.rekordbox-wave.calibration')):
+                contents = root / (name + '.app') / 'Contents'
+                (contents / 'MacOS').mkdir(parents=True)
+                (contents / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': identifier}))
+                targets.append(Mock(info={'pid': pid, 'name': 'rekordbox', 'exe': str(contents/'MacOS'/'rekordbox')}))
+            reader = RekordboxMacMemoryReader()
+            with patch('psutil.process_iter', return_value=targets):
+                self.assertEqual(reader._find_process()[0], 20)
+            reader = RekordboxMacMemoryReader(preferred_executable=targets[0].info['exe'])
+            with patch('psutil.process_iter', return_value=targets):
+                self.assertEqual(reader._find_process()[0], 10)
+            reader = RekordboxMacMemoryReader(preferred_executable=root/'missing.app'/'Contents'/'MacOS'/'rekordbox')
+            with patch('psutil.process_iter', return_value=targets):
+                self.assertIsNone(reader._find_process())
 
     def test_version_is_read_from_the_correct_app_bundle(self):
         with tempfile.TemporaryDirectory() as root:

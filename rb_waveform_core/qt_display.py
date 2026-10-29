@@ -36,6 +36,13 @@ def bind_fullscreen(window, screen):
     cover_monitor(int(window.winId()))
 
 
+
+def beat_label(beats):
+    """Loop length as rekordbox shows it: 1/4, 1/2, 1, 2 … or 3.5 for a free manual loop."""
+    if beats < .97:
+        return f'1/{round(1 / beats)}'
+    return f'{round(beats)}' if abs(beats - round(beats)) < .05 else f'{beats:.1f}'
+
 class WaveformTiles:
     """Demand-loaded native-resolution tiles; memory stays bounded for long tracks."""
     def __init__(self, capacity=64):
@@ -45,13 +52,31 @@ class WaveformTiles:
     def clear(self):
         self.images.clear()
 
+    def cached(self, analysis, tile, colors, render, reduction=1):
+        entry = self.images.get(self.key(analysis, tile, colors, render, reduction))
+        # The stored analysis pins its id, so a new track can never reuse an old tile.
+        return entry is not None and entry[0] is analysis
+
+    @staticmethod
+    def key(analysis, tile, colors, render, reduction):
+        return (id(analysis), tile, reduction, tuple(colors.low_color), tuple(colors.mid_color),
+                tuple(colors.high_color), colors.rgb_mode, render.low_gain,
+                render.mid_gain, render.high_gain, render.smoothing_bins)
+
     def get(self, analysis, tile, colors, render, reduction=1):
-        key = (id(analysis), tile, reduction, tuple(colors.low_color), tuple(colors.mid_color),
-               tuple(colors.high_color), colors.rgb_mode, render.low_gain,
-               render.mid_gain, render.high_gain, render.smoothing_bins)
-        if key in self.images:
+        key = self.key(analysis, tile, colors, render, reduction)
+        if self.cached(analysis, tile, colors, render, reduction):
             self.images.move_to_end(key)
-            return self.images[key]
+            return self.images[key][1]
+        result = self.render_tile(analysis, tile, colors, render, reduction)
+        if result is not None:
+            self.images[key] = (analysis, result)
+            while len(self.images) > self.capacity:
+                self.images.popitem(last=False)
+        return result
+
+    @staticmethod
+    def render_tile(analysis, tile, colors, render, reduction):
         start, end = tile * 1024, min((tile + 1) * 1024, len(analysis.low))
         if end <= start:
             return None
@@ -67,11 +92,8 @@ class WaveformTiles:
                       margin_px=3, background_color=(0, 0, 0))
         image = render_waveform_image(section, colors, cfg, reduce='max')
         raw = image.tobytes()
-        result = QImage(raw, image.width, image.height, image.width * 3, QImage.Format.Format_RGB888).copy()
-        self.images[key] = result
-        while len(self.images) > self.capacity:
-            self.images.popitem(last=False)
-        return result
+        return QImage(raw, image.width, image.height, image.width * 3,
+                      QImage.Format.Format_RGB888).convertToFormat(QImage.Format.Format_RGB32)
 
 
 def flag_positions(anchors, width, maximum):
@@ -102,6 +124,7 @@ class WaveformCanvas(QWidget):
         super().__init__(parent)
         self.session = session
         self.tiles = WaveformTiles()
+        self.upcoming = []
         self.setMinimumSize(560, 280)
         self.setMouseTracking(True)
         self.setAccessibleName('Stacked deck waveforms')
@@ -116,9 +139,15 @@ class WaveformCanvas(QWidget):
         painter.fillRect(self.rect(), QColor('black'))
         order = self.session.order()
         height = self.height() / len(order)
+        self.upcoming = []
         for row, idx in enumerate(order):
             self.draw_deck(painter, idx, QRectF(0, row * height, self.width(), height))
         painter.end()
+        # Render one tile ahead per frame (~3 ms), so four decks never fill a frame at once.
+        for analysis, tile, reduction in self.upcoming:
+            if tile * 1024 < len(analysis.low) and not self.tiles.cached(analysis, tile, self.session.colors, self.session.render, reduction):
+                self.tiles.get(analysis, tile, self.session.colors, self.session.render, reduction)
+                break
 
     def draw_deck(self, p, idx, bounds):
         s = self.session
@@ -151,7 +180,10 @@ class WaveformCanvas(QWidget):
         position = s.position(idx)
         if deck.analysis is None or position is None:
             p.setPen(QColor('#aab0b8'))
-            text = s.errors.get(idx, 'Waiting for a track in Rekordbox')
+            waiting = 'Waiting for a track in Rekordbox'
+            if not s.demo and not (s.reader and s.reader.connected):
+                waiting = s.status or waiting
+            text = s.errors.get(idx, waiting)
             p.drawText(signal.adjusted(24, 0, -24, 0), Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap, text)
             return
         if header:
@@ -179,20 +211,59 @@ class WaveformCanvas(QWidget):
             bin_rate = bins / duration
             first = max(0, math.floor(start * bin_rate / 1024))
             last = min(math.ceil(bins / 1024) - 1, math.floor(end * bin_rate / 1024))
+            reduction = max(1, 2 ** max(0, math.floor(math.log2(bin_rate / max(pps, .001)))))
+            self.upcoming += [(analysis, last + 1, reduction), (analysis, first - 1, reduction)] if first > 0 else [(analysis, last + 1, reduction)]
             for tile in range(first, last + 1):
-                reduction = max(1, 2 ** max(0, math.floor(math.log2(bin_rate / max(pps, .001)))))
                 image = self.tiles.get(analysis, tile, s.colors, s.render, reduction)
                 if image is not None:
                     target = QRectF(x_at(tile * 1024 / bin_rate), signal.top(),
                                     min(1024, bins - tile * 1024) / bin_rate * pps, signal.height())
                     p.drawImage(target, image)
-        timeline = s.timelines[idx]
-        if s.view.get('loops', True) and timeline.loop_active and timeline.loop_start is not None:
-            left, right = x_at(timeline.loop_start), x_at(timeline.loop_end)
-            rect = QRectF(left, signal.top(), right - left, signal.height())
-            p.fillRect(rect, QColor(255, 143, 0, 45))
-            p.setPen(QPen(QColor('#ff9c00'), 2))
-            p.drawRect(rect)
+        if s.view.get('loops', True):
+            # Saved loops tint their span in the cue colour, as on the decks.
+            for cue in deck.cues:
+                if cue.end_sec is None or cue.end_sec < start or cue.time_sec > end:
+                    continue
+                left, right = x_at(cue.time_sec), x_at(cue.end_sec)
+                tint = QColor(*cue.color)
+                tint.setAlpha(55)
+                p.fillRect(QRectF(left, signal.top(), right - left, signal.height()), tint)
+            timeline = s.timelines[idx]
+            loop = timeline.active_loop()
+            orange = QColor('#ffa21a')
+            pill_font = QFont(font)
+            pill_font.setBold(True)
+            pill_font.setPixelSize(round(font_size * .72))
+            def pill(x, text):
+                p.setFont(pill_font)
+                w = p.fontMetrics().horizontalAdvance(text) + 12
+                box = QRectF(min(max(x, signal.left() + 2), signal.right() - w - 2), signal.top() + 4, w, pill_font.pixelSize() + 6)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(orange)
+                p.drawRoundedRect(box, 4, 4)
+                p.setPen(QColor('black'))
+                p.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+                p.setFont(font)
+            if loop:
+                left, right = x_at(loop[0]), x_at(loop[1])
+                rect = QRectF(left, signal.top() + 1, right - left, signal.height() - 2)
+                p.fillRect(rect, QColor(255, 143, 0, 62))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.setPen(QPen(orange, 1.5))
+                p.drawRect(rect)
+                p.setPen(QPen(orange, 3))
+                p.drawLine(QPointF(left, rect.top()), QPointF(left, rect.bottom()))
+                p.drawLine(QPointF(right, rect.top()), QPointF(right, rect.bottom()))
+                beats = (loop[1] - loop[0]) * bpm / 60
+                pill(left + 4, beat_label(beats))
+            elif timeline.pending_in is not None and timeline.pending_in <= end:
+                # IN pressed, OUT not yet: the loop-to-be grows with the playhead.
+                left = x_at(timeline.pending_in)
+                if position > timeline.pending_in:
+                    p.fillRect(QRectF(left, signal.top() + 1, x_at(position) - left, signal.height() - 2), QColor(255, 143, 0, 34))
+                p.setPen(QPen(orange, 3))
+                p.drawLine(QPointF(left, signal.top()), QPointF(left, signal.bottom()))
+                pill(left + 4, 'IN')
         p.restore()
         # Grid ticks sit outside the waveform, matching the AZ enlarged display.
         if s.view.get('grid', True):
@@ -212,13 +283,13 @@ class WaveformCanvas(QWidget):
                     p.drawText(QRectF(x - 15, signal.bottom() + 11, 40, flag_h), Qt.AlignmentFlag.AlignCenter, str(number // 4 + 1))
         if s.view.get('cues', True):
             cues = [cue for cue in deck.cues if start <= cue.time_sec <= end]
-            fw = max(20, font_size * 1.2)
+            fw = max(24, font_size * 1.35)
             placements = flag_positions([x_at(c.time_sec) - signal.left() for c in cues], fw, signal.width())
             for cue, placement in zip(cues, placements):
                 x = x_at(cue.time_sec)
                 color = QColor(*cue.color)
                 # Stem is always at the real cue position, regardless of label collision.
-                p.setPen(QPen(color, 1))
+                p.setPen(QPen(color, 2))
                 p.drawLine(QPointF(x, signal.top()), QPointF(x, signal.bottom()))
                 if placement is not None:
                     fx, row = placement
@@ -239,7 +310,7 @@ class WaveformCanvas(QWidget):
                     left = max(signal.left(), x_at(cue.time_sec))
                     right = min(signal.right(), x_at(cue.end_sec))
                     y = signal.bottom() + 4
-                    p.setPen(QPen(QColor(*cue.color), 2))
+                    p.setPen(QPen(QColor(*cue.color), 3))
                     p.drawLine(QPointF(left, y), QPointF(right, y))
                     p.drawLine(QPointF(left, y - 4), QPointF(left, y + 5))
                     p.drawLine(QPointF(right, y - 4), QPointF(right, y + 5))

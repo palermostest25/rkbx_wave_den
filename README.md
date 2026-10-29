@@ -27,13 +27,27 @@ Hot-cue flags and memory cues retain exact track positions. Nearby labels use fr
 | Input | Available data |
 | --- | --- |
 | Windows native | Existing Rekordbox 7.2.2 / 7.2.14.0 playback-position, BPM and analysis-path layouts |
-| Apple Silicon native | Community source layouts for 7.2.8 / 7.2.17 / 7.2.18; requires macOS permission to read the target process |
-| Intel Mac | Qt viewer and OSC/offline input; no validated native memory layout |
+| macOS native | Read-only Accessibility connection to the normal Rekordbox app; verified live with 7.2.19.0342 |
+| Intel Mac | Same Accessibility connection; Intel bundle built natively, live hardware not yet verified |
 | OSC | Position, BPM and optional authoritative playing/rate/live-loop state |
 
-The original native Windows reader does **not** expose live engaged-loop fields. Saved loops are rendered; live-loop highlighting requires a sender that supplies live state. No saved loop is falsely presented as currently engaged. Unknown native versions fail with an explanatory connection status. Streaming analysis depends on accessible ANLZ files.
+### Live hot cues and memory cues
 
-The installed vendor-signed Mac Rekordbox can deny process access. This application never modifies its signature, entitlements, security settings or library. A Mac binary alone does not remove that OS restriction. Native Mac 7.2.19 and Intel playback support are not claimed.
+Cue edits appear on the waveform as you make them, on Windows and macOS, however you make them: on the controller, with the mouse, by adding or deleting. Wave re-reads the loaded tracks' cues from rekordbox's library several times a second (read-only). rekordbox saves cue edits there straight away. With a controller, hot-cue pads, SHIFT+pad (delete) and MEMORY show on the press itself, and the library then confirms them.
+
+### Live loops from your controller
+
+Wave listens to your DJ controller's MIDI alongside rekordbox and decodes it with the `.midi.csv` map rekordbox itself ships for that controller (all 56 rekordbox maps with loop buttons are supported, and your own MIDI-learn maps take priority). Pressing **IN** shows an IN flag at once, with the loop-to-be growing toward the playhead. **OUT**, **auto/4-beat loop**, beat-loop pads, **½×/2×** and **RELOOP/EXIT** draw or clear the loop the moment you press them, with its length in beats. Wave only listens: it never sends anything to the controller, so rekordbox behaves exactly as before.
+
+Loop points snap to the beat grid, as with rekordbox's default quantize. If rekordbox plays a slightly different loop, the next wrap corrects it. Without a controller (loops set with the mouse), a loop appears from its first repeat. On Windows, classic MIDI drivers let only one app open a port, so this works only where the controller's driver shares its port. Otherwise the status line says so.
+
+No saved loop is falsely presented as currently engaged. Unknown native versions fail with an explanatory connection status. Streaming analysis depends on accessible ANLZ files.
+
+On Mac, allow **Rekordbox Wave** in **System Settings → Privacy & Security → Accessibility**, then select Native in Wave. Keep Rekordbox in PERFORMANCE mode with its deck elapsed-time fields available (Browse and 4-Deck Horizontal were checked). Wave reads titles/times and resolves their existing ANLZ files through an enforced read-only SQLCipher connection. It does not modify Rekordbox, launch a helper or create another Rekordbox copy.
+
+Playback-time values have 0.1-second display precision; bounded interpolation smooths movement between updates. Title, artist and track duration must uniquely match the library. Current live verification includes streaming tracks with cached analysis. Direct USB tracks absent from the local collection may need their ANLZ file selected manually in Settings (Native playback remains connected); unresolved metadata is reported instead of guessing a different track.
+
+The earlier debug-copy approach is disabled because detached vendor helpers could bypass its process sandbox. It is not used by the Accessibility reader.
 
 ## Run and build
 

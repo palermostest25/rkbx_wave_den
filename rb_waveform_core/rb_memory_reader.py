@@ -210,8 +210,8 @@ def _detect_rekordbox_version(pid: int) -> Optional[str]:
 def _select_version(detected: Optional[str], available: List[str]) -> Optional[str]:
     """Pick the best matching offsets version for a detected version string.
 
-    Tries the detected version trimmed to progressively fewer dotted components
-    (e.g. 7.2.2.x -> 7.2.2 -> 7.2 -> 7); rejects unsupported versions.
+    Match the release's major/minor/patch, retaining exact build matches first.
+    Layout names may include a trailing zero whereas the file has a build number.
     """
     if not available:
         return None
@@ -221,6 +221,13 @@ def _select_version(detected: Optional[str], available: List[str]) -> Optional[s
             cand = ".".join(parts[:n])
             if cand in available:
                 return cand
+        if len(parts) >= 3 and all(part.isdigit() for part in parts):
+            release = tuple(int(part) for part in parts[:3])
+            for version in available:
+                known = version.split('.')
+                if len(known) >= 3 and all(part.isdigit() for part in known):
+                    if tuple(int(part) for part in known[:3]) == release:
+                        return version
     return None
 
 
