@@ -33,6 +33,38 @@ def config_directory():
     return base / 'rkbx_wave'
 
 
+def snap_to_beat(seconds, grid, tolerance=.08):
+    """Quantized loops sit on beats; an inferred edge within tolerance is the beat itself."""
+    nearest = min((beat.time_ms / 1000 for beat in grid or ()), key=lambda t: abs(t - seconds), default=None)
+    return nearest if nearest is not None and abs(nearest - seconds) <= tolerance else seconds
+
+
+class DisplayLinkRepaint(QObject):
+    """Cocoa delivers window update requests on the display link: requesting the next
+    one from each keeps exactly one repaint per refresh, which a timer only approximates."""
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self.canvas = canvas
+        self.window = None
+
+    def attach(self):
+        window = self.canvas.window().windowHandle()
+        if window is None:
+            return
+        if window is not self.window:
+            if self.window is not None:
+                self.window.removeEventFilter(self)
+            self.window = window
+            window.installEventFilter(self)
+        window.requestUpdate()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.UpdateRequest and self.canvas.isVisible():
+            # The window repaints itself for this request; ask for the next refresh.
+            obj.requestUpdate()
+        return False
+
+
 class Session(QObject):
     changed = Signal()
     analysisChanged = Signal()
@@ -56,6 +88,7 @@ class Session(QObject):
         self.jobs = {}
         self.requested = {}
         self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix='waveform-analysis')
+        self.vsync_wait = None
         self.status = ''
         self.load_config(self.path, initial=True)
         if demo:
@@ -136,9 +169,13 @@ class Session(QObject):
             elif sys.platform == 'darwin':
                 from .mac_accessibility_reader import RekordboxAccessibilityReader
                 self.reader = RekordboxAccessibilityReader(deck_count=4)
+                # The UI clock ticks in tenths: hold through slow pitch, treat it as a quantum,
+                # and ease its larger timing errors in slowly enough to stay invisible.
                 for timeline in self.timelines.values():
-                    timeline.extrapolate_seconds = .16
-                    timeline.stale_seconds = .5
+                    timeline.extrapolate_seconds = .3
+                    timeline.stale_seconds = .6
+                    timeline.resolution = .1
+                    timeline.smoothing_seconds = .6
             else:
                 raise RuntimeError('Native Rekordbox connection requires Windows or macOS')
             self.reader.start()
@@ -186,25 +223,40 @@ class Session(QObject):
         if event.anlz_path and str(event.anlz_path) != self.requested.get(idx):
             self.open_track(idx, event.anlz_path)
             self.timelines[idx].reset()
+        deck = self.decks[idx]
+        deck.update_live_bpm(event.current_bpm)
+        timeline = self.timelines[idx]
+        timeline.rate_hint = deck.time_scale if deck.original_bpm and deck.current_bpm else None
+        timeline.beat_seconds = 60 / deck.original_bpm if deck.original_bpm else None
         if event.time_seconds is not None and event.source in ('time', 'memory', 'accessibility'):
             stamp = time.monotonic() + min(0, event.received_at - time.time())
-            self.timelines[idx].observe(event.time_seconds, observed_at=stamp,
+            inferred = timeline.inferred_loop
+            timeline.observe(event.time_seconds, observed_at=stamp,
                 playing=getattr(event, 'playing', None), rate=getattr(event, 'rate', None),
                 loop_start=getattr(event, 'loop_start', None), loop_end=getattr(event, 'loop_end', None),
                 loop_active=getattr(event, 'loop_active', None))
+            if timeline.inferred_loop and timeline.inferred_loop != inferred:
+                timeline.inferred_loop = tuple(snap_to_beat(t, deck.beat_grid_full) for t in timeline.inferred_loop)
         if event.source in ('loop', 'playing', 'rate'):
             timeline = self.timelines[idx]
             for field in ('loop_start', 'loop_end', 'loop_active', 'playing', 'rate'):
                 value = getattr(event, field, None)
                 if value is not None:
                     setattr(timeline, field, value)
-        self.decks[idx].update_live_bpm(event.current_bpm)
 
     def position(self, idx):
         if self.demo:
             return 40 + (time.monotonic() - self.started) % 100
         timeline = self.timelines[idx]
-        return timeline.sample_position if timeline.stale() else timeline.position()
+        position = timeline.sample_position if timeline.stale() else timeline.position()
+        if timeline.resolution and timeline.rate == 0 and position is not None:
+            # A paused coarse clock only says "within this tenth"; a cue there is where it stopped.
+            base = timeline.sample_position
+            cue = next((c.time_sec for c in self.decks[idx].cues
+                        if base - 1e-3 <= c.time_sec < base + timeline.resolution), None)
+            if cue is not None:
+                return cue
+        return position
 
     def tick(self):
         if self.reader:
@@ -236,6 +288,8 @@ class Session(QObject):
                 self.set_status('REKORDBOX · connected')
             else:
                 self.set_status(getattr(self.reader, 'status', 'Waiting for Rekordbox'))
+        if self.vsync_wait:
+            self.vsync_wait()
         self.changed.emit()
 
     def close(self):
@@ -287,11 +341,16 @@ class MainWindow(QMainWindow):
         self.settings_page = self.build_settings()
         self.pages.addWidget(self.settings_page)
         self.layout.addWidget(self.pages, 1)
-        self.session.changed.connect(self.canvas.update)
-        self.session.analysisChanged.connect(self.canvas.tiles.clear)
+        if sys.platform == 'darwin':
+            self.display_link = DisplayLinkRepaint(self.canvas)
+        else:
+            self.display_link = None
+            self.session.changed.connect(self.canvas.update)
         self.session.statusChanged.connect(self.update_status)
         self.screen_check = QTimer(self)
         self.screen_check.timeout.connect(self.ensure_display)
+        # Also follows refresh-rate changes and restarts display-link painting after hide/minimize.
+        self.screen_check.timeout.connect(self.pace_frames)
         self.screen_check.start(1500)
         self.connected_screen = None
         self._lost_display = False
@@ -308,6 +367,22 @@ class MainWindow(QMainWindow):
         app.screenAdded.connect(lambda _: self.refresh_screens())
         app.screenRemoved.connect(lambda _: self.refresh_screens())
         QTimer.singleShot(0, self.ensure_display)
+        QTimer.singleShot(0, self.pace_frames)
+
+    def pace_frames(self):
+        screen = self.screen() or QApplication.primaryScreen()
+        hz = max(30.0, screen.refreshRate() if screen else 60.0)
+        if self.display_link:
+            self.display_link.attach()
+        elif sys.platform == 'win32':
+            import ctypes
+            # Wake just before the refresh and let the compositor release the paint, one per refresh.
+            self.session.vsync_wait = ctypes.windll.dwmapi.DwmFlush
+            interval = max(1, math.floor(1000 / hz) - 4)
+        else:
+            interval = max(1, round(1000 / hz))
+        if not self.display_link and self.session.timer.interval() != interval:
+            self.session.timer.setInterval(interval)
 
     def button(self, title, action):
         button = QPushButton(title)
@@ -557,6 +632,7 @@ class MainWindow(QMainWindow):
             self.refresh_screens()
         else:
             self.canvas.setFocus()
+            self.pace_frames()
 
     def escape(self):
         if self.pages.currentIndex():

@@ -109,7 +109,9 @@ def _cues_from_db(folder: Path) -> List[CueMarker]:
     for in_ms, out_ms, kind in db.cues(folder):
         if in_ms is None:
             continue
+        # master.db skips Kind 4: hot cues A-H are 1, 2, 3, 5, 6, 7, 8, 9.
         number = int(kind or 0)
+        number -= number > 4
         is_mem = number == 0
         out.append(CueMarker(
             time_sec=float(in_ms) / 1000.0,

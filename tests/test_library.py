@@ -60,3 +60,14 @@ class ReadOnlyLibraryTests(unittest.TestCase):
         self.assertEqual(len(cues),1)
         self.assertEqual((cues[0].time_sec,cues[0].end_sec,cues[0].number),(1,3,1))
         self.assertFalse(cues[0].is_memory)
+
+    def test_hot_cue_kinds_skip_four(self):
+        # master.db stores hot cues A-H as Kind 1, 2, 3, 5, 6, 7, 8, 9.
+        from unittest.mock import Mock, patch
+        from rb_waveform_core.cues import _cues_from_db
+        db = Mock(cues=Mock(return_value=[(1000, -1, kind) for kind in (0, 1, 2, 3, 5, 6, 7, 8, 9)]))
+        with patch('rb_waveform_core.cues._get_db', return_value=db):
+            cues = _cues_from_db(Path('/first'))
+        self.assertEqual([c.number for c in cues], [0, 1, 2, 3, 4, 5, 6, 7, 8])
+        self.assertTrue(cues[0].is_memory)
+

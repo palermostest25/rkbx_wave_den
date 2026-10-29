@@ -19,6 +19,15 @@ def seconds(text):
     return sign*value
 
 
+def edge_stamp(previous, position, read_at, max_gap=.3):
+    """The UI clock shows tenths; when it ticks between two reads, that tick is
+    the exact moment the deck crossed ``position``. Stamp the midpoint of the
+    reads rather than the late read time, which would add up to a poll of jitter."""
+    if previous and position != previous[0] and 0 < read_at - previous[1] < max_gap:
+        return (previous[1] + read_at) / 2
+    return read_at
+
+
 @dataclass
 class DeckFields:
     deck: int
@@ -51,7 +60,7 @@ def deck_fields(nodes):
 
 
 class RekordboxAccessibilityReader:
-    def __init__(self,deck_count=4,poll_hz=25):
+    def __init__(self,deck_count=4,poll_hz=60):
         self.deck_count=deck_count
         self.interval=1/max(1,poll_hz)
         self.connected=False
@@ -103,6 +112,7 @@ class RekordboxAccessibilityReader:
         ax=None; library=None
         states={i:DeckState(i) for i in range(self.deck_count)}
         names={}; bindings=[]; pid=None; next_scan=0; prompted=False
+        next_meta=0; loaded={}; last_read={}
         try:
             ax=Accessibility()
             while not self._stop_event.is_set():
@@ -116,26 +126,46 @@ class RekordboxAccessibilityReader:
                         self._stop_event.wait(1)
                         continue
                     if started>=next_scan:
+                        next_scan=started+3
                         target=self._find_process()
                         if target!=pid:
                             pid=target;bindings=[];names.clear()
                         if pid is None:
+                            next_scan=0
                             self.connected=False;self.status='Waiting for normal Rekordbox in /Applications'
                             self._stop_event.wait(1);continue
+                    # A full tree walk is thousands of AX calls and stalls playback reads, so
+                    # it runs only when bindings are missing; stale bindings fail to read and land here.
+                    if not bindings:
                         bindings=deck_fields(ax.snapshot(pid))
-                        next_scan=time.monotonic()+3
+                        loaded.clear();last_read.clear();next_meta=0
                     if not bindings:
                         self.connected=False
                         self.status='Show Rekordbox PERFORMANCE decks with elapsed-time fields'
                         self._stop_event.wait(.5);continue
                     self.connected=True
                     self.status='REKORDBOX · Accessibility connected'
+                    # Each AX read is a round trip into Rekordbox: only the elapsed clock
+                    # is read every tick; titles, BPM and duration twice a second.
+                    meta=started>=next_meta
+                    if meta:next_meta=started+.5
                     for f in bindings[:self.deck_count]:
+                        state=states[f.deck]
+                        if not meta and not loaded.get(f.deck):
+                            continue
+                        pos=self._clock(ax,f.elapsed,f.elapsed_fraction)
+                        read_at=time.time()
+                        stamp=edge_stamp(last_read.get(f.deck),pos,read_at)
+                        last_read[f.deck]=(pos,read_at)
+                        if not meta:
+                            state.time_seconds=pos
+                            state.last_update=read_at
+                            self._queue.put(state.snapshot('accessibility',when=stamp))
+                            continue
                         title=ax.text(f.title.element).strip()
                         artist=ax.text(f.artist.element).strip()
-                        pos=self._clock(ax,f.elapsed,f.elapsed_fraction)
                         remaining=self._clock(ax,f.remaining,f.remaining_fraction)
-                        state=states[f.deck]
+                        loaded[f.deck]=bool(title and title!='Not Loaded.')
                         try:bpm=float(ax.text(f.bpm.element))
                         except ValueError:bpm=None
                         identity=(title,artist,round(pos+abs(remaining)))
@@ -156,11 +186,11 @@ class RekordboxAccessibilityReader:
                                 self._queue.put(replace(state.snapshot('status'),error=missing))
                         state.time_seconds=pos
                         state.current_bpm=bpm
-                        state.last_update=time.time()
-                        self._queue.put(state.snapshot('accessibility'))
+                        state.last_update=read_at
+                        self._queue.put(state.snapshot('accessibility',when=stamp))
                 except Exception as exc:
                     self.connected=False;self.status=str(exc)
-                    bindings=[];next_scan=0;names.clear()
+                    bindings=[];next_scan=0;names.clear();loaded.clear();last_read.clear()
                     self._stop_event.wait(.5)
                 self._stop_event.wait(max(0,self.interval-(time.monotonic()-started)))
         except Exception as exc:

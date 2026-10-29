@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace as N
 from rb_waveform_core.mac_ax import AXText
-from rb_waveform_core.mac_accessibility_reader import deck_fields, seconds, RekordboxAccessibilityReader
+from rb_waveform_core.mac_accessibility_reader import deck_fields, seconds, edge_stamp, RekordboxAccessibilityReader
 
 
 def node(value='',role='AXStaticText',help=''):
@@ -36,3 +36,9 @@ class MacAccessibilityTests(unittest.TestCase):
         ax=N(text=lambda _:'bad')
         with self.assertRaises(ValueError):
             RekordboxAccessibilityReader._clock(ax,N(element=1),N(element=2))
+
+    def test_clock_tick_is_stamped_between_reads(self):
+        self.assertEqual(edge_stamp((5.0, 1.00), 5.1, 1.02), 1.01)
+        self.assertEqual(edge_stamp((5.0, 1.00), 5.0, 1.02), 1.02)
+        self.assertEqual(edge_stamp(None, 5.0, 1.02), 1.02)
+        self.assertEqual(edge_stamp((5.0, 1.00), 5.1, 2.0), 2.0)
