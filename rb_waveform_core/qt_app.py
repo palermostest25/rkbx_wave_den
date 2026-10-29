@@ -34,6 +34,13 @@ def config_directory():
     return base / 'rkbx_wave'
 
 
+# Three-band palettes: rekordbox's own colours (sampled from its decks), and Wave's earlier look.
+STYLES = {
+    'Rekordbox': dict(low_color=(0, 80, 224), mid_color=(248, 160, 0), overlap_color=(176, 96, 0), high_color=(244, 234, 214)),
+    'Wave classic': dict(low_color=(20, 95, 235), mid_color=(244, 164, 20), overlap_color=(169, 107, 39), high_color=(255, 255, 255)),
+}
+
+
 def snap_to_beat(seconds, grid, tolerance=.08):
     """Quantized loops sit on beats; an inferred edge within tolerance is the beat itself."""
     nearest = min((beat.time_ms / 1000 for beat in grid or ()), key=lambda t: abs(t - seconds), default=None)
@@ -74,12 +81,12 @@ class Session(QObject):
     def __init__(self, *, demo=False, config_path=None):
         super().__init__()
         self.path = Path(config_path) if config_path else config_directory() / 'default_config.json'
-        self.colors = WaveformColorConfig(low_color=(20, 95, 235), mid_color=(244, 164, 20))
+        self.colors = WaveformColorConfig(**STYLES['Rekordbox'])
         self.render = WaveformRenderConfig()
         self.view = dict(zoom_beats=32, playhead=.32, track_headers=False,
                          grid=True, cues=True, loops=True, bar_numbers=True,
                          source='Native', settings_scale=1.0, always_on_top=True,
-                         refresh_hz=60)
+                         refresh_hz=60, style='Rekordbox')
         self.decks = {i: DeckController() for i in range(4)}
         self.timelines = {i: PlaybackTimeline() for i in range(4)}
         self.errors = {}
@@ -140,6 +147,10 @@ class Session(QObject):
                 colors.low_color = (20, 95, 235)
                 if tuple(colors.mid_color) == (212, 155, 70):
                     colors.mid_color = (244, 164, 20)
+            if 'style' not in data.get('view', {}) and all(
+                    tuple(getattr(colors, k)) == v for k, v in STYLES['Wave classic'].items() if k != 'overlap_color'):
+                for key, value in STYLES['Rekordbox'].items():  # untouched classic colours: move to the new look
+                    setattr(colors, key, value)
             self.colors, self.render, self.view = colors, render, view
             # Previous monitor bindings used SDL names and may not identify a Qt screen.
             # Do not silently select a different physical monitor on migration.
@@ -449,7 +460,8 @@ class MainWindow(QMainWindow):
         self.screen_check.timeout.connect(self.pace_frames)
         self.screen_check.start(1500)
         self.connected_screen = None
-        self._lost_display = False
+        # Esc/F11 out of full screen holds a window until the monitor is plugged in again.
+        self.hold_windowed = False
         self._settings_dirty = False
         self._zoom_keys_down = [False, False]
         self.session.changed.connect(self.poll_global_zoom)
@@ -460,8 +472,8 @@ class MainWindow(QMainWindow):
             shortcut = QShortcut(QKeySequence(key), self)
             shortcut.activated.connect(action)
         app = QApplication.instance()
-        app.screenAdded.connect(lambda _: self.refresh_screens())
-        app.screenRemoved.connect(lambda _: self.refresh_screens())
+        app.screenAdded.connect(lambda _: self.screens_changed(plugged=True))
+        app.screenRemoved.connect(lambda _: self.screens_changed(plugged=False))
         QTimer.singleShot(0, self.ensure_display)
         QTimer.singleShot(0, self.pace_frames)
 
@@ -615,6 +627,12 @@ class MainWindow(QMainWindow):
         for band in ('low', 'mid', 'high'):
             band_layout.addWidget(self.button(band.upper(), lambda _, b=band: self.pick_color(b)))
         form.addRow('Three-band colours', band_row)
+        style = QComboBox()
+        style.setAccessibleName('Waveform style')
+        style.addItems(list(STYLES))
+        style.setCurrentText(self.session.view.get('style', 'Rekordbox'))
+        style.textActivated.connect(self.set_style)
+        form.addRow('Waveform style', style)
         for label, field in [('Low level', 'low_gain'), ('Mid level', 'mid_gain'), ('High level', 'high_gain')]:
             spin = QDoubleSpinBox()
             spin.setRange(.1, 3)
@@ -679,46 +697,67 @@ class MainWindow(QMainWindow):
         self.fullscreen_check.setChecked(self.session.render.fill_display)
         self.fullscreen_check.blockSignals(False)
         self.connected_screen = None
-        self.ensure_display()
+        self.hold_windowed = False
+        if self.session.render.display_key:
+            self.ensure_display()
+        elif self.isFullScreen():
+            self.leave_fullscreen()
         self.persist()
 
+    def screens_changed(self, plugged):
+        self.refresh_screens()
+        if plugged:
+            self.hold_windowed = False
+        self.ensure_display()
+
     def ensure_display(self):
+        """Fill the remembered monitor whenever it is connected; otherwise stay a window."""
         key = self.session.render.display_key
-        if not key:
+        if not key or not self.session.render.fill_display:
             return
-        screens = QApplication.screens()
-        screen = find_screen(key, screens)
-        self._lost_display = screen is None
-        screen = screen or QApplication.primaryScreen()
-        if not screen:
+        screen = find_screen(key, QApplication.screens())
+        if screen is None:
+            if self.connected_screen is not None:
+                self.connected_screen = None
+                self.leave_fullscreen()
+                self.update_status('Monitor unplugged · windowed until it is connected again')
             return
-        if self.session.render.fill_display:
-            if screen is not self.connected_screen or not self.isFullScreen() or self.geometry() != screen.geometry():
-                bind_fullscreen(self, screen)
-                self.connected_screen = screen
-        elif screen is not self.connected_screen:
-            self.showNormal()
-            self.move(screen.geometry().topLeft())
+        if self.hold_windowed:
+            return
+        if screen is not self.connected_screen or not self.isFullScreen() or self.geometry() != screen.geometry():
+            bind_fullscreen(self, screen)
             self.connected_screen = screen
-        if self._lost_display:
-            self.update_status('Selected monitor disconnected · using primary; will reconnect automatically')
+
+    def leave_fullscreen(self):
+        self.showNormal()
+        area = QApplication.primaryScreen().availableGeometry() if self.screen() is None else self.screen().availableGeometry()
+        width, height = min(1280, area.width()), min(800, area.height())
+        self.setGeometry(area.x() + (area.width() - width) // 2, area.y() + (area.height() - height) // 2, width, height)
 
     def change_fullscreen(self, enabled):
         self.session.render.fill_display = enabled
+        self.hold_windowed = False
         if enabled:
-            screen = find_screen(self.session.render.display_key, QApplication.screens()) or self.screen() or QApplication.primaryScreen()
-            if not self.session.render.display_key:
-                self.session.render.display_key = screen_key(screen)
-                self.refresh_screens()
+            # The monitor the window is on now becomes the one to return to.
+            screen = self.screen() or QApplication.primaryScreen()
+            self.session.render.display_key = screen_key(screen)
+            self.refresh_screens()
             bind_fullscreen(self, screen)
             self.connected_screen = screen
         else:
-            self.showNormal()
-            self.resize(1280, 800)
+            self.connected_screen = None
+            self.leave_fullscreen()
         self.persist()
 
     def toggle_fullscreen(self):
-        self.fullscreen_check.setChecked(not self.isFullScreen())
+        if self.isFullScreen():
+            self.hold_windowed = True
+            self.leave_fullscreen()
+        else:
+            self.fullscreen_check.blockSignals(True)
+            self.fullscreen_check.setChecked(True)
+            self.fullscreen_check.blockSignals(False)
+            self.change_fullscreen(True)
 
     def toggle_settings(self):
         opening = self.pages.currentIndex() == 0
@@ -734,7 +773,7 @@ class MainWindow(QMainWindow):
         if self.pages.currentIndex():
             self.toggle_settings()
         elif self.isFullScreen():
-            self.fullscreen_check.setChecked(False)
+            self.toggle_fullscreen()
 
     def sync_count(self):
         for button, count in ((self.two, 2), (self.four, 4)):
@@ -787,6 +826,14 @@ class MainWindow(QMainWindow):
     def set_settings_scale(self, value):
         self.session.view['settings_scale'] = value
         self.apply_theme()
+        self.persist()
+
+    def set_style(self, name):
+        for key, value in STYLES[name].items():
+            setattr(self.session.colors, key, value)
+        self.session.view['style'] = name
+        self.canvas.tiles.clear()
+        self.canvas.update()
         self.persist()
 
     def pick_color(self, band):

@@ -18,6 +18,14 @@ def tag(name, **content):
 
 
 class DisplayTests(unittest.TestCase):
+    def test_monitor_identity_survives_a_different_port(self):
+        from rb_waveform_core.qt_display import screen_key
+        def screen(maker, model, serial, name):
+            return NS(manufacturer=lambda: maker, model=lambda: model, serialNumber=lambda: serial, name=lambda: name)
+        self.assertEqual(screen_key(screen('ARZ', 'P15', '', r'\\.\DISPLAY2')), screen_key(screen('ARZ', 'P15', '', r'\\.\DISPLAY3')))
+        self.assertEqual(screen_key(screen('', '', '', 'ARZOPA')), '||ARZOPA')  # saved Mac keys still match
+        self.assertNotEqual(screen_key(screen('ARZ', 'P15', 'A1', 'x')), screen_key(screen('ARZ', 'P15', 'B2', 'x')))
+
     def test_physical_order_and_two_decks(self):
         self.assertEqual(deck_order('3,1,2,4', 4), (2, 0, 1, 3))
         self.assertEqual(deck_order('3,1,2,4', 2), (0, 1))
@@ -89,6 +97,11 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(img.getpixel((10, 50)), (255, 255, 255))
         self.assertEqual(img.getpixel((10, 60)), (169, 107, 39))
         self.assertEqual(img.getpixel((10, 82)), (0, 120, 255))
+        from rb_waveform_core.qt_app import STYLES
+        img = render_waveform_image(analysis, WaveformColorConfig(**STYLES['Rekordbox']), WaveformRenderConfig(image_width=20, image_height=100))
+        self.assertEqual(img.getpixel((10, 50)), (244, 234, 214))  # cream highs
+        self.assertEqual(img.getpixel((10, 60)), (176, 96, 0))     # dark amber inside the bass
+        self.assertEqual(img.getpixel((10, 82)), (0, 80, 224))     # rekordbox blue
 
 
 if __name__ == '__main__':

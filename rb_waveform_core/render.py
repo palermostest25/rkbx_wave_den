@@ -278,7 +278,7 @@ def render_waveform_image(
 			mid_h = (_reduce(np.clip(analysis.mid, 0, 1)) * half_h).astype(int)
 			high_h = (_reduce(np.clip(analysis.high, 0, 1)) * half_h).astype(int)
 			overlap = (dist <= np.minimum(low_h, mid_h)[None, :]) & (dist > high_h[None, :])
-			palette.append((169, 107, 39))
+			palette.append(tuple(getattr(color_cfg, "overlap_color", (169, 107, 39))))
 			idx_map[overlap] = len(palette) - 1
 
 	if not getattr(color_cfg, "rgb_mode", False):

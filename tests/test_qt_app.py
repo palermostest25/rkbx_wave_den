@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -61,9 +62,9 @@ class QtAppTests(unittest.TestCase):
         self.assertEqual(handle, self.window.winId())
 
     def test_selecting_monitor_automatically_fills_entire_panel(self):
-        self.window.select_screen(1)
-        QTest.qWait(250)
         screen = self.app.screens()[0]
+        self.window.select_screen(1)
+        self.settle(lambda: self.window.isFullScreen() and self.window.geometry() == screen.geometry())
         self.assertTrue(self.session.render.fill_display)
         self.assertTrue(self.window.isFullScreen())
         self.assertEqual(self.window.geometry(), screen.geometry())
@@ -77,9 +78,51 @@ class QtAppTests(unittest.TestCase):
         self.window.escape()  # returns to waves while retaining full screen
         self.assertTrue(self.window.isFullScreen())
         self.window.escape()
+        self.settle(lambda: not self.window.isFullScreen())
         self.assertFalse(self.window.isFullScreen())
         self.window.ensure_display()
         self.assertFalse(self.window.isFullScreen())
+
+    def test_waveform_style_toggle_and_classic_colours_move_to_rekordbox(self):
+        from rb_waveform_core.qt_app import STYLES
+        self.assertEqual(self.session.colors.low_color, (0, 80, 224))
+        self.window.set_style('Wave classic')
+        self.assertEqual(self.session.colors.high_color, (255, 255, 255))
+        saved = json.loads((Path(self.temp.name) / 'settings.json').read_text())
+        self.assertEqual(saved['view']['style'], 'Wave classic')
+        # An older profile (no style saved) with the untouched classic colours gets the new look.
+        del saved['view']['style']
+        old = Path(self.temp.name) / 'old.json'
+        old.write_text(json.dumps(saved))
+        self.session.load_config(old)
+        self.assertEqual(tuple(self.session.colors.low_color), STYLES['Rekordbox']['low_color'])
+
+    def test_remembered_monitor_is_filled_whenever_it_is_connected(self):
+        screen = self.app.screens()[0]
+        self.session.render.fill_display = True
+        self.session.render.display_key = 'Portable|15 inch|unplugged'
+        self.window.ensure_display()  # not connected: stay a window
+        self.assertFalse(self.window.isFullScreen())
+        self.session.render.display_key = screen_key(screen)
+        self.window.screens_changed(plugged=True)  # plugged in: snap to it
+        self.settle(lambda: self.window.isFullScreen() and self.window.geometry() == screen.geometry())
+        self.assertTrue(self.window.isFullScreen())
+        self.assertEqual(self.window.geometry(), screen.geometry())
+        self.window.escape()  # windowed for now, but still remembered
+        self.settle(lambda: not self.window.isFullScreen())
+        self.window.ensure_display()
+        self.assertFalse(self.window.isFullScreen())
+        self.assertTrue(self.session.render.fill_display)
+        self.window.screens_changed(plugged=True)
+        self.settle(lambda: self.window.isFullScreen() and self.window.geometry() == screen.geometry())
+        self.assertTrue(self.window.isFullScreen())
+
+    def settle(self, done, timeout=3.0):
+        # Native full-screen transitions animate (about a second on macOS).
+        deadline = time.monotonic() + timeout
+        while not done() and time.monotonic() < deadline:
+            QTest.qWait(50)
+        QTest.qWait(50)
 
     def assert_native_windows_coverage(self):
         from ctypes import wintypes

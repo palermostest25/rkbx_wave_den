@@ -61,6 +61,13 @@ class PlaybackTimeline:
         # Controller loop presses: a pressed IN awaiting OUT, and the loop RELOOP restores.
         self.pending_in: Optional[float] = None
         self.last_loop = None
+        # Platter use (scratch, jog cueing): until then the display follows samples.
+        self.scrub_until: Optional[float] = None
+        self._glide = None  # (start time, start position, duration) toward the latest sample
+        self._fresh = False  # first motion after a stop: play, or a slow jog?
+
+    def scrubbing(self, now):
+        return self.scrub_until is not None and now < self.scrub_until
 
     def engage(self, start, end):
         """A loop the DJ just engaged; the observed wraps keep correcting it."""
@@ -135,8 +142,15 @@ class PlaybackTimeline:
                 wrapped = delta + loop[1] - loop[0]
                 if 0 <= wrapped <= 4.0 * elapsed + 0.02:
                     delta = wrapped
-            discontinuity = elapsed > self.stale_seconds or abs(delta) > 4.0 * elapsed + 0.02
-            if discontinuity and delta < 0 and old_rate > .2 and elapsed <= self.stale_seconds and self.loop_active is None:
+            # One clock quantum can tick at any moment, so it is never by itself a seek.
+            discontinuity = elapsed > self.stale_seconds or abs(delta) > 4.0 * elapsed + 0.02 + self.resolution
+            # Hands on the platter: backwards, reversing, or not moving like playback.
+            expected = old_rate * elapsed
+            if not discontinuity and delta and (delta < 0 or delta * old_rate < 0 or (
+                    old_rate and abs(delta - expected) > self.resolution + .03 + .25 * abs(expected))):
+                self.scrub_until = stamp + .5
+            if (discontinuity and delta < 0 and old_rate > .2 and elapsed <= self.stale_seconds
+                    and self.loop_active is None and not self.scrubbing(stamp)):
                 # The jump happened somewhere in this interval; both sides advanced equally since.
                 start = pos - elapsed * old_rate / 2
                 self._note_jump(start, start + self.sample_position + elapsed * old_rate - pos, stamp)
@@ -170,13 +184,23 @@ class PlaybackTimeline:
             if denominator > 1e-12:
                 self.rate = max(-4.0, min(4.0, sum((x - avg_x) * (y - avg_y) for x, y in zip(xs, ys)) / denominator))
         hint = _finite(self.rate_hint)
+        if hint and self.rate and old_rate and not discontinuity and abs(self.rate / hint - 1) > .3:
+            # Far from the track's playback speed: a hand on the platter, not the motor.
+            self.scrub_until = stamp + .5
         if (explicit_rate is None and hint and 0 < hint <= 4.0 and self.rate > 0
                 and not discontinuity and (old_rate == 0 or abs(self.rate / hint - 1) < .15)):
             self.rate = hint
         if explicit_rate is not None and self.playing is not False:
             self.rate = explicit_rate
+        scrubbing = self.scrubbing(stamp)
+        if scrubbing:
+            self._samples.clear()  # scratch motion would poison the playback-rate fit
+        self._glide = None if discontinuity or before is None else (
+            stamp, before, min(max(stamp - self.observed_at, 1e-3), .25))
+        self._fresh = old_rate == 0 and self.rate != 0 and not discontinuity
         self.sample_position, self.observed_at = pos, stamp
-        settled = discontinuity or before is None or old_rate == 0 or self.rate == 0 or self.playing is False
+        settled = (discontinuity or before is None or scrubbing or old_rate == 0
+                   or self.rate == 0 or self.playing is False)
         offset = 0.0 if settled else before - pos
         self._offset = offset if abs(offset) < .2 else 0.0
         return True
@@ -189,8 +213,17 @@ class PlaybackTimeline:
         if stamp is None:
             return self.sample_position
         since = stamp - self.observed_at
+        if self.scrubbing(stamp) and self._glide:
+            # Glide from where the display was toward the latest sample over one sample
+            # interval: it never runs ahead of the platter, so it never has to come back.
+            t0, p0, span = self._glide
+            k = min(1.0, max(0.0, (stamp - t0) / span))
+            return p0 + (self.sample_position + self.resolution / 2 - p0) * k
         elapsed = max(0.0, min(since, self.extrapolate_seconds))
         rate = 0.0 if self.playing is False else self.rate
+        if self._fresh and rate:
+            # PLAY's next tick arrives within one step; a slow jog's doesn't. Don't guess further.
+            elapsed = min(elapsed, max(self.resolution, .04) / abs(rate))
         pos = self.sample_position + elapsed * rate
         if rate == 0:
             pos += self.resolution / 2

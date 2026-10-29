@@ -31,6 +31,12 @@ Hot-cue flags and memory cues retain exact track positions. Nearby labels use fr
 | Intel Mac | Same Accessibility connection; Intel bundle built natively, live hardware not yet verified |
 | OSC | Position, BPM and optional authoritative playing/rate/live-loop state |
 
+### Platter, monitor and colours
+
+- **Platters:** when you scratch, jog-cue or move a deck by hand, Wave stops predicting and glides between real positions, so the waveform never runs ahead and snaps back. Normal playback still runs predicted and smooth.
+- **Monitor:** full screen on a monitor is remembered. Whenever that monitor is connected, at launch or when plugged in, Wave fills it; otherwise Wave stays a normal window. F11/Esc leave full screen for now, and plugging the monitor in again returns to it.
+- **Waveform style:** Settings → Waveform → *Rekordbox* (rekordbox's own blue, amber and cream) or *Wave classic* (the earlier look).
+
 ### Live hot cues and memory cues
 
 Cue edits appear on the waveform as you make them, on Windows and macOS, however you make them: on the controller, with the mouse, by adding or deleting. Wave re-reads the loaded tracks' cues from rekordbox's library several times a second (read-only). rekordbox saves cue edits there straight away. With a controller, hot-cue pads, SHIFT+pad (delete) and MEMORY show on the press itself, and the library then confirms them.

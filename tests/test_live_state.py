@@ -53,11 +53,32 @@ class PlaybackTimelineTests(unittest.TestCase):
         timeline.observe(80.02, observed_at=.06)
         self.assertAlmostEqual(timeline.position(.08), 80.04)
 
-    def test_reverse_jog_is_supported(self):
+    def test_reverse_jog_follows_without_overshooting(self):
         timeline = PlaybackTimeline()
         timeline.observe(5, observed_at=0)
         timeline.observe(4.98, observed_at=.02)
-        self.assertAlmostEqual(timeline.position(.04), 4.96)
+        self.assertAlmostEqual(timeline.position(.03), 4.99)  # glides between real samples
+        self.assertAlmostEqual(timeline.position(.2), 4.98)   # and never runs past the platter
+
+    def test_platter_scratch_never_runs_ahead(self):
+        # Mac tenths clock, hand moving the platter back and forth.
+        import math
+        timeline = PlaybackTimeline(extrapolate_seconds=.3, stale_seconds=.6, resolution=.1, smoothing_seconds=.6)
+        timeline.rate_hint = 1.0
+        for tick in range(240):
+            now = tick / 60
+            timeline.observe(math.floor((30 + .35 * math.sin(3 * math.pi * now)) * 10) / 10, observed_at=now)
+            if tick > 30:
+                truth = 30 + .35 * math.sin(3 * math.pi * now)
+                self.assertLess(abs(timeline.position(now) - truth), .2)
+
+    def test_steady_playback_is_not_mistaken_for_the_platter(self):
+        timeline = PlaybackTimeline(extrapolate_seconds=.3, stale_seconds=.6, resolution=.1, smoothing_seconds=.6)
+        timeline.rate_hint = 1.06
+        for tick in range(300):
+            now = tick / 60
+            timeline.observe(math.floor(10 * 1.06 * now) / 10, observed_at=now)
+            self.assertFalse(tick > 20 and timeline.scrubbing(now))
 
     def test_authoritative_loop_wraps_and_saved_loop_does_not(self):
         timeline = PlaybackTimeline()
