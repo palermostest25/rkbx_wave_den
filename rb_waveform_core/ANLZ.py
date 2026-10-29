@@ -353,8 +353,9 @@ def _extract_waveform(tags: Iterable[object]) -> Optional[np.ndarray]:
             continue
         data = np.frombuffer(bytes(tag.struct.content.entries), dtype=np.uint8)
         if data.size and data.size % 3 == 0:
-            # PWV7 stores mid, high, low, at 150 entries/second.
-            return data.reshape(-1, 3)[:, [2, 0, 1]].astype(np.float32)
+            # PWV7 entries are low, mid, high at 150 per second: measured against rekordbox 7's
+            # own drawing of a track (each column correlates with exactly one band colour).
+            return data.reshape(-1, 3).astype(np.float32)
     for tag in tags:
         if type(tag).__name__.startswith("PWV5"):
             # Legacy RGB detail is packed 16-bit colour/height, not three bands.

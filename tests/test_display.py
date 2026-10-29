@@ -40,7 +40,8 @@ class DisplayTests(unittest.TestCase):
         self.assertNotIn(None, occupied)
 
     def test_pwv7_band_order(self):
-        waveform = _extract_waveform([tag('PWV7AnlzTag', entries=bytes([20, 5, 100, 40, 9, 80]))])
+        # Stored low, mid, high: each column matched one colour of rekordbox 7's own drawing.
+        waveform = _extract_waveform([tag('PWV7AnlzTag', entries=bytes([100, 20, 5, 80, 40, 9]))])
         np.testing.assert_array_equal(waveform, [[100, 20, 5], [80, 40, 9]])
 
     def test_legacy_packed_height_is_not_fake_three_band(self):
@@ -50,10 +51,13 @@ class DisplayTests(unittest.TestCase):
     def test_preview_is_not_used_as_150fps_detail(self):
         self.assertIsNone(_extract_waveform([tag('PWV6AnlzTag', entries=b'\1\2\3')]))
 
-    def test_normalization_preserves_relative_band_energy(self):
-        analysis = analysis_from_rb_waveform(np.array([[100, 20, 5], [80, 40, 9]]), 1)
-        self.assertAlmostEqual(float(analysis.mid[0]), 20 * .75 / 127)
-        self.assertAlmostEqual(float(analysis.high[0]), 5 * .15 / 127)
+    def test_bands_share_rekordbox_scale(self):
+        # rekordbox draws every band at one linear scale, filling the lane near 100.
+        analysis = analysis_from_rb_waveform(np.array([[100, 20, 5], [80, 40, 120]]), 1)
+        self.assertAlmostEqual(float(analysis.low[1]), .8)
+        self.assertAlmostEqual(float(analysis.mid[0]), .2)
+        self.assertAlmostEqual(float(analysis.high[0]), .05)
+        self.assertEqual(float(analysis.high[1]), 1.0)  # louder than the lane: clipped, as rekordbox does
 
     def test_loop_sentinels(self):
         for end in (None, -1, 0xffffffff, 900, 1000):

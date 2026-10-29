@@ -264,10 +264,15 @@ def render_waveform_image(
 	else:
 		# Overlaid/symmetric (non-overview) mode: mirror each band around center.
 		dist = np.abs(rows - center_y)
+		sounding = None
 		for band_name in render_band_order:
 			vals = np.clip(_band_array(analysis, band_name), 0.0, 1.0)
 			column_values = _reduce(vals)
 			heights = (column_values * half_h).astype(np.int32)
+			sounding = column_values > 0 if sounding is None else sounding | (column_values > 0)
+			if band_name == "high" and render_band_order[-1] == "high":
+				# rekordbox keeps a thin highs line through the centre wherever there is sound.
+				heights = np.where(sounding, np.maximum(heights, 1), heights)
 			mask = (heights > 0)[None, :] & (dist <= heights[None, :])
 			palette.append(tuple(band_color_map[band_name]))
 			idx_map[mask] = len(palette) - 1
@@ -276,7 +281,7 @@ def render_waveform_image(
 		if set(render_band_order) == {"low", "mid", "high"}:
 			low_h = (_reduce(np.clip(analysis.low, 0, 1)) * half_h).astype(int)
 			mid_h = (_reduce(np.clip(analysis.mid, 0, 1)) * half_h).astype(int)
-			high_h = (_reduce(np.clip(analysis.high, 0, 1)) * half_h).astype(int)
+			high_h = np.maximum((_reduce(np.clip(analysis.high, 0, 1)) * half_h).astype(int), 1)
 			overlap = (dist <= np.minimum(low_h, mid_h)[None, :]) & (dist > high_h[None, :])
 			palette.append(tuple(getattr(color_cfg, "overlap_color", (169, 107, 39))))
 			idx_map[overlap] = len(palette) - 1
