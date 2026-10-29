@@ -6,7 +6,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from PySide6.QtCore import QPoint, Qt
+from unittest.mock import Mock
+from PySide6.QtCore import QPoint, QRectF, Qt
 from PySide6.QtWidgets import QApplication, QCheckBox
 from PySide6.QtTest import QTest
 from rb_waveform_core.qt_app import Session, MainWindow
@@ -41,6 +42,15 @@ class QtAppTests(unittest.TestCase):
         self.assertIn('font-size:33px', self.window.styleSheet())
         self.window.escape()
         self.assertEqual(self.window.pages.currentIndex(), 0)
+
+    def test_connection_failure_is_visible_in_empty_lanes(self):
+        self.session.demo = False
+        self.session.decks[0].analysis = None
+        message = 'No Mac memory layout for Rekordbox 7.2.19.0342'
+        self.session.set_status(message)
+        painter = Mock()
+        self.window.canvas.draw_deck(painter, 0, QRectF(0, 0, 1280, 180))
+        self.assertEqual(painter.drawText.call_args.args[-1], message)
 
     def test_two_and_four_decks_reuse_the_same_window(self):
         handle = self.window.winId()

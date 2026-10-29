@@ -151,7 +151,10 @@ class WaveformCanvas(QWidget):
         position = s.position(idx)
         if deck.analysis is None or position is None:
             p.setPen(QColor('#aab0b8'))
-            text = s.errors.get(idx, 'Waiting for a track in Rekordbox')
+            waiting = 'Waiting for a track in Rekordbox'
+            if not s.demo and not (s.reader and s.reader.connected):
+                waiting = s.status or waiting
+            text = s.errors.get(idx, waiting)
             p.drawText(signal.adjusted(24, 0, -24, 0), Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap, text)
             return
         if header:

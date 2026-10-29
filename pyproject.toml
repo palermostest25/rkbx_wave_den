@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rkbx_wave"
-version = "2.0.0"
+version = "2.0.1"
 description = "Real-time, zoomable multi-deck waveform display for Rekordbox (reads Rekordbox memory directly)"
 readme = "README.md"
 requires-python = ">=3.10"

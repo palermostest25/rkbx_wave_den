@@ -1,10 +1,18 @@
 import struct
 import unittest
 from unittest.mock import Mock, patch
-from rb_waveform_core.rb_memory_reader import RekordboxMemoryReader
+from rb_waveform_core.rb_memory_reader import RekordboxMemoryReader, _select_version
 
 
 class MemoryReaderHealthTests(unittest.TestCase):
+    def test_supported_release_matches_file_build_number(self):
+        available = ['7.2.2', '7.2.14.0']
+        for detected in ('7.2.14', '7.2.14.0', '7.2.14.0342'):
+            self.assertEqual(_select_version(detected, available), '7.2.14.0')
+        self.assertEqual(_select_version('7.2.2.0342', available), '7.2.2')
+        self.assertIsNone(_select_version('7.2.19.0342', available))
+        self.assertEqual(_select_version('7.2.14.342', ['7.2.14.0', '7.2.14.342']), '7.2.14.342')
+
     def test_unsupported_version_has_actionable_status(self):
         with patch('rb_waveform_core.rb_memory_reader._load_offsets', return_value={'7.2.2': {}}):
             reader = RekordboxMemoryReader(rekordbox_version='9.0.0')
