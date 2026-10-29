@@ -34,7 +34,8 @@ def action(name):
     """rekordbox function name → (kind, value); None for functions that don't change loops or cues."""
     fixed = {'LoopIn': ('in', None), 'LoopOut': ('out', None), 'ReloopExit': ('reloop', None),
              'AutoLoop': ('auto', None), '4BeatLoop': ('auto', None), '4BeatLoopLongPress': ('auto', 4),
-             'LoopHalf': ('scale', .5), 'LoopDouble': ('scale', 2), 'Memory': ('memory', None)}
+             'LoopHalf': ('scale', .5), 'LoopDouble': ('scale', 2), 'Memory': ('memory', None),
+             'PlayPause': ('play', None), 'Cue': ('play', None)}
     if name in fixed:
         return fixed[name]
     match = re.fullmatch(r'BeatLoop(1_)?(\d+)', name)

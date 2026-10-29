@@ -85,7 +85,7 @@ class QtAppTests(unittest.TestCase):
 
     def test_waveform_style_toggle_and_classic_colours_move_to_rekordbox(self):
         from rb_waveform_core.qt_app import STYLES
-        self.assertEqual(self.session.colors.low_color, (0, 80, 224))
+        self.assertEqual(self.session.colors.low_color, (0, 84, 226))
         self.window.set_style('Wave classic')
         self.assertEqual(self.session.colors.high_color, (255, 255, 255))
         saved = json.loads((Path(self.temp.name) / 'settings.json').read_text())
@@ -96,6 +96,17 @@ class QtAppTests(unittest.TestCase):
         old.write_text(json.dumps(saved))
         self.session.load_config(old)
         self.assertEqual(tuple(self.session.colors.low_color), STYLES['Rekordbox']['low_color'])
+        # 2.2.0's first sampled palette also moves to the measured one; custom colours stay.
+        from rb_waveform_core.qt_app import FIRST_REKORDBOX
+        saved['view']['style'] = 'Rekordbox'
+        saved['color'].update({k: list(v) for k, v in FIRST_REKORDBOX.items()})
+        old.write_text(json.dumps(saved))
+        self.session.load_config(old)
+        self.assertEqual(tuple(self.session.colors.mid_color), (255, 166, 0))
+        saved['color']['low_color'] = [10, 20, 30]
+        old.write_text(json.dumps(saved))
+        self.session.load_config(old)
+        self.assertEqual(tuple(self.session.colors.low_color), (10, 20, 30))
 
     def test_remembered_monitor_is_filled_whenever_it_is_connected(self):
         screen = self.app.screens()[0]

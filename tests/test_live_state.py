@@ -72,6 +72,64 @@ class PlaybackTimelineTests(unittest.TestCase):
                 truth = 30 + .35 * math.sin(3 * math.pi * now)
                 self.assertLess(abs(timeline.position(now) - truth), .2)
 
+    def mac_run(self, truth, seconds, controller=False, play_pressed=None):
+        timeline = PlaybackTimeline(extrapolate_seconds=.3, stale_seconds=.6, resolution=.1, smoothing_seconds=.6)
+        timeline.rate_hint, timeline.controller, timeline.play_pressed = 1.0, controller, play_pressed
+        shown, last = [], None
+        for tick in range(int(seconds * 60)):
+            now = tick / 60
+            position = math.floor(truth(now) * 10) / 10
+            timeline.observe(position, observed_at=(last[1] + now) / 2 if last and last[0] != position else now)
+            last = (position, now)
+            shown.append((timeline.position(now), truth(now)))
+        return shown
+
+    def test_tiny_jog_wiggle_on_a_clock_edge_does_not_jitter(self):
+        shown = self.mac_run(lambda t: 30.1 + .03 * math.sin(2 * math.pi * 1.2 * t), 4)[60:]
+        self.assertLess(max(abs(a - b) for a, b in shown), .05)
+        self.assertLess(max(abs(b[0] - a[0]) for a, b in zip(shown, shown[1:])), .02)
+
+    def test_controller_tells_a_nudge_from_play(self):
+        nudge = lambda t: 30.05 + (.06 * (t - 1) if t > 1 else 0) - (.06 * (t - 2) if t > 2 else 0)
+        shown = self.mac_run(nudge, 3, controller=True)
+        self.assertLess(max(a - b for a, b in shown), .06)  # never runs ahead of the hand
+        play = lambda t: 30.05 + max(0, t - 1)
+        shown = self.mac_run(play, 3, controller=True, play_pressed=.98)
+        self.assertLess(max(abs(a - b) for a, b in shown[90:]), .03)  # PLAY: smooth prediction
+
+    def test_play_stop_and_back_to_start_is_not_a_loop(self):
+        # Play 32 beats (an exact power of two), stop, return to the start: CUE, not a loop.
+        for mac, pause in ((False, 0), (False, 1.0), (True, 0), (True, .2), (True, 1.0)):
+            timeline = (PlaybackTimeline(extrapolate_seconds=.3, stale_seconds=.6, resolution=.1, smoothing_seconds=.6)
+                        if mac else PlaybackTimeline())
+            timeline.rate_hint, timeline.beat_seconds = 1.0, .5
+            step = 1 / 60 if mac else .02
+            now = 0.0
+            while now < 16:
+                timeline.observe(math.floor(now * 10) / 10 if mac else now, observed_at=now)
+                now += step
+            stopped = math.floor(now * 10) / 10 if mac else now
+            end = now + pause
+            while now < end:  # paused: the same position repeats
+                timeline.observe(stopped, observed_at=now)
+                now += step
+            for _ in range(120):  # back at the start, still paused
+                timeline.observe(0.0, observed_at=now)
+                self.assertIsNone(timeline.active_loop(), (mac, pause))
+                now += step
+
+    def test_mouse_loop_shows_from_its_first_repeat(self):
+        timeline = PlaybackTimeline()
+        timeline.rate_hint, timeline.beat_seconds = 1.0, .5
+        now = 0.0
+        while now < 6:  # a 2-second (4-beat) loop from 2.0 engaged at 3.9
+            timeline.observe(now if now < 4 else 2 + (now - 4) % 2, observed_at=now)
+            now += .02
+            if 4.2 <= now < 5.9:  # the session then snaps the edges to the beat grid
+                self.assertTrue(timeline.active_loop())
+                for edge, expected in zip(timeline.active_loop(), (2.0, 4.0)):
+                    self.assertAlmostEqual(edge, expected, delta=.03)
+
     def test_steady_playback_is_not_mistaken_for_the_platter(self):
         timeline = PlaybackTimeline(extrapolate_seconds=.3, stale_seconds=.6, resolution=.1, smoothing_seconds=.6)
         timeline.rate_hint = 1.06

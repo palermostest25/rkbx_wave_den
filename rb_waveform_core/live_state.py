@@ -43,6 +43,9 @@ class PlaybackTimeline:
         self.rate_hint: Optional[float] = None
         # Seconds per beat, used to accept a loop from its first wrap.
         self.beat_seconds: Optional[float] = None
+        # Set when a controller is heard: its PLAY/CUE presses tell motor starts from hand nudges.
+        self.controller = False
+        self.play_pressed: Optional[float] = None
         self.reset()
 
     def reset(self):
@@ -58,6 +61,7 @@ class PlaybackTimeline:
         self._offset = 0.0
         self._jump = None
         self.inferred_loop = None
+        self._candidate = None  # a jump that looks like a loop wrap, until playback carries on
         # Controller loop presses: a pressed IN awaiting OUT, and the loop RELOOP restores.
         self.pending_in: Optional[float] = None
         self.last_loop = None
@@ -65,6 +69,15 @@ class PlaybackTimeline:
         self.scrub_until: Optional[float] = None
         self._glide = None  # (start time, start position, duration) toward the latest sample
         self._fresh = False  # first motion after a stop: play, or a slow jog?
+        self._paced = False  # the last tick moved at playback pace
+        # Where in the clock quantum the deck is: a hand-moved tick is a crossing of its lower
+        # edge going up or its upper edge going down. None: unknown, so the middle.
+        self._quantum: Optional[float] = None
+        self._ticked = 0.0
+
+    def started(self, now):
+        """PLAY or CUE pressed on the controller just before this motion."""
+        return self.play_pressed is not None and 0 <= now - self.play_pressed < .6
 
     def scrubbing(self, now):
         return self.scrub_until is not None and now < self.scrub_until
@@ -72,10 +85,10 @@ class PlaybackTimeline:
     def engage(self, start, end):
         """A loop the DJ just engaged; the observed wraps keep correcting it."""
         self.inferred_loop = self.last_loop = (start, end)
-        self.pending_in = self._jump = None
+        self.pending_in = self._jump = self._candidate = None
 
     def exit_loop(self):
-        self.inferred_loop = None
+        self.inferred_loop = self._candidate = None
 
     def active_loop(self):
         """Engaged loop bounds: authoritative when the source reports loops, else inferred."""
@@ -88,16 +101,18 @@ class PlaybackTimeline:
     def _note_jump(self, start, end, stamp):
         """Readers without loop state still reveal a loop: it jumps back by the same span."""
         previous, self._jump = self._jump, (start, end, stamp)
+        # A loop keeps playing after it jumps back; CUE or a jump to the start stops, so
+        # either kind of match only becomes a loop once playback carries on from it.
         if (previous and abs(previous[0] - start) < .12 and abs(previous[1] - end) < .12
                 and stamp - previous[2] < 2 * (end - start) + .5):
-            self.inferred_loop = ((previous[0] + start) / 2, (previous[1] + end) / 2)
+            self._candidate = ((previous[0] + start) / 2, (previous[1] + end) / 2, stamp)
             return
         beat = self.beat_seconds
         if beat and end - start > 0:
             beats = 2 ** round(math.log2((end - start) / beat))
             # A hot-cue jump rarely spans an exact power-of-two beat count.
-            if 1 / 32 <= beats <= 64 and abs((end - start) - beats * beat) < .05 + .02 * beats * beat:
-                self.inferred_loop = (start, start + beats * beat)
+            if 1 / 32 <= beats <= 64 and abs((end - start) - beats * beat) < .06 + self.resolution:
+                self._candidate = (start, start + beats * beat, stamp)
 
     def observe(self, position, *, observed_at=None, playing=None, rate=None,
                 loop_start=None, loop_end=None, loop_active=None):
@@ -144,10 +159,23 @@ class PlaybackTimeline:
                     delta = wrapped
             # One clock quantum can tick at any moment, so it is never by itself a seek.
             discontinuity = elapsed > self.stale_seconds or abs(delta) > 4.0 * elapsed + 0.02 + self.resolution
+            if self._candidate:
+                start, end, jumped = self._candidate
+                if discontinuity or delta <= 0 or not start - .25 <= pos <= end or stamp - jumped > 1:
+                    self._candidate = None  # stopped, moved away or jumped again: not a loop
+                elif stamp - jumped >= .08:
+                    self.inferred_loop, self._candidate = (start, end), None
             # Hands on the platter: backwards, reversing, or not moving like playback.
             expected = old_rate * elapsed
+            pace = _finite(self.rate_hint) or old_rate
+            # One tick of a coarse clock says little about speed: playback needs two in a row
+            # at pace, each within the clock's timing error (a tick lands up to a poll early or late).
+            at_pace = bool(pace) and abs(delta - pace * elapsed) < .15 * pace * elapsed + .3 * self.resolution + .005
+            steady, self._paced = at_pace and self._paced, at_pace if delta else self._paced
             if not discontinuity and delta and (delta < 0 or delta * old_rate < 0 or (
-                    old_rate and abs(delta - expected) > self.resolution + .03 + .25 * abs(expected))):
+                    old_rate and abs(delta - expected) > self.resolution + .03 + .25 * abs(expected))
+                    or (self.scrubbing(stamp) and not steady)  # still by hand, not the motor
+                    or (old_rate == 0 and self.controller and not self.started(stamp))):
                 self.scrub_until = stamp + .5
             if (discontinuity and delta < 0 and old_rate > .2 and elapsed <= self.stale_seconds
                     and self.loop_active is None and not self.scrubbing(stamp)):
@@ -184,7 +212,8 @@ class PlaybackTimeline:
             if denominator > 1e-12:
                 self.rate = max(-4.0, min(4.0, sum((x - avg_x) * (y - avg_y) for x, y in zip(xs, ys)) / denominator))
         hint = _finite(self.rate_hint)
-        if hint and self.rate and old_rate and not discontinuity and abs(self.rate / hint - 1) > .3:
+        if (hint and self.rate and old_rate and not discontinuity and len(self._samples) >= 4
+                and abs(self.rate / hint - 1) > .3):
             # Far from the track's playback speed: a hand on the platter, not the motor.
             self.scrub_until = stamp + .5
         if (explicit_rate is None and hint and 0 < hint <= 4.0 and self.rate > 0
@@ -195,6 +224,13 @@ class PlaybackTimeline:
         scrubbing = self.scrubbing(stamp)
         if scrubbing:
             self._samples.clear()  # scratch motion would poison the playback-rate fit
+        if discontinuity:
+            self._quantum = None
+        elif delta:
+            # Slow hand moves sit at the edge just crossed; fast ones are anywhere in between.
+            slow = scrubbing and stamp - self._ticked > .15
+            self._quantum = (0.0 if delta > 0 else self.resolution) if slow else None
+            self._ticked = stamp
         self._glide = None if discontinuity or before is None else (
             stamp, before, min(max(stamp - self.observed_at, 1e-3), .25))
         self._fresh = old_rate == 0 and self.rate != 0 and not discontinuity
@@ -218,7 +254,7 @@ class PlaybackTimeline:
             # interval: it never runs ahead of the platter, so it never has to come back.
             t0, p0, span = self._glide
             k = min(1.0, max(0.0, (stamp - t0) / span))
-            return p0 + (self.sample_position + self.resolution / 2 - p0) * k
+            return p0 + (self.sample_position + self._within(stamp) - p0) * k
         elapsed = max(0.0, min(since, self.extrapolate_seconds))
         rate = 0.0 if self.playing is False else self.rate
         if self._fresh and rate:
@@ -226,7 +262,7 @@ class PlaybackTimeline:
             elapsed = min(elapsed, max(self.resolution, .04) / abs(rate))
         pos = self.sample_position + elapsed * rate
         if rate == 0:
-            pos += self.resolution / 2
+            pos += self._within(stamp)
         if self._offset:
             pos += self._offset * math.exp(-max(0.0, since) / self.smoothing_seconds)
         loop = self.active_loop()
@@ -234,6 +270,13 @@ class PlaybackTimeline:
             if pos >= loop[1] or pos < loop[0]:
                 pos = loop[0] + (pos - loop[0]) % (loop[1] - loop[0])
         return pos
+
+    def _within(self, now):
+        # The crossed edge right after a tick; with no tick since, anywhere in the quantum.
+        if self._quantum is None:
+            return self.resolution / 2
+        fade = min(1.0, max(0.0, now - self._ticked) / .6)
+        return self._quantum + (self.resolution / 2 - self._quantum) * fade
 
     def stale(self, now=None):
         if self.observed_at is None:

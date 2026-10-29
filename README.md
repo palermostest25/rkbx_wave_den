@@ -33,9 +33,9 @@ Hot-cue flags and memory cues retain exact track positions. Nearby labels use fr
 
 ### Platter, monitor and colours
 
-- **Platters:** when you scratch, jog-cue or move a deck by hand, Wave stops predicting and glides between real positions, so the waveform never runs ahead and snaps back. Normal playback still runs predicted and smooth.
+- **Platters:** when you scratch, jog-cue or move a deck by hand, Wave stops predicting and glides between real positions, so the waveform never runs ahead and snaps back. Normal playback still runs predicted and smooth. On macOS rekordbox shows time in tenths of a second. For tiny moves, Wave uses the edge of the tenth the platter just crossed, so a small wiggle no longer jitters. With a controller connected, its PLAY and CUE buttons tell a motor start from a hand nudge.
 - **Monitor:** full screen on a monitor is remembered. Whenever that monitor is connected, at launch or when plugged in, Wave fills it; otherwise Wave stays a normal window. F11/Esc leave full screen for now, and plugging the monitor in again returns to it.
-- **Waveform style:** Settings → Waveform → *Rekordbox* (rekordbox's own blue, amber and cream) or *Wave classic* (the earlier look).
+- **Waveform style:** Settings → Waveform → *Rekordbox* or *Wave classic* (the earlier look). The Rekordbox palette comes from flat-colour pixels measured on rekordbox 7's own decks: lows `#0054E2`, mids `#FFA600`, mids inside the bass `#B46607`, highs `#F6ECD9`. The lows and mids match a published rekordbox-style Mixxx skin (`#0055E1`, `#FFA600`). Band heights keep the documented PWV7 proportions (lows 0.4, mids 0.3, highs 0.06, as used by Deep Symmetry's beat-link).
 
 ### Live hot cues and memory cues
 

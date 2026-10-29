@@ -34,11 +34,15 @@ def config_directory():
     return base / 'rkbx_wave'
 
 
-# Three-band palettes: rekordbox's own colours (sampled from its decks), and Wave's earlier look.
+# Three-band palettes. Rekordbox: flat-fill pixels measured from rekordbox 7's decks; the
+# blue and amber match a published rekordbox-style Mixxx skin (#0055E1, #FFA600).
 STYLES = {
-    'Rekordbox': dict(low_color=(0, 80, 224), mid_color=(248, 160, 0), overlap_color=(176, 96, 0), high_color=(244, 234, 214)),
+    'Rekordbox': dict(low_color=(0, 84, 226), mid_color=(255, 166, 0), overlap_color=(180, 102, 7), high_color=(246, 236, 217)),
     'Wave classic': dict(low_color=(20, 95, 235), mid_color=(244, 164, 20), overlap_color=(169, 107, 39), high_color=(255, 255, 255)),
 }
+
+# 2.2.0's first Rekordbox palette, sampled with edge blending; migrated to the measured one.
+FIRST_REKORDBOX = dict(low_color=(0, 80, 224), mid_color=(248, 160, 0), overlap_color=(176, 96, 0), high_color=(244, 234, 214))
 
 
 def snap_to_beat(seconds, grid, tolerance=.08):
@@ -147,9 +151,11 @@ class Session(QObject):
                 colors.low_color = (20, 95, 235)
                 if tuple(colors.mid_color) == (212, 155, 70):
                     colors.mid_color = (244, 164, 20)
-            if 'style' not in data.get('view', {}) and all(
-                    tuple(getattr(colors, k)) == v for k, v in STYLES['Wave classic'].items() if k != 'overlap_color'):
-                for key, value in STYLES['Rekordbox'].items():  # untouched classic colours: move to the new look
+            saved = {k: tuple(getattr(colors, k)) for k in STYLES['Rekordbox']}
+            untouched_classic = 'style' not in data.get('view', {}) and all(
+                saved[k] == v for k, v in STYLES['Wave classic'].items() if k != 'overlap_color')
+            if untouched_classic or saved == FIRST_REKORDBOX:
+                for key, value in STYLES['Rekordbox'].items():  # untouched older palettes: move to the current look
                     setattr(colors, key, value)
             self.colors, self.render, self.view = colors, render, view
             # Previous monitor bindings used SDL names and may not identify a Qt screen.
@@ -269,6 +275,9 @@ class Session(QObject):
     def loop_action(self, idx, kind, beats, stamp):
         """Mirror a controller loop or cue press the moment it happens, as rekordbox will play it."""
         timeline, deck = self.timelines[idx], self.decks[idx]
+        if kind == 'play':
+            timeline.play_pressed = stamp
+            return
         position = timeline.position(stamp)
         if position is None or not deck.original_bpm:
             return
@@ -357,6 +366,8 @@ class Session(QObject):
             if event is None:
                 break
             self.loop_action(*event)
+        for timeline in self.timelines.values():
+            timeline.controller = bool(self.midi and self.midi.controllers)
         self.poll_cues(now := time.monotonic())
         for idx, future in list(self.jobs.items()):
             if not future.done():

@@ -99,9 +99,9 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(img.getpixel((10, 82)), (0, 120, 255))
         from rb_waveform_core.qt_app import STYLES
         img = render_waveform_image(analysis, WaveformColorConfig(**STYLES['Rekordbox']), WaveformRenderConfig(image_width=20, image_height=100))
-        self.assertEqual(img.getpixel((10, 50)), (244, 234, 214))  # cream highs
-        self.assertEqual(img.getpixel((10, 60)), (176, 96, 0))     # dark amber inside the bass
-        self.assertEqual(img.getpixel((10, 82)), (0, 80, 224))     # rekordbox blue
+        self.assertEqual(img.getpixel((10, 50)), (246, 236, 217))  # cream highs
+        self.assertEqual(img.getpixel((10, 60)), (180, 102, 7))    # dark amber inside the bass
+        self.assertEqual(img.getpixel((10, 82)), (0, 84, 226))     # rekordbox blue
 
 
 if __name__ == '__main__':
