@@ -53,6 +53,7 @@ class DeckEvent:
     loop_start: Optional[float] = None
     loop_end: Optional[float] = None
     loop_active: Optional[bool] = None
+    error: Optional[str] = None
 
 
 def format_link_status(

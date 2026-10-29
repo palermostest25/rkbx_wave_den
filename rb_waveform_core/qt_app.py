@@ -11,8 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal, QObject, QStandardPaths, QEvent
-from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QTimer, Signal, QObject, QStandardPaths, QEvent, QUrl
+from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut, QDesktopServices
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QFormLayout, QLabel, QPushButton, QComboBox, QCheckBox,
     QDoubleSpinBox, QSpinBox, QSlider, QScrollArea, QStackedWidget,
@@ -134,8 +134,11 @@ class Session(QObject):
                 from .rb_memory_reader import RekordboxMemoryReader
                 self.reader = RekordboxMemoryReader(deck_count=4)
             elif sys.platform == 'darwin':
-                from .mac_reader import RekordboxMacMemoryReader
-                self.reader = RekordboxMacMemoryReader(deck_count=4)
+                from .mac_accessibility_reader import RekordboxAccessibilityReader
+                self.reader = RekordboxAccessibilityReader(deck_count=4)
+                for timeline in self.timelines.values():
+                    timeline.extrapolate_seconds = .16
+                    timeline.stale_seconds = .5
             else:
                 raise RuntimeError('Native Rekordbox connection requires Windows or macOS')
             self.reader.start()
@@ -169,6 +172,8 @@ class Session(QObject):
         idx = event.deck
         if idx not in self.decks:
             return
+        if getattr(event, 'error', None):
+            self.errors[idx] = event.error
         if event.source == 'anlz_path' and not event.anlz_path:
             job = self.jobs.pop(idx, None)
             if job:
@@ -181,7 +186,7 @@ class Session(QObject):
         if event.anlz_path and str(event.anlz_path) != self.requested.get(idx):
             self.open_track(idx, event.anlz_path)
             self.timelines[idx].reset()
-        if event.time_seconds is not None and event.source in ('time', 'memory'):
+        if event.time_seconds is not None and event.source in ('time', 'memory', 'accessibility'):
             stamp = time.monotonic() + min(0, event.received_at - time.time())
             self.timelines[idx].observe(event.time_seconds, observed_at=stamp,
                 playing=getattr(event, 'playing', None), rate=getattr(event, 'rate', None),
@@ -457,6 +462,9 @@ class MainWindow(QMainWindow):
         self.connection_detail.setWordWrap(True)
         self.connection_detail.setObjectName('help')
         form.addRow('Connection status', self.connection_detail)
+        if sys.platform == 'darwin':
+            form.addRow(self.button('OPEN ACCESSIBILITY SETTINGS', lambda:
+                QDesktopServices.openUrl(QUrl('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'))))
         open_row = QWidget()
         open_layout = QHBoxLayout(open_row)
         open_layout.setContentsMargins(0, 0, 0, 0)

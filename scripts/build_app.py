@@ -5,8 +5,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 sep = ';' if sys.platform == 'win32' else ':'
 manifest = ['--manifest', str(root / 'rb_waveform_core/data/windows.manifest')] if sys.platform == 'win32' else []
-mac_signing = ['--osx-entitlements-file', str(root / 'rb_waveform_core/data/mac.entitlements.plist'),
-               '--osx-bundle-identifier', 'io.github.palermostest25.rekordbox-wave'] if sys.platform == 'darwin' else []
+mac_signing = ['--osx-bundle-identifier', 'io.github.palermostest25.rekordbox-wave'] if sys.platform == 'darwin' else []
 subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
                 '--onefile' if sys.platform == 'win32' else '--onedir',
                 '--windowed', '--name', 'Rekordbox Wave',
