@@ -35,7 +35,7 @@ The original native Windows reader does **not** expose live engaged-loop fields.
 
 On Mac, allow **Rekordbox Wave** in **System Settings → Privacy & Security → Accessibility**, then select Native in Wave. Keep Rekordbox in PERFORMANCE mode with its deck elapsed-time fields available (Browse and 4-Deck Horizontal were checked). Wave reads titles/times and resolves their existing ANLZ files through an enforced read-only SQLCipher connection. It does not modify Rekordbox, launch a helper or create another Rekordbox copy.
 
-Playback-time values have 0.1-second display precision; bounded interpolation smooths movement between updates. Title, artist and track duration must uniquely match the library. Current live verification includes streaming tracks with cached analysis. Direct USB tracks absent from the local collection may need analysis selected manually; unresolved metadata is reported instead of guessing a different track.
+Playback-time values have 0.1-second display precision; bounded interpolation smooths movement between updates. Title, artist and track duration must uniquely match the library. Current live verification includes streaming tracks with cached analysis. Direct USB tracks absent from the local collection may need their ANLZ file selected manually in Settings (Native playback remains connected); unresolved metadata is reported instead of guessing a different track.
 
 The earlier debug-copy approach is disabled because detached vendor helpers could bypass its process sandbox. It is not used by the Accessibility reader.
 

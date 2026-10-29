@@ -473,7 +473,7 @@ class MainWindow(QMainWindow):
             self.open_deck.addItem(f'Deck {idx + 1}', idx)
         open_layout.addWidget(self.open_deck)
         open_layout.addWidget(self.button('OPEN ANALYSIS FILE…', self.open_analysis))
-        form.addRow('Offline inspection', open_row)
+        form.addRow('Track analysis', open_row)
         profiles = QHBoxLayout()
         profiles.addWidget(self.button('IMPORT PROFILE…', self.import_profile))
         profiles.addWidget(self.button('EXPORT PROFILE…', self.export_profile))
@@ -634,7 +634,7 @@ class MainWindow(QMainWindow):
     def open_analysis(self):
         path, _ = QFileDialog.getOpenFileName(self, 'Open track analysis', '', 'Rekordbox analysis (*.DAT *.EXT *.2EX);;All files (*)')
         if path:
-            if self.source_combo.currentText() != 'Offline':
+            if self.session.demo:
                 self.source_combo.setCurrentText('Offline')
             self.session.open_track(self.open_deck.currentData(), path)
 

@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from PySide6.QtCore import QPoint, QRectF, Qt
 from PySide6.QtWidgets import QApplication, QCheckBox
 from PySide6.QtTest import QTest
@@ -135,3 +135,11 @@ class QtAppTests(unittest.TestCase):
 
 if __name__=='__main__':
     unittest.main()
+
+    def test_manual_analysis_keeps_native_playback_connection(self):
+        self.session.demo = False
+        with patch('rb_waveform_core.qt_app.QFileDialog.getOpenFileName', return_value=('/music/ANLZ.DAT','')), \
+             patch.object(self.session,'open_track') as load:
+            self.window.open_analysis()
+        self.assertEqual(self.session.view['source'],'Native')
+        load.assert_called_once_with(0,'/music/ANLZ.DAT')
