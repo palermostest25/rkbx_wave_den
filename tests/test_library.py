@@ -14,13 +14,18 @@ class ReadOnlyLibraryTests(unittest.TestCase):
         con.execute("PRAGMA key='test-key'")
         con.executescript('''
           CREATE TABLE djmdArtist(ID TEXT,Name TEXT);
-          CREATE TABLE djmdContent(ID TEXT,Title TEXT,ArtistID TEXT,Length INT,BPM INT,FolderPath TEXT,AnalysisDataPath TEXT);
+          CREATE TABLE djmdContent(ID TEXT,Title TEXT,ArtistID TEXT,Length INT,BPM INT,FolderPath TEXT,AnalysisDataPath TEXT,
+                                   DJPlayCount INT,updated_at TEXT,rb_local_deleted INT);
           CREATE TABLE djmdCue(ContentID TEXT,InMsec INT,OutMsec INT,Kind INT);
           INSERT INTO djmdArtist VALUES('artist','Example');
-          INSERT INTO djmdContent VALUES('1','Song','artist',180,12800,'/music/song.wav','/PIONEER/USBANLZ/first/ANLZ.DAT');
+          INSERT INTO djmdContent VALUES('1','Song','artist',180,12800,'/music/song.wav','/PIONEER/USBANLZ/first/ANLZ.DAT',0,'',0);
           INSERT INTO djmdCue VALUES('1',1000,3000,1);
-          INSERT INTO djmdContent VALUES('2','Duplicate','artist',180,12800,'/a.wav','/a/ANLZ.DAT');
-          INSERT INTO djmdContent VALUES('3','Duplicate','artist',200,12800,'/b.wav','/b/ANLZ.DAT');
+          INSERT INTO djmdContent VALUES('2','Duplicate','artist',180,12800,'/a.wav','/a/ANLZ.DAT',0,'',0);
+          INSERT INTO djmdContent VALUES('3','Duplicate','artist',200,12800,'/b.wav','/b/ANLZ.DAT',0,'',0);
+          INSERT INTO djmdContent VALUES('4','Reimport','artist',197,12200,'/c.m4a','/c/ANLZ.DAT',3,'2026-03-18',0);
+          INSERT INTO djmdContent VALUES('5','Reimport','artist',197,12200,'/d.m4a','/d/ANLZ.DAT',0,'2026-10-25',0);
+          INSERT INTO djmdContent VALUES('6','Reimport','artist',197,12200,'/e.m4a','/e/ANLZ.DAT',9,'2026-10-29',1);
+          INSERT INTO djmdCue VALUES('4',500,-1,1);
         ''')
         con.commit(); con.close()
         self.before = hashlib.sha256(self.path.read_bytes()).digest()
@@ -70,4 +75,9 @@ class ReadOnlyLibraryTests(unittest.TestCase):
             cues = _cues_from_db(Path('/first'))
         self.assertEqual([c.number for c in cues], [0, 1, 2, 3, 4, 5, 6, 7, 8])
         self.assertTrue(cues[0].is_memory)
+
+    def test_reimported_duplicate_resolves_to_the_prepared_copy(self):
+        # Same recording imported twice: the copy with cues wins; deleted rows never do.
+        self.assertEqual(self.db.resolve('Reimport', 'Example', 197.3).identifier, '4')
+        self.assertEqual(self.db.resolve('Reimport', '  example ').identifier, '4')
 

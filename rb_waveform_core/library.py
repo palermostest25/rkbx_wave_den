@@ -20,6 +20,10 @@ def _database_path():
     raise FileNotFoundError('Rekordbox library database was not found')
 
 
+def _normal(text):
+    return ' '.join(text.casefold().split())
+
+
 @dataclass(frozen=True)
 class LibraryTrack:
     identifier: str
@@ -51,13 +55,15 @@ class ReadOnlyLibrary:
 
     def resolve(self, title, artist='', length=None, bpm=None):
         rows = self.connection.execute('''
-            SELECT c.ID,c.Title,coalesce(a.Name,''),c.Length,c.BPM,c.FolderPath,c.AnalysisDataPath
+            SELECT c.ID,c.Title,coalesce(a.Name,''),c.Length,c.BPM,c.FolderPath,c.AnalysisDataPath,
+                   (SELECT count(*) FROM djmdCue q WHERE q.ContentID=c.ID),
+                   coalesce(c.DJPlayCount,0),coalesce(c.updated_at,'')
             FROM djmdContent c LEFT JOIN djmdArtist a ON a.ID=c.ArtistID
-            WHERE c.Title=? COLLATE NOCASE LIMIT 100
+            WHERE c.Title=? COLLATE NOCASE AND coalesce(c.rb_local_deleted,0)=0 LIMIT 100
         ''', (title,)).fetchall()
         tracks = []
-        for identifier, name, performer, duration, tempo, audio, analysis in rows:
-            if artist and performer.casefold().strip() != artist.casefold().strip():
+        for identifier, name, performer, duration, tempo, audio, analysis, cues, plays, updated in rows:
+            if artist and _normal(performer) != _normal(artist):
                 continue
             if length is not None and abs(float(duration or 0)-length) > 1.1:
                 continue
@@ -67,10 +73,17 @@ class ReadOnlyLibrary:
                 continue
             relative = Path(str(analysis).replace('\\','/').lstrip('/'))
             folder = self.path.parent/'share'/relative.parent
-            tracks.append(LibraryTrack(str(identifier), name, performer, int(duration or 0),
-                float(tempo or 0)/100, Path(audio or ''), folder))
-        # Duplicate metadata cannot establish which version the user loaded.
-        return tracks[0] if len(tracks) == 1 else None
+            track = LibraryTrack(str(identifier), name, performer, int(duration or 0),
+                float(tempo or 0)/100, Path(audio or ''), folder)
+            tracks.append(((folder.is_dir(), int(cues or 0), int(plays or 0), str(updated)), track))
+        if not tracks:
+            return None
+        # Different lengths under one title are different recordings: no basis to choose.
+        if max(t.length for _, t in tracks) - min(t.length for _, t in tracks) > 1:
+            return None
+        # Re-imports of one recording share title, artist and length, so any copy draws the
+        # right waveform; show the one the DJ prepared: analysed, most cues, most played, latest.
+        return max(tracks, key=lambda item: item[0])[1]
 
     def cues(self, folder):
         return self.connection.execute('''
