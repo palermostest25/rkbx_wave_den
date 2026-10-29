@@ -24,7 +24,7 @@ class PlaybackTimeline:
 
     ``observe`` accepts authoritative ``playing``, ``rate`` and loop fields when
     available. Without these fields, velocity is measured over a short window;
-    repeated positions stop interpolation immediately. A discontinuity resets
+    repeated positions briefly retain interpolation across producer ticks. A discontinuity resets
     the estimate, so cue jumps do not become enormous scrolling velocities.
     """
 
@@ -36,6 +36,7 @@ class PlaybackTimeline:
     def reset(self):
         self.sample_position: Optional[float] = None
         self.observed_at: Optional[float] = None
+        self._received_at: Optional[float] = None
         self.playing: Optional[bool] = None
         self.rate = 0.0
         self.loop_active: Optional[bool] = None
@@ -50,8 +51,9 @@ class PlaybackTimeline:
         stamp = _finite(time.monotonic() if observed_at is None else observed_at)
         if pos is None or stamp is None:
             return False
-        if self.observed_at is not None and stamp <= self.observed_at:
+        if self._received_at is not None and stamp <= self._received_at:
             return False
+        self._received_at = stamp
 
         start, end = _finite(loop_start), _finite(loop_end)
         valid_loop = start is not None and end is not None and end > start
@@ -61,6 +63,15 @@ class PlaybackTimeline:
         explicit_rate = _finite(rate)
         if explicit_rate is not None and abs(explicit_rate) > 4.0:
             explicit_rate = None
+
+        # Polls can repeat a moving source's last position. Re-anchoring each one
+        # makes the waveform jump backwards and falsely infer a pause every tick.
+        if (self.observed_at is not None and pos == self.sample_position
+                and self.playing is not False
+                and stamp - self.observed_at < self.extrapolate_seconds):
+            if explicit_rate is not None:
+                self.rate = explicit_rate
+            return True
 
         discontinuity = self.observed_at is None
         delta = None

@@ -67,7 +67,8 @@ class WaveformTiles:
                       margin_px=3, background_color=(0, 0, 0))
         image = render_waveform_image(section, colors, cfg, reduce='max')
         raw = image.tobytes()
-        result = QImage(raw, image.width, image.height, image.width * 3, QImage.Format.Format_RGB888).copy()
+        result = QImage(raw, image.width, image.height, image.width * 3,
+                        QImage.Format.Format_RGB888).convertToFormat(QImage.Format.Format_RGB32)
         self.images[key] = result
         while len(self.images) > self.capacity:
             self.images.popitem(last=False)

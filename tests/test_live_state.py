@@ -24,12 +24,25 @@ class PlaybackTimelineTests(unittest.TestCase):
         self.assertAlmostEqual(timeline.position(9), 10.16)
         self.assertTrue(timeline.stale(9))
 
-    def test_unchanged_observation_stops_inferred_transport(self):
+    def test_unchanged_observations_stop_after_bounded_poll_hold(self):
         timeline = PlaybackTimeline()
         timeline.observe(5, observed_at=0)
         timeline.observe(5.02, observed_at=.02)
         timeline.observe(5.02, observed_at=.04)
-        self.assertEqual(timeline.position(.10), 5.02)
+        self.assertAlmostEqual(timeline.position(.06), 5.06)
+        timeline.observe(5.02, observed_at=.12)
+        self.assertEqual(timeline.position(.20), 5.02)
+
+    def test_polling_faster_than_source_updates_does_not_stutter(self):
+        timeline = PlaybackTimeline()
+        for tick in range(30):
+            now = tick * .02
+            position = (tick // 2) * .04
+            timeline.observe(position, observed_at=now)
+            if tick >= 2:
+                self.assertAlmostEqual(timeline.position(now), now)
+                self.assertAlmostEqual(timeline.position(now + .01), now + .01)
+        self.assertFalse(timeline.observe(1, observed_at=now - .001))
 
     def test_cue_jump_is_not_a_huge_velocity(self):
         timeline = PlaybackTimeline()
