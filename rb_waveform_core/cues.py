@@ -93,11 +93,8 @@ def _get_db():
     global _DB, _DB_FAILED
     if _DB is None and not _DB_FAILED:
         try:
-            try:
-                from pyrekordbox import MasterDatabase
-            except ImportError:
-                from pyrekordbox import Rekordbox6Database as MasterDatabase
-            _DB = MasterDatabase()
+            from .library import ReadOnlyLibrary
+            _DB = ReadOnlyLibrary()
         except Exception as e:
             print(f"[Cues] Could not open Rekordbox database: {e}")
             _DB_FAILED = True
@@ -108,34 +105,18 @@ def _cues_from_db(folder: Path) -> List[CueMarker]:
     db = _get_db()
     if db is None:
         return []
-    try:
-        from pyrekordbox.masterdb.models import DjmdContent
-    except ImportError:
-        from pyrekordbox.db6.tables import DjmdContent
-    db.session.expire_all()
-
-    # ANLZ folder names are unique content GUIDs; match the AnalysisDataPath.
-    content = (
-        db.session.query(DjmdContent)
-        .filter(DjmdContent.AnalysisDataPath.like(f"%/{folder.name}/%"))
-        .first()
-    )
-    if content is None:
-        return []
-
     out: List[CueMarker] = []
-    for cue in db.get_cue(ContentID=content.ID):
-        in_ms = getattr(cue, "InMsec", None)
+    for in_ms, out_ms, kind in db.cues(folder):
         if in_ms is None:
             continue
-        is_mem = bool(getattr(cue, "is_memory_cue", False))
-        number = int(getattr(cue, "Kind", 0) or 0)
+        number = int(kind or 0)
+        is_mem = number == 0
         out.append(CueMarker(
             time_sec=float(in_ms) / 1000.0,
             color=_marker_color(is_mem, number),
             is_memory=is_mem,
             number=number,
-            end_sec=_loop_end(in_ms, getattr(cue, "OutMsec", None)),
+            end_sec=_loop_end(in_ms, out_ms),
         ))
     return out
 

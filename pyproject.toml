@@ -32,7 +32,7 @@ dependencies = [
     "PySide6>=6.8,<7",
     "pymem>=1.13; sys_platform == 'win32'",
     "psutil>=5.9.0",
-    "pyrekordbox>=0.4.0",
+    "pyrekordbox>=0.5.0",
     "python-osc>=1.9.0",
 ]
 
