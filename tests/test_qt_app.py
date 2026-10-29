@@ -132,10 +132,6 @@ class QtAppTests(unittest.TestCase):
         self.assertEqual(len(places),len(set(places)))
         self.assertNotIn(None,places)
 
-
-if __name__=='__main__':
-    unittest.main()
-
     def test_manual_analysis_keeps_native_playback_connection(self):
         self.session.demo = False
         with patch('rb_waveform_core.qt_app.QFileDialog.getOpenFileName', return_value=('/music/ANLZ.DAT','')), \
@@ -143,3 +139,7 @@ if __name__=='__main__':
             self.window.open_analysis()
         self.assertEqual(self.session.view['source'],'Native')
         load.assert_called_once_with(0,'/music/ANLZ.DAT')
+
+
+if __name__=='__main__':
+    unittest.main()
