@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
 from rb_waveform_core.mac_copy import _paths, isolation_policy, prepare_rekordbox_copy
@@ -20,8 +20,8 @@ class MacCopyTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _paths(source, Path(folder)/'copy.app', Path(folder))
 
-    def test_sandbox_protects_library_but_allows_normal_track_reads(self):
-        home = Path('/Users/example')
+    def test_direct_file_policy_blocks_library_paths(self):
+        home = PurePosixPath('/Users/example')
         policy = isolation_policy(home/'Library/Application Support/Rekordbox Wave/profile', home)
         self.assertIn('(deny file-write*)', policy)
         self.assertIn('/Users/example/Library/Pioneer', policy)
