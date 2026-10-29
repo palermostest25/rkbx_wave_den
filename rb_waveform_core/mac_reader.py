@@ -59,8 +59,10 @@ class MachProcess:
         if result or not self.task.value:
             raise MacMemoryAccessError(
                 f"macOS denied read access to Rekordbox (Mach {result}). "
-                "The running app lacks an authorized debug entitlement. "
-                "Rekordbox Wave has not changed the app or its security settings.")
+                "An ordinary debugger cannot read a protected vendor app without its "
+                "get-task-allow entitlement. A debug-enabled target may also require "
+                "macOS debugger authorization. Rekordbox Wave has not changed the app "
+                "or its security settings.")
 
     def read_bytes(self, address: int, size: int) -> bytes:
         if not self.task.value:
@@ -124,20 +126,37 @@ def app_version(executable: Path) -> str | None:
 class RekordboxMacMemoryReader(RekordboxMemoryReader):
     """DeckEvent reader using Mach, retaining the Windows reader's queue API."""
 
-    def __init__(self, deck_count=4, poll_hz=50.0, rekordbox_version=None):
+    def __init__(self, deck_count=4, poll_hz=50.0, rekordbox_version=None, preferred_executable=None):
         super().__init__(deck_count, poll_hz, rekordbox_version)
         self._all_offsets = MAC_LAYOUTS
+        self.preferred_executable = Path(preferred_executable).resolve() if preferred_executable else None
         self.status = "Waiting for Rekordbox"
 
     def _find_process(self):
         import psutil
+        candidates = []
         for process in psutil.process_iter(["pid", "name", "exe"]):
             try:
-                if str(process.info.get("name", "")).lower() == "rekordbox":
-                    return process.info["pid"], Path(process.info["exe"])
+                if str(process.info.get("name", "")).lower() != "rekordbox":
+                    continue
+                executable = Path(process.info["exe"]).resolve()
+                target = (process.info["pid"], executable)
+                if self.preferred_executable is not None:
+                    if executable == self.preferred_executable:
+                        return target
+                    continue
+                # The explicitly prepared copy must win over the protected original.
+                try:
+                    with (executable.parent.parent / "Info.plist").open("rb") as source:
+                        identifier = plistlib.load(source).get("CFBundleIdentifier")
+                except (OSError, plistlib.InvalidFileException):
+                    identifier = None
+                if identifier == "dev.rekordbox-wave.calibration":
+                    return target
+                candidates.append(target)
             except (psutil.Error, TypeError):
                 continue
-        return None
+        return candidates[0] if candidates else None
 
     def _choose_layout(self, detected: str | None, architecture: str) -> bool:
         self.version = None
