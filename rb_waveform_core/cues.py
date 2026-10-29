@@ -85,6 +85,19 @@ def get_track_cues(folder: Path) -> List[CueMarker]:
         return []
 
 
+def live_cues(folder) -> List[CueMarker] | None:
+    """master.db's current cues for a library track; rekordbox writes edits there at once.
+
+    None when there is nothing live to read: exported media, or no database."""
+    folder = Path(folder)
+    try:
+        if _is_local(folder) and _get_db() is not None:
+            return sorted(_cues_from_db(folder), key=lambda cue: (cue.time_sec, cue.number))
+    except Exception:
+        pass
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Local library: Rekordbox master.db via pyrekordbox
 # ---------------------------------------------------------------------------

@@ -15,7 +15,13 @@ LoopOut,LoopOut,Button,9011,0,1,2,3,9011,0,1,2,3,Dual;Fast,Loop out/Loop out adj
 ReloopExit,LoopOut+Shift,Button,904D,0,1,2,3,904D,0,1,2,3,Dual;Fast,Reloop/Exit
 4BeatLoop,4BeatLoop,Button,9014,0,1,2,3,9014,0,1,2,3,Dual;Fast,Auto Loop On/Off
 PAD5_BeatLoop,PAD5_PadMode2,Pad,9060,7,9,,,9060,7,9,,,Fast,
+PadMode1,HotCueMode,Button,901B,0,1,2,3,901B,0,1,2,3,,HOT CUE Mode On/Off
+PadMode2,PadFx1Mode,Button,901E,0,1,2,3,901E,0,1,2,3,,PAD FX1 Mode On/Off
 PAD1_PadMode1,PAD1_PadMode1,Pad,9000,7,9,11,13,9000,7,9,11,13,Fast;Dual,HOT CUE1
+PAD3_PadMode1+Shift,PAD3_PadMode1+Shift,Pad,9002,8,10,12,14,9002,8,10,12,14,Fast;Dual,Delete HOT CUE3
+PAD1_PadMode2,PAD1_PadMode2,Pad,9010,7,9,11,13,9010,7,9,11,13,Fast;Dual,PAD FX1 Slot1
+Memory,Memory,Button,903D,0,1,2,3,903D,0,1,2,3,,Memory
+MidiOutInterval,,,,,,,,,,,,,,
 GetLoopActive,LoopState,Indicator,,,,,,,9F04,9F05,9F06,9F07,RO;Priority=100,
 """
 
@@ -36,7 +42,10 @@ class MidiMapTests(unittest.TestCase):
         self.assertEqual(table[0x93, 0x11], (3, ('out', None)))
         self.assertEqual(table[0x91, 0x4D], (1, ('reloop', None)))
         self.assertEqual(table[0x99, 0x60], (1, ('auto', .25)))
-        self.assertNotIn((0x97, 0x00), table)  # hot cues are not loops
+        self.assertEqual(table[0x97, 0x00], (0, ('hotcue', 1)))  # pad modes resolved by their label
+        self.assertEqual(table[0x9C, 0x02], (2, ('delete', 3)))
+        self.assertNotIn((0x97, 0x10), table)  # pad FX
+        self.assertEqual(table[0x92, 0x3D], (2, ('memory', None)))
 
     def test_device_picks_the_most_specific_map(self):
         maps = [('PIONEER DDJ-SX', {1: 1}), ('PIONEER DDJ-SX2', {2: 2}), ('XDJ-XZ (1)', {3: 3})]
@@ -110,6 +119,27 @@ class LoopActionTests(unittest.TestCase):
         self.timeline.observe(10.6, observed_at=101.1)  # rekordbox wrapped back to the start
         self.assertEqual(self.timeline.active_loop(), (10.5, 11.0))
         self.assertGreater(self.timeline.rate, 0)
+
+    def test_cue_presses_show_at_once_and_master_db_stays_in_charge(self):
+        from rb_waveform_core.cues import CueMarker
+        cues = lambda: [(c.number, c.time_sec, c.is_memory) for c in self.session.decks[0].cues]
+        self.press('hotcue', 100.5, 2)
+        self.assertEqual(cues(), [(2, 10.5, False)])
+        self.press('memory', 100.5)
+        self.assertEqual(cues(), [(0, 10.5, True), (2, 10.5, False)])
+        self.session.apply_cues(0, [])  # master.db not written yet: keep showing the presses
+        self.assertEqual(len(cues()), 2)
+        db = [CueMarker(10.52, (1, 1, 1), False, 2), CueMarker(10.5, (1, 1, 1), True, 0)]
+        self.session.apply_cues(0, db)
+        self.assertEqual(self.session.cue_edits[0], [])
+        self.press('delete', 100.6, 2)
+        self.assertEqual(cues(), [(0, 10.5, True)])
+        self.session.apply_cues(0, db)  # stale read still has the cue
+        self.assertEqual(cues(), [(0, 10.5, True)])
+        self.session.apply_cues(0, db[1:])
+        self.assertEqual(self.session.cue_edits[0], [])
+        self.session.apply_cues(0, [])  # deleted with the mouse
+        self.assertEqual(cues(), [])
 
     def test_exit_by_mouse_clears_when_playhead_leaves(self):
         self.press('auto', 100.5, 1)

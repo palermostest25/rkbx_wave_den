@@ -31,6 +31,10 @@ Hot-cue flags and memory cues retain exact track positions. Nearby labels use fr
 | Intel Mac | Same Accessibility connection; Intel bundle built natively, live hardware not yet verified |
 | OSC | Position, BPM and optional authoritative playing/rate/live-loop state |
 
+### Live hot cues and memory cues
+
+Cue edits appear on the waveform as you make them, on Windows and macOS, however you make them: on the controller, with the mouse, by adding or deleting. Wave re-reads the loaded tracks' cues from rekordbox's library several times a second (read-only). rekordbox saves cue edits there straight away. With a controller, hot-cue pads, SHIFT+pad (delete) and MEMORY show on the press itself, and the library then confirms them.
+
 ### Live loops from your controller
 
 Wave listens to your DJ controller's MIDI alongside rekordbox and decodes it with the `.midi.csv` map rekordbox itself ships for that controller (all 56 rekordbox maps with loop buttons are supported, and your own MIDI-learn maps take priority). Pressing **IN** shows an IN flag at once, with the loop-to-be growing toward the playhead. **OUT**, **auto/4-beat loop**, beat-loop pads, **½×/2×** and **RELOOP/EXIT** draw or clear the loop the moment you press them, with its length in beats. Wave only listens: it never sends anything to the controller, so rekordbox behaves exactly as before.

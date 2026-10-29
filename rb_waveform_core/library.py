@@ -89,5 +89,5 @@ class ReadOnlyLibrary:
         return self.connection.execute('''
             SELECT q.InMsec,q.OutMsec,q.Kind FROM djmdCue q
             JOIN djmdContent c ON c.ID=q.ContentID
-            WHERE c.AnalysisDataPath LIKE ?
+            WHERE c.AnalysisDataPath LIKE ? AND coalesce(q.rb_local_deleted,0)=0
         ''', ('%/'+Path(folder).name+'/%',)).fetchall()

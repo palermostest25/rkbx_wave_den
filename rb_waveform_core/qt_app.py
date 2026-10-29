@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
     QFileDialog, QColorDialog, QFrame, QMessageBox, QTabWidget)
 
 from .config import WaveformColorConfig, WaveformRenderConfig, config_to_dict, dict_to_config
+from .cues import CueMarker, _marker_color, live_cues
 from .deck_controller import DeckController
 from .displays import deck_order
 from .live_state import PlaybackTimeline
@@ -86,6 +87,10 @@ class Session(QObject):
         self.reader_error = ''
         self.midi = None
         self.auto_beats = {i: 4 for i in range(4)}
+        # Cue edits shown at the press, kept until master.db agrees: (time, cue, added).
+        self.cue_edits = {i: [] for i in range(4)}
+        self.cue_poll = None
+        self.next_cues = 0.0
         self.demo = demo
         self.jobs = {}
         self.requested = {}
@@ -198,6 +203,7 @@ class Session(QObject):
         if old:
             old.cancel()
         self.requested[idx] = str(path)
+        self.cue_edits[idx] = []
         self.decks[idx] = DeckController()
         self.errors[idx] = 'Loading track analysis…'
         self.analysisChanged.emit()
@@ -250,17 +256,32 @@ class Session(QObject):
                     setattr(timeline, field, value)
 
     def loop_action(self, idx, kind, beats, stamp):
-        """Mirror a controller loop press the moment it happens, as rekordbox will play it."""
+        """Mirror a controller loop or cue press the moment it happens, as rekordbox will play it."""
         timeline, deck = self.timelines[idx], self.decks[idx]
         position = timeline.position(stamp)
         if position is None or not deck.original_bpm:
             return
         beat = 60 / deck.original_bpm
         def snap(t):
-            # rekordbox's default quantize puts loop points on the nearest beat.
+            # rekordbox's default quantize puts loop and cue points on the nearest beat.
             return snap_to_beat(t, deck.beat_grid_full, beat / 2)
         loop = timeline.active_loop()
-        if kind == 'in' and not loop:
+        if kind in ('hotcue', 'delete', 'memory'):
+            hot = kind != 'memory'
+            same = [c for c in deck.cues if ((not c.is_memory and c.number == beats) if hot else
+                    (c.is_memory and abs(c.time_sec - snap(position)) < .05))]
+            if kind == 'delete':
+                edits = [(time.monotonic(), c, False) for c in same]
+            elif same:
+                return  # a set pad only jumps; a memory cue is already there
+            else:
+                edits = [(time.monotonic(), CueMarker(snap(position), _marker_color(not hot, beats or 0), not hot, beats or 0), True)]
+            # Undo the edits already on screen to get back master.db's view, then reapply all.
+            shown = self.cue_edits[idx]
+            base = [c for c in deck.cues if not any(c is cue for _, cue, added in shown if added)]
+            self.cue_edits[idx] = shown + edits
+            self.apply_cues(idx, base + [cue for _, cue, added in shown if not added])
+        elif kind == 'in' and not loop:
             timeline.pending_in = snap(position)
         elif kind == 'out' and not loop and timeline.pending_in is not None:
             if snap(position) > timeline.pending_in:
@@ -281,6 +302,22 @@ class Session(QObject):
             self.auto_beats[idx] = min(512, max(1 / 32, self.auto_beats[idx] * beats))
             if loop:
                 timeline.engage(loop[0], loop[0] + (loop[1] - loop[0]) * beats)
+
+    def apply_cues(self, idx, cues):
+        """Show master.db's cues plus controller edits it hasn't recorded yet."""
+        now = time.monotonic()
+        cues = list(cues)
+        pending = []
+        for stamp, cue, added in self.cue_edits[idx]:
+            def same(c):
+                return c.is_memory == cue.is_memory and (
+                    abs(c.time_sec - cue.time_sec) < .1 if cue.is_memory else c.number == cue.number)
+            if any(map(same, cues)) == added or now - stamp > 3:
+                continue  # recorded (or rekordbox didn't make it)
+            pending.append((stamp, cue, added))
+            cues = cues + [cue] if added else [c for c in cues if not same(c)]
+        self.cue_edits[idx] = pending
+        self.decks[idx].cues = sorted(cues, key=lambda c: (c.time_sec, c.number))
 
     def position(self, idx):
         if self.demo:
@@ -309,6 +346,7 @@ class Session(QObject):
             if event is None:
                 break
             self.loop_action(*event)
+        self.poll_cues(now := time.monotonic())
         for idx, future in list(self.jobs.items()):
             if not future.done():
                 continue
@@ -324,7 +362,6 @@ class Session(QObject):
                     self.timelines[idx].observe(0)
             except Exception as exc:
                 self.errors[idx] = f'Analysis unavailable: {exc}'
-        now = time.monotonic()
         if self.reader and now >= self.next_status:
             self.next_status = now + .5
             if self.reader.connected:
@@ -335,6 +372,19 @@ class Session(QObject):
         if self.vsync_wait:
             self.vsync_wait()
         self.changed.emit()
+
+    def poll_cues(self, now):
+        """Re-read loaded tracks' cues a few times a second, so edits made anywhere appear."""
+        if self.cue_poll and self.cue_poll.done():
+            for idx, (folder, cues) in self.cue_poll.result().items():
+                if cues is not None and folder == self.requested.get(idx) and idx not in self.jobs:
+                    self.apply_cues(idx, cues)
+            self.cue_poll = None
+        if self.cue_poll is None and self.requested and not self.demo and now >= self.next_cues:
+            self.next_cues = now + .25
+            folders = dict(self.requested)
+            # The analysis worker owns the database connection, so reads stay on its thread.
+            self.cue_poll = self.worker.submit(lambda: {i: (f, live_cues(f)) for i, f in folders.items()})
 
     def close(self):
         self.timer.stop()

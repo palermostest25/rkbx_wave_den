@@ -1,4 +1,4 @@
-"""Loop buttons read from the DJ controller, decoded with rekordbox's own MIDI maps.
+"""Loop and cue buttons read from the DJ controller, decoded with rekordbox's own MIDI maps.
 
 Listening is passive: the OS hands controller messages to every client, so
 rekordbox receives them unchanged. Nothing is ever sent to the controller.
@@ -31,20 +31,19 @@ def mapping_dirs():
 
 
 def action(name):
-    """rekordbox function name → (kind, beats); None for functions that don't move loops."""
+    """rekordbox function name → (kind, value); None for functions that don't change loops or cues."""
     fixed = {'LoopIn': ('in', None), 'LoopOut': ('out', None), 'ReloopExit': ('reloop', None),
              'AutoLoop': ('auto', None), '4BeatLoop': ('auto', None), '4BeatLoopLongPress': ('auto', 4),
-             'LoopHalf': ('scale', .5), 'LoopDouble': ('scale', 2)}
+             'LoopHalf': ('scale', .5), 'LoopDouble': ('scale', 2), 'Memory': ('memory', None)}
     if name in fixed:
         return fixed[name]
     match = re.fullmatch(r'BeatLoop(1_)?(\d+)', name)
     if match:
         return 'auto', 1 / int(match[2]) if match[1] else int(match[2])
-    match = re.fullmatch(r'PAD(\d+)_BeatLoop', name)
+    match = re.fullmatch(r'PAD(\d+)_(BeatLoop|HotCue)(\+Shift)?', name)
     if match:
-        # shortcut: assumes rekordbox's default pads (PAD5..PAD12 = 1/4..32 beats); a custom
-        # pad length shows as that default until the first wrap corrects it.
-        return 'auto', 2 ** (int(match[1]) - 7)
+        kind = {('BeatLoop', None): 'pad', ('HotCue', None): 'hotcue', ('HotCue', '+Shift'): 'delete'}
+        return (kind[match[2], match[3]], int(match[1])) if (match[2], match[3]) in kind else None
     return None
 
 
@@ -52,13 +51,27 @@ def load_map(path):
     """(controller name, {(status, data1): (deck, action)}) from a rekordbox .midi.csv."""
     rows = list(csv.reader(Path(path).read_text(encoding='utf-8-sig', errors='replace').splitlines()))
     name = next((r[2] for r in rows if len(r) > 2 and r[0] == '@file'), Path(path).name.split('.')[0])
-    table = {}
+    # Some maps name pads by mode number (PAD1_PadMode7); the mode button's comment says
+    # which mode that is ("BEAT LOOP Mode On/Off").
+    modes = {}
     for row in rows:
+        mode = re.fullmatch(r'PadMode(\d+)', row[0]) if row else None
+        comment = row[14].upper() if mode and len(row) > 14 else ''
+        if 'HOT CUE MODE' in comment or 'BEAT LOOP MODE' in comment:
+            modes[mode[1]] = 'HotCue' if 'HOT CUE' in comment else 'BeatLoop'
+    names = [re.sub(r'_PadMode(\d+)', lambda m: '_' + modes.get(m[1], m[0][1:]), row[0]) if row else '' for row in rows]
+    # Beat-loop pads count from the map's first; rekordbox's default pages run 1/4 .. 32 beats.
+    # shortcut: a custom pad length shows as that default until the first wrap corrects it.
+    first = min((action(n)[1] for n in names if (action(n) or ('',))[0] == 'pad'), default=1)
+    table = {}
+    for row, label in zip(rows, names):
         if len(row) < 8 or not re.fullmatch(r'[9Bb][0-9A-Fa-f]{3}', row[3]):
             continue
-        kind = action(row[0])
+        kind = action(label)
         if kind is None:
             continue
+        if kind[0] == 'pad':
+            kind = 'auto', 2 ** ((kind[1] - first) % 8 - 2)
         status, data1 = int(row[3][:2], 16), int(row[3][2:], 16)
         # Deck columns hold the MIDI channel offset each deck sends on.
         for deck, offset in enumerate(row[4:8]):
@@ -151,8 +164,8 @@ class MidiLoopListener:
         for status, data1, value in messages(data):
             # Presses only: note-on velocity or button CC value above zero.
             if value and (status, data1) in table:
-                deck, (kind, beats) = table[status, data1]
-                self._queue.put((deck, kind, beats, stamp))
+                deck, (kind, value) = table[status, data1]
+                self._queue.put((deck, kind, value, stamp))
 
     def _attach(self, port, name):
         found = find_map(name, self.maps)
