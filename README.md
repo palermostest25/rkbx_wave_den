@@ -31,7 +31,13 @@ Hot-cue flags and memory cues retain exact track positions. Nearby labels use fr
 | Intel Mac | Same Accessibility connection; Intel bundle built natively, live hardware not yet verified |
 | OSC | Position, BPM and optional authoritative playing/rate/live-loop state |
 
-The original native Windows reader does **not** expose live engaged-loop fields. Saved loops are rendered; live-loop highlighting requires a sender that supplies live state. No saved loop is falsely presented as currently engaged. Unknown native versions fail with an explanatory connection status. Streaming analysis depends on accessible ANLZ files.
+### Live loops from your controller
+
+Wave listens to your DJ controller's MIDI alongside rekordbox and decodes it with the `.midi.csv` map rekordbox itself ships for that controller (all 56 rekordbox maps with loop buttons are supported, and your own MIDI-learn maps take priority). Pressing **IN** shows an IN flag at once, with the loop-to-be growing toward the playhead. **OUT**, **auto/4-beat loop**, beat-loop pads, **½×/2×** and **RELOOP/EXIT** draw or clear the loop the moment you press them, with its length in beats. Wave only listens: it never sends anything to the controller, so rekordbox behaves exactly as before.
+
+Loop points snap to the beat grid, as with rekordbox's default quantize. If rekordbox plays a slightly different loop, the next wrap corrects it. Without a controller (loops set with the mouse), a loop appears from its first repeat. On Windows, classic MIDI drivers let only one app open a port, so this works only where the controller's driver shares its port. Otherwise the status line says so.
+
+No saved loop is falsely presented as currently engaged. Unknown native versions fail with an explanatory connection status. Streaming analysis depends on accessible ANLZ files.
 
 On Mac, allow **Rekordbox Wave** in **System Settings → Privacy & Security → Accessibility**, then select Native in Wave. Keep Rekordbox in PERFORMANCE mode with its deck elapsed-time fields available (Browse and 4-Deck Horizontal were checked). Wave reads titles/times and resolves their existing ANLZ files through an enforced read-only SQLCipher connection. It does not modify Rekordbox, launch a helper or create another Rekordbox copy.
 

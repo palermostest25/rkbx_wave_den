@@ -58,6 +58,17 @@ class PlaybackTimeline:
         self._offset = 0.0
         self._jump = None
         self.inferred_loop = None
+        # Controller loop presses: a pressed IN awaiting OUT, and the loop RELOOP restores.
+        self.pending_in: Optional[float] = None
+        self.last_loop = None
+
+    def engage(self, start, end):
+        """A loop the DJ just engaged; the observed wraps keep correcting it."""
+        self.inferred_loop = self.last_loop = (start, end)
+        self.pending_in = self._jump = None
+
+    def exit_loop(self):
+        self.inferred_loop = None
 
     def active_loop(self):
         """Engaged loop bounds: authoritative when the source reports loops, else inferred."""
@@ -129,8 +140,11 @@ class PlaybackTimeline:
                 # The jump happened somewhere in this interval; both sides advanced equally since.
                 start = pos - elapsed * old_rate / 2
                 self._note_jump(start, start + self.sample_position + elapsed * old_rate - pos, stamp)
-            if self.inferred_loop and not self.inferred_loop[0] - .25 <= pos <= self.inferred_loop[1] + .25:
+            # A quantized loop may start up to half a beat ahead of the press.
+            if self.inferred_loop and not self.inferred_loop[0] - .6 <= pos <= self.inferred_loop[1] + .25:
                 self.inferred_loop = None
+            if self.pending_in is not None and pos < self.pending_in - .6:
+                self.pending_in = None
 
         if discontinuity or self.playing is False or delta == 0:
             self._samples.clear()

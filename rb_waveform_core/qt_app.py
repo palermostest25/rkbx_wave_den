@@ -84,6 +84,8 @@ class Session(QObject):
         self.errors = {}
         self.reader = None
         self.reader_error = ''
+        self.midi = None
+        self.auto_beats = {i: 4 for i in range(4)}
         self.demo = demo
         self.jobs = {}
         self.requested = {}
@@ -98,6 +100,9 @@ class Session(QObject):
             self.set_status('DEMO · synthetic analysis')
         else:
             self.connect_source()
+            from .midi_loops import MidiLoopListener
+            self.midi = MidiLoopListener()
+            self.midi.start()
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.timer.timeout.connect(self.tick)
@@ -244,6 +249,39 @@ class Session(QObject):
                 if value is not None:
                     setattr(timeline, field, value)
 
+    def loop_action(self, idx, kind, beats, stamp):
+        """Mirror a controller loop press the moment it happens, as rekordbox will play it."""
+        timeline, deck = self.timelines[idx], self.decks[idx]
+        position = timeline.position(stamp)
+        if position is None or not deck.original_bpm:
+            return
+        beat = 60 / deck.original_bpm
+        def snap(t):
+            # rekordbox's default quantize puts loop points on the nearest beat.
+            return snap_to_beat(t, deck.beat_grid_full, beat / 2)
+        loop = timeline.active_loop()
+        if kind == 'in' and not loop:
+            timeline.pending_in = snap(position)
+        elif kind == 'out' and not loop and timeline.pending_in is not None:
+            if snap(position) > timeline.pending_in:
+                timeline.engage(timeline.pending_in, snap(position))
+        elif kind == 'reloop':
+            if loop:
+                timeline.exit_loop()
+            elif timeline.last_loop:
+                timeline.engage(*timeline.last_loop)
+        elif kind == 'auto':
+            if loop and beats is None:
+                timeline.exit_loop()
+            else:
+                beats = beats or self.auto_beats[idx]
+                start = loop[0] if loop else snap(position)
+                timeline.engage(start, start + beats * beat)
+        elif kind == 'scale':
+            self.auto_beats[idx] = min(512, max(1 / 32, self.auto_beats[idx] * beats))
+            if loop:
+                timeline.engage(loop[0], loop[0] + (loop[1] - loop[0]) * beats)
+
     def position(self, idx):
         if self.demo:
             return 40 + (time.monotonic() - self.started) % 100
@@ -266,6 +304,11 @@ class Session(QObject):
                 if event is None:
                     break
                 self.receive(event)
+        while self.midi:
+            event = self.midi.get_event()
+            if event is None:
+                break
+            self.loop_action(*event)
         for idx, future in list(self.jobs.items()):
             if not future.done():
                 continue
@@ -285,7 +328,8 @@ class Session(QObject):
         if self.reader and now >= self.next_status:
             self.next_status = now + .5
             if self.reader.connected:
-                self.set_status('REKORDBOX · connected')
+                controllers = ' · '.join(self.midi.controllers or [self.midi.status]) if self.midi else ''
+                self.set_status('REKORDBOX · connected' + (f' · {controllers}' if controllers else ''))
             else:
                 self.set_status(getattr(self.reader, 'status', 'Waiting for Rekordbox'))
         if self.vsync_wait:
@@ -296,6 +340,8 @@ class Session(QObject):
         self.timer.stop()
         if self.reader:
             self.reader.stop()
+        if self.midi:
+            self.midi.stop()
         self.worker.shutdown(wait=False, cancel_futures=True)
 
 

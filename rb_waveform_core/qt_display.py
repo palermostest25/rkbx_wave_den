@@ -36,6 +36,13 @@ def bind_fullscreen(window, screen):
     cover_monitor(int(window.winId()))
 
 
+
+def beat_label(beats):
+    """Loop length as rekordbox shows it: 1/4, 1/2, 1, 2 … or 3.5 for a free manual loop."""
+    if beats < .97:
+        return f'1/{round(1 / beats)}'
+    return f'{round(beats)}' if abs(beats - round(beats)) < .05 else f'{beats:.1f}'
+
 class WaveformTiles:
     """Demand-loaded native-resolution tiles; memory stays bounded for long tracks."""
     def __init__(self, capacity=64):
@@ -221,14 +228,42 @@ class WaveformCanvas(QWidget):
                 tint = QColor(*cue.color)
                 tint.setAlpha(55)
                 p.fillRect(QRectF(left, signal.top(), right - left, signal.height()), tint)
-            loop = s.timelines[idx].active_loop()
+            timeline = s.timelines[idx]
+            loop = timeline.active_loop()
+            orange = QColor('#ffa21a')
+            pill_font = QFont(font)
+            pill_font.setBold(True)
+            pill_font.setPixelSize(round(font_size * .72))
+            def pill(x, text):
+                p.setFont(pill_font)
+                w = p.fontMetrics().horizontalAdvance(text) + 12
+                box = QRectF(min(max(x, signal.left() + 2), signal.right() - w - 2), signal.top() + 4, w, pill_font.pixelSize() + 6)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(orange)
+                p.drawRoundedRect(box, 4, 4)
+                p.setPen(QColor('black'))
+                p.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+                p.setFont(font)
             if loop:
                 left, right = x_at(loop[0]), x_at(loop[1])
                 rect = QRectF(left, signal.top() + 1, right - left, signal.height() - 2)
-                p.fillRect(rect, QColor(255, 143, 0, 70))
-                p.setPen(QPen(QColor('#ffa21a'), 3))
+                p.fillRect(rect, QColor(255, 143, 0, 62))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.setPen(QPen(orange, 1.5))
+                p.drawRect(rect)
+                p.setPen(QPen(orange, 3))
                 p.drawLine(QPointF(left, rect.top()), QPointF(left, rect.bottom()))
                 p.drawLine(QPointF(right, rect.top()), QPointF(right, rect.bottom()))
+                beats = (loop[1] - loop[0]) * bpm / 60
+                pill(left + 4, beat_label(beats))
+            elif timeline.pending_in is not None and timeline.pending_in <= end:
+                # IN pressed, OUT not yet: the loop-to-be grows with the playhead.
+                left = x_at(timeline.pending_in)
+                if position > timeline.pending_in:
+                    p.fillRect(QRectF(left, signal.top() + 1, x_at(position) - left, signal.height() - 2), QColor(255, 143, 0, 34))
+                p.setPen(QPen(orange, 3))
+                p.drawLine(QPointF(left, signal.top()), QPointF(left, signal.bottom()))
+                pill(left + 4, 'IN')
         p.restore()
         # Grid ticks sit outside the waveform, matching the AZ enlarged display.
         if s.view.get('grid', True):
