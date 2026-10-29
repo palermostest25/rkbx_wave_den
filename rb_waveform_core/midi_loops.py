@@ -25,9 +25,21 @@ def mapping_dirs():
     else:
         programs = os.environ.get('ProgramFiles', r'C:\Program Files')
         patterns = [os.path.join(os.environ.get('APPDATA', ''), 'Pioneer', 'rekordbox', 'MidiMappings')]
+        # Wherever the running rekordbox.exe was installed, then the usual install folders.
+        patterns += [os.path.join(os.path.dirname(exe), *parts, 'MidiMappings')
+                     for exe in _running_rekordbox() for parts in ((), ('*',), ('*', '*'))]
         patterns += [os.path.join(programs, *parts, 'MidiMappings') for parts in
                      (('Pioneer', 'rekordbox*'), ('Pioneer', 'rekordbox*', '*'), ('rekordbox*',), ('rekordbox', 'rekordbox*'))]
     return [Path(found) for pattern in patterns for found in sorted(glob.glob(pattern), reverse=True)]
+
+
+def _running_rekordbox():
+    try:
+        import psutil
+        return [p.info['exe'] for p in psutil.process_iter(['name', 'exe'])
+                if (p.info['name'] or '').lower() == 'rekordbox.exe' and p.info['exe']]
+    except Exception:
+        return []
 
 
 def action(name):
@@ -119,27 +131,38 @@ def messages(data):
 class MidiLoopListener:
     def __init__(self):
         self.maps = []
+        self.status = ''
+        self._load_maps()
+        self.devices = {}  # port id → controller map name
+        self._queue = Queue()
+        self._tables = {}
+        self._stop = threading.Event()
+        self._thread = None
+
+    def _load_maps(self):
+        """rekordbox's maps; retried while missing (on Windows they are found via the running app)."""
+        maps, seen = [], set()
         for folder in mapping_dirs():
             for path in sorted(folder.glob('*.midi.csv')):
                 try:
                     name, table = load_map(path)
                 except (OSError, csv.Error):
                     continue
-                if table:  # mixers have no loop buttons
-                    self.maps.append((name, table))
-        self.devices = {}  # port id → controller map name
-        self.status = '' if self.maps else 'rekordbox MIDI maps not found'
-        self._queue = Queue()
-        self._tables = {}
-        self._stop = threading.Event()
-        self._thread = None
+                if table and name not in seen:  # mixers have no loop buttons
+                    seen.add(name)
+                    maps.append((name, table))
+        self.maps = maps
+        if not maps:
+            self.status = 'rekordbox MIDI maps not found'
+        elif self.status == 'rekordbox MIDI maps not found':
+            self.status = ''
 
     @property
     def controllers(self):
         return sorted(set(self.devices.values()))
 
     def start(self):
-        if self._thread is None and self.maps:
+        if self._thread is None:
             self._stop.clear()
             target = self._run_mac if sys.platform == 'darwin' else self._run_windows
             self._thread = threading.Thread(target=target, name='controller-midi', daemon=True)
@@ -226,7 +249,12 @@ class MidiLoopListener:
                 self.status = 'MIDI unavailable'
                 return
             connected = set()
+            retry = 0.0
             while not self._stop.is_set():
+                if not self.maps and time.monotonic() >= retry:
+                    retry = time.monotonic() + 5
+                    self._load_maps()
+                    connected &= set(self._tables)  # look again at devices seen without a map
                 present = set()
                 for i in range(midi.MIDIGetNumberOfSources()):
                     source = midi.MIDIGetSource(i)
@@ -277,8 +305,14 @@ class MidiLoopListener:
 
         self._callback = on_message
         handles, names = [], None
+        retry = 0.0
         try:
             while not self._stop.is_set():
+                if not self.maps and time.monotonic() >= retry:
+                    retry = time.monotonic() + 5
+                    self._load_maps()
+                    if self.maps:
+                        names = None  # reopen with maps to match against
                 caps = []
                 for i in range(winmm.midiInGetNumDevs()):
                     info = Caps()

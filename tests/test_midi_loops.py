@@ -47,6 +47,15 @@ class MidiMapTests(unittest.TestCase):
         self.assertNotIn((0x97, 0x10), table)  # pad FX
         self.assertEqual(table[0x92, 0x3D], (2, ('memory', None)))
 
+    def test_windows_finds_maps_beside_the_running_rekordbox(self):
+        from unittest.mock import patch
+        from rb_waveform_core import midi_loops
+        install = Path(self.temp.name) / 'D Drive' / 'DJ' / 'rekordbox 7.2.19'
+        (install / 'MidiMappings').mkdir(parents=True)
+        with patch.object(midi_loops.sys, 'platform', 'win32'), \
+                patch.object(midi_loops, '_running_rekordbox', return_value=[str(install / 'rekordbox.exe')]):
+            self.assertIn(install / 'MidiMappings', midi_loops.mapping_dirs())
+
     def test_device_picks_the_most_specific_map(self):
         maps = [('PIONEER DDJ-SX', {1: 1}), ('PIONEER DDJ-SX2', {2: 2}), ('XDJ-XZ (1)', {3: 3})]
         self.assertEqual(find_map('DDJ-SX2', maps)[0], 'PIONEER DDJ-SX2')
@@ -67,6 +76,25 @@ class MidiMapTests(unittest.TestCase):
         self.assertEqual((deck, kind, beats), (0, 'in', None))
         self.assertIsNone(listener.get_event())
         self.assertEqual(listener.controllers, ['DDJ-FLX10'])
+
+
+class NativeListenerTests(unittest.TestCase):
+    def test_platform_midi_listener_starts_and_stops_cleanly(self):
+        # Runs the real CoreMIDI (macOS) or WinMM (Windows) loop on each CI platform.
+        import sys, threading, time
+        if sys.platform not in ('darwin', 'win32'):
+            self.skipTest('needs CoreMIDI or WinMM')
+        errors = []
+        previous, threading.excepthook = threading.excepthook, lambda args: errors.append(args.exc_value)
+        try:
+            listener = MidiLoopListener()
+            listener.start()
+            time.sleep(.5)
+            listener.stop()
+        finally:
+            threading.excepthook = previous
+        self.assertEqual(errors, [])
+        self.assertIsNone(listener._thread)
 
 
 class LoopActionTests(unittest.TestCase):
