@@ -17,7 +17,9 @@ from .render import render_waveform_image
 
 def screen_key(screen):
     serial = screen.serialNumber().strip()
-    return '|'.join((screen.manufacturer(), screen.model(), serial or screen.name()))
+    # Windows names screens by port (\\.\DISPLAY2): only fall back to it with no make/model.
+    return '|'.join((screen.manufacturer(), screen.model(),
+                     serial or ('' if screen.manufacturer() or screen.model() else screen.name())))
 
 
 def find_screen(key, screens):

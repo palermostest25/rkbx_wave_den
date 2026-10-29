@@ -43,6 +43,7 @@ class WaveformColorConfig:
     low_color: Tuple[int, int, int] = (0, 120, 255)
     mid_color: Tuple[int, int, int] = (212, 155, 70)  # Mid frequencies
     high_color: Tuple[int, int, int] = (255, 255, 255)
+    overlap_color: Tuple[int, int, int] = (169, 107, 39)  # mids inside the bass outline
 
     # RGB-mode band colours (separate from the 3-band display colours). Defaults
     # to saturated primaries (low=red, mid=green, high=blue) like a rekordbox
@@ -148,6 +149,7 @@ def config_to_dict(color_cfg: WaveformColorConfig, render_cfg: WaveformRenderCon
 			"low_color": list(color_cfg.low_color),
 			"mid_color": list(color_cfg.mid_color),
 			"high_color": list(color_cfg.high_color),
+			"overlap_color": list(color_cfg.overlap_color),
 			"rgb_low_color": list(color_cfg.rgb_low_color),
 			"rgb_mid_color": list(color_cfg.rgb_mid_color),
 			"rgb_high_color": list(color_cfg.rgb_high_color),
@@ -208,6 +210,7 @@ def dict_to_config(data: dict) -> tuple[WaveformColorConfig, WaveformRenderConfi
 		low_color=tuple(color_data.get("low_color", DEFAULT_COLOR_CONFIG.low_color)),
 		mid_color=tuple(color_data.get("mid_color", color_data.get("midhigh_color", DEFAULT_COLOR_CONFIG.mid_color))),
 		high_color=tuple(color_data.get("high_color", DEFAULT_COLOR_CONFIG.high_color)),
+		overlap_color=tuple(color_data.get("overlap_color", DEFAULT_COLOR_CONFIG.overlap_color)),
 		rgb_low_color=tuple(color_data.get("rgb_low_color", DEFAULT_COLOR_CONFIG.rgb_low_color)),
 		rgb_mid_color=tuple(color_data.get("rgb_mid_color", DEFAULT_COLOR_CONFIG.rgb_mid_color)),
 		rgb_high_color=tuple(color_data.get("rgb_high_color", DEFAULT_COLOR_CONFIG.rgb_high_color)),

@@ -18,6 +18,14 @@ def tag(name, **content):
 
 
 class DisplayTests(unittest.TestCase):
+    def test_monitor_identity_survives_a_different_port(self):
+        from rb_waveform_core.qt_display import screen_key
+        def screen(maker, model, serial, name):
+            return NS(manufacturer=lambda: maker, model=lambda: model, serialNumber=lambda: serial, name=lambda: name)
+        self.assertEqual(screen_key(screen('ARZ', 'P15', '', r'\\.\DISPLAY2')), screen_key(screen('ARZ', 'P15', '', r'\\.\DISPLAY3')))
+        self.assertEqual(screen_key(screen('', '', '', 'ARZOPA')), '||ARZOPA')  # saved Mac keys still match
+        self.assertNotEqual(screen_key(screen('ARZ', 'P15', 'A1', 'x')), screen_key(screen('ARZ', 'P15', 'B2', 'x')))
+
     def test_physical_order_and_two_decks(self):
         self.assertEqual(deck_order('3,1,2,4', 4), (2, 0, 1, 3))
         self.assertEqual(deck_order('3,1,2,4', 2), (0, 1))
@@ -32,7 +40,8 @@ class DisplayTests(unittest.TestCase):
         self.assertNotIn(None, occupied)
 
     def test_pwv7_band_order(self):
-        waveform = _extract_waveform([tag('PWV7AnlzTag', entries=bytes([20, 5, 100, 40, 9, 80]))])
+        # Stored low, mid, high: each column matched one colour of rekordbox 7's own drawing.
+        waveform = _extract_waveform([tag('PWV7AnlzTag', entries=bytes([100, 20, 5, 80, 40, 9]))])
         np.testing.assert_array_equal(waveform, [[100, 20, 5], [80, 40, 9]])
 
     def test_legacy_packed_height_is_not_fake_three_band(self):
@@ -42,10 +51,13 @@ class DisplayTests(unittest.TestCase):
     def test_preview_is_not_used_as_150fps_detail(self):
         self.assertIsNone(_extract_waveform([tag('PWV6AnlzTag', entries=b'\1\2\3')]))
 
-    def test_normalization_preserves_relative_band_energy(self):
-        analysis = analysis_from_rb_waveform(np.array([[100, 20, 5], [80, 40, 9]]), 1)
-        self.assertAlmostEqual(float(analysis.mid[0]), 20 * .75 / 127)
-        self.assertAlmostEqual(float(analysis.high[0]), 5 * .15 / 127)
+    def test_bands_share_rekordbox_scale(self):
+        # rekordbox draws every band at one linear scale, filling the lane near 100.
+        analysis = analysis_from_rb_waveform(np.array([[100, 20, 5], [80, 40, 120]]), 1)
+        self.assertAlmostEqual(float(analysis.low[1]), .8)
+        self.assertAlmostEqual(float(analysis.mid[0]), .2)
+        self.assertAlmostEqual(float(analysis.high[0]), .05)
+        self.assertEqual(float(analysis.high[1]), 1.0)  # louder than the lane: clipped, as rekordbox does
 
     def test_loop_sentinels(self):
         for end in (None, -1, 0xffffffff, 900, 1000):
@@ -89,6 +101,11 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(img.getpixel((10, 50)), (255, 255, 255))
         self.assertEqual(img.getpixel((10, 60)), (169, 107, 39))
         self.assertEqual(img.getpixel((10, 82)), (0, 120, 255))
+        from rb_waveform_core.qt_app import STYLES
+        img = render_waveform_image(analysis, WaveformColorConfig(**STYLES['Rekordbox']), WaveformRenderConfig(image_width=20, image_height=100))
+        self.assertEqual(img.getpixel((10, 50)), (246, 236, 217))  # cream highs
+        self.assertEqual(img.getpixel((10, 60)), (180, 102, 7))    # dark amber inside the bass
+        self.assertEqual(img.getpixel((10, 82)), (0, 84, 226))     # rekordbox blue
 
 
 if __name__ == '__main__':
