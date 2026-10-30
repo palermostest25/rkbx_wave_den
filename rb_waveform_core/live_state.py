@@ -70,6 +70,10 @@ class PlaybackTimeline:
         self._glide = None  # (start time, start position, duration) toward the latest sample
         self._fresh = False  # first motion after a stop: play, or a slow jog?
         self._paced = False  # the last tick moved at playback pace
+        self._spun_at = -1e9  # last fast backward step: another soon after is a spin, not a seek
+        self._wrap_end = None  # where rekordbox last wrapped, when that differed from the loop drawn
+        self._interval: Optional[float] = None  # typical time between changed samples
+        self._proven = True  # the drawn loop's wrap can be predicted
         # Where in the clock quantum the deck is: a hand-moved tick is a crossing of its lower
         # edge going up or its upper edge going down. None: unknown, so the middle.
         self._quantum: Optional[float] = None
@@ -85,7 +89,8 @@ class PlaybackTimeline:
     def engage(self, start, end):
         """A loop the DJ just engaged; the observed wraps keep correcting it."""
         self.inferred_loop = self.last_loop = (start, end)
-        self.pending_in = self._jump = self._candidate = None
+        self.pending_in = self._jump = self._candidate = self._wrap_end = None
+        self._proven = True  # the controller said so
 
     def exit_loop(self):
         self.inferred_loop = self._candidate = None
@@ -153,18 +158,43 @@ class PlaybackTimeline:
             # A known engaged loop can wrap without being a seek. Preserve the
             # incoming rate, but still anchor at the actual sampled position.
             loop = self.active_loop()
-            if loop and delta < 0:
+            reach = 4.0 * elapsed + 0.02 + self.resolution  # how far the deck can move, clock step included
+            if loop and delta < 0 and loop[0] - self.resolution - .05 <= pos <= loop[0] + reach:
                 wrapped = delta + loop[1] - loop[0]
-                if 0 <= wrapped <= 4.0 * elapsed + 0.02:
+                if not -self.resolution <= wrapped <= reach and self.loop_active is None and old_rate > .2:
+                    # rekordbox wrapped at another point than the loop drawn. Twice at the same
+                    # point means the loop is that long; once may just be RELOOP from inside it.
+                    end = self.sample_position + elapsed * old_rate - (pos - loop[0])
+                    if self._wrap_end is not None and abs(self._wrap_end - end) < .12 + self.resolution:
+                        self.inferred_loop = loop = (loop[0], (self._wrap_end + end) / 2)
+                        self._proven = True  # seen wrapping there twice
+                        wrapped = delta + loop[1] - loop[0]
+                    self._wrap_end = end
+                if -self.resolution <= wrapped <= reach:
                     delta = wrapped
-            # One clock quantum can tick at any moment, so it is never by itself a seek.
-            discontinuity = elapsed > self.stale_seconds or abs(delta) > 4.0 * elapsed + 0.02 + self.resolution
+                    self._proven = True  # rekordbox wrapped where the loop is drawn
+            # One clock quantum can tick at any moment, so a single tick is never a seek.
+            discontinuity = elapsed > self.stale_seconds or (
+                abs(delta) > 4.0 * elapsed + 0.02 and abs(delta) > self.resolution + 1e-6)
+            by_hand = self.scrubbing(stamp)  # before this sample: a spin starting now is not yet hand motion
+            if (not discontinuity and delta < 0 and self._paced and not by_hand
+                    and abs(delta) > 2 * self.resolution + .02):
+                discontinuity = True  # straight out of steady play, a hand can't pull back that far: a jump
+            fast_back = delta < 0 and abs(delta) > 4.0 * elapsed + 0.02 and abs(delta) > self.resolution + 1e-6
+            spin_speed = fast_back and abs(delta) < 15 * elapsed + .02 + self.resolution
+            if spin_speed and stamp - self._spun_at < .25:
+                discontinuity = False  # another fast step backwards: a spin of the platter, not a seek
+            if fast_back:
+                self._spun_at = stamp
+            if spin_speed:
+                self.scrub_until = stamp + .5  # glide into it: a seek this short looks the same
             if self._candidate:
                 start, end, jumped = self._candidate
                 if discontinuity or delta <= 0 or not start - .25 <= pos <= end or stamp - jumped > 1:
                     self._candidate = None  # stopped, moved away or jumped again: not a loop
                 elif stamp - jumped >= .08:
                     self.inferred_loop, self._candidate = (start, end), None
+                    self._proven = False  # one jump back could be RELOOP: draw it, don't predict it yet
             # Hands on the platter: backwards, reversing, or not moving like playback.
             expected = old_rate * elapsed
             pace = _finite(self.rate_hint) or old_rate
@@ -177,8 +207,9 @@ class PlaybackTimeline:
                     or (self.scrubbing(stamp) and not steady)  # still by hand, not the motor
                     or (old_rate == 0 and self.controller and not self.started(stamp))):
                 self.scrub_until = stamp + .5
+            inside = loop and loop[0] - .25 <= pos <= loop[1]  # entering the known loop (RELOOP)
             if (discontinuity and delta < 0 and old_rate > .2 and elapsed <= self.stale_seconds
-                    and self.loop_active is None and not self.scrubbing(stamp)):
+                    and self.loop_active is None and not by_hand and not inside):
                 # The jump happened somewhere in this interval; both sides advanced equally since.
                 start = pos - elapsed * old_rate / 2
                 self._note_jump(start, start + self.sample_position + elapsed * old_rate - pos, stamp)
@@ -231,8 +262,15 @@ class PlaybackTimeline:
             slow = scrubbing and stamp - self._ticked > .15
             self._quantum = (0.0 if delta > 0 else self.resolution) if slow else None
             self._ticked = stamp
-        self._glide = None if discontinuity or before is None else (
-            stamp, before, min(max(stamp - self.observed_at, 1e-3), .25))
+        self._glide = None
+        if self.observed_at is not None:
+            gap = stamp - self.observed_at
+            if delta and not discontinuity:
+                self._interval = gap if self._interval is None else .7 * self._interval + .3 * gap
+            # Glide over a little more than a typical interval, so a late sample doesn't stall it.
+            span = min(max(1.25 * (self._interval or gap), 1e-3), .25)
+            if before is not None and (scrubbing or not discontinuity):
+                self._glide = (stamp, before, span)
         self._fresh = old_rate == 0 and self.rate != 0 and not discontinuity
         self.sample_position, self.observed_at = pos, stamp
         settled = (discontinuity or before is None or scrubbing or old_rate == 0
@@ -266,7 +304,7 @@ class PlaybackTimeline:
         if self._offset:
             pos += self._offset * math.exp(-max(0.0, since) / self.smoothing_seconds)
         loop = self.active_loop()
-        if loop and loop[0] <= self.sample_position < loop[1]:
+        if loop and (self._proven or self.loop_active) and loop[0] <= self.sample_position < loop[1]:
             if pos >= loop[1] or pos < loop[0]:
                 pos = loop[0] + (pos - loop[0]) % (loop[1] - loop[0])
         return pos
