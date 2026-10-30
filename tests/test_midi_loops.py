@@ -21,6 +21,8 @@ PAD1_PadMode1,PAD1_PadMode1,Pad,9000,7,9,11,13,9000,7,9,11,13,Fast;Dual,HOT CUE1
 PAD3_PadMode1+Shift,PAD3_PadMode1+Shift,Pad,9002,8,10,12,14,9002,8,10,12,14,Fast;Dual,Delete HOT CUE3
 PAD1_PadMode2,PAD1_PadMode2,Pad,9010,7,9,11,13,9010,7,9,11,13,Fast;Dual,PAD FX1 Slot1
 Memory,Memory,Button,903D,0,1,2,3,903D,0,1,2,3,,Memory
+Browse,Browse,Rotary,B640,,,,,,,,,,,Browse(Track/Folder Select)
+Zoom,Browse+Shift,Rotary,B664,,,,,,,,,,,Scaling Waveform for all deck
 MidiOutInterval,,,,,,,,,,,,,,
 GetLoopActive,LoopState,Indicator,,,,,,,9F04,9F05,9F06,9F07,RO;Priority=100,
 """
@@ -46,6 +48,8 @@ class MidiMapTests(unittest.TestCase):
         self.assertEqual(table[0x9C, 0x02], (2, ('delete', 3)))
         self.assertNotIn((0x97, 0x10), table)  # pad FX
         self.assertEqual(table[0x92, 0x3D], (2, ('memory', None)))
+        self.assertEqual(table[0xB6, 0x64], (None, ('zoom', 'relative')))  # SHIFT + BROWSE
+        self.assertNotIn((0xB6, 0x40), table)  # plain BROWSE keeps browsing tracks only
 
     def test_windows_finds_maps_beside_the_running_rekordbox(self):
         from unittest.mock import patch
@@ -168,6 +172,14 @@ class LoopActionTests(unittest.TestCase):
         self.assertEqual(self.session.cue_edits[0], [])
         self.session.apply_cues(0, [])  # deleted with the mouse
         self.assertEqual(cues(), [])
+
+    def test_shift_browse_zooms_and_browse_does_not(self):
+        factors = []
+        self.session.zoomRequested.connect(factors.append)
+        self.session.loop_action(None, 'zoom', ('relative', 1), 100.5)    # one step clockwise
+        self.session.loop_action(None, 'zoom', ('relative', 127), 100.5)  # one step back
+        self.assertAlmostEqual(factors[0], 2 ** -.25)
+        self.assertAlmostEqual(factors[1], 2 ** .25)
 
     def test_exit_by_mouse_clears_when_playhead_leaves(self):
         self.press('auto', 100.5, 1)

@@ -108,6 +108,25 @@ class QtAppTests(unittest.TestCase):
         self.session.load_config(old)
         self.assertEqual(tuple(self.session.colors.low_color), (10, 20, 30))
 
+    def test_trackpad_and_wheel_zoom_smoothly_within_limits(self):
+        from PySide6.QtCore import QPoint, QPointF
+        from PySide6.QtGui import QWheelEvent
+        self.session.view['zoom_beats'] = 32
+        def scroll(dy):
+            event = QWheelEvent(QPointF(100, 100), QPointF(100, 100), QPoint(0, 0), QPoint(0, dy),
+                                Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+            self.app.sendEvent(self.window.canvas, event)
+        scroll(120)  # one notch up: zoom in a quarter of a doubling
+        self.assertAlmostEqual(self.session.view['zoom_beats'], 32 * 2 ** -.25)
+        scroll(-240)
+        self.assertAlmostEqual(self.session.view['zoom_beats'], 32 * 2 ** .25)
+        for _ in range(100):
+            scroll(-480)
+        self.assertEqual(self.session.view['zoom_beats'], 512)
+        self.assertEqual(self.window.zoom_combo.currentData(), 512)
+        self.window.zoom_by(1e-6)
+        self.assertEqual(self.session.view['zoom_beats'], 4)
+
     def test_remembered_monitor_is_filled_whenever_it_is_connected(self):
         screen = self.app.screens()[0]
         self.session.render.fill_display = True

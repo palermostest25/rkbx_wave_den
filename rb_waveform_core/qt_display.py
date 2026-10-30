@@ -7,7 +7,7 @@ from collections import OrderedDict
 from dataclasses import replace
 
 import numpy as np
-from PySide6.QtCore import Qt, QRectF, QPointF, Signal
+from PySide6.QtCore import Qt, QEvent, QRectF, QPointF, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -121,6 +121,7 @@ def flag_positions(anchors, width, maximum):
 
 class WaveformCanvas(QWidget):
     settingsRequested = Signal()
+    zoomBy = Signal(float)  # multiply the visible beats
 
     def __init__(self, session, parent=None):
         super().__init__(parent)
@@ -134,6 +135,20 @@ class WaveformCanvas(QWidget):
 
     def mouseDoubleClickEvent(self, event):
         self.settingsRequested.emit()
+
+    def wheelEvent(self, event):
+        # Two-finger scroll or a mouse wheel: up zooms in, a notch is a quarter of a doubling.
+        delta = event.angleDelta().y()
+        if delta:
+            self.zoomBy.emit(2 ** (-delta / 480))
+        event.accept()
+
+    def event(self, event):
+        # Trackpad pinch (macOS), spreading the fingers zooms in.
+        if event.type() == QEvent.Type.NativeGesture and event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
+            self.zoomBy.emit(1 / max(.2, 1 + event.value()))
+            return True
+        return super().event(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)

@@ -79,6 +79,7 @@ class DisplayLinkRepaint(QObject):
 
 class Session(QObject):
     changed = Signal()
+    zoomRequested = Signal(float)  # multiply the visible beats
     analysisChanged = Signal()
     statusChanged = Signal(str)
 
@@ -274,6 +275,14 @@ class Session(QObject):
 
     def loop_action(self, idx, kind, beats, stamp):
         """Mirror a controller loop or cue press the moment it happens, as rekordbox will play it."""
+        if kind == 'zoom':
+            # rekordbox's own waveform zoom (SHIFT + BROWSE on most controllers), an endless
+            # encoder: 1 = one step clockwise, 127 = one step back.
+            value = beats[1]
+            steps = value if value < 64 else value - 128
+            if steps:
+                self.zoomRequested.emit(2 ** (-steps / 4))
+            return
         timeline, deck = self.timelines[idx], self.decks[idx]
         if kind == 'play':
             timeline.play_pressed = stamp
@@ -455,6 +464,13 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
         self.canvas = WaveformCanvas(session)
         self.canvas.settingsRequested.connect(self.toggle_settings)
+        self.canvas.zoomBy.connect(self.zoom_by)
+        session.zoomRequested.connect(self.zoom_by)
+        # A pinch or knob turn zooms many times a second; save the result once it settles.
+        self.save_zoom = QTimer(self)
+        self.save_zoom.setSingleShot(True)
+        self.save_zoom.setInterval(600)
+        self.save_zoom.timeout.connect(self.persist)
         self.pages.addWidget(self.canvas)
         self.settings_page = self.build_settings()
         self.pages.addWidget(self.settings_page)
@@ -601,7 +617,8 @@ class MainWindow(QMainWindow):
         self.zoom_combo = QComboBox()
         for beats in (4, 8, 16, 32, 64, 128, 256, 512):
             self.zoom_combo.addItem(f'{beats // 4} bars · {beats} beats', beats)
-        self.zoom_combo.setCurrentIndex(max(0, self.zoom_combo.findData(self.session.view['zoom_beats'])))
+        beats = self.session.view['zoom_beats']
+        self.zoom_combo.setCurrentIndex(min(range(self.zoom_combo.count()), key=lambda i: abs(math.log2(self.zoom_combo.itemData(i) / beats))))
         self.zoom_combo.currentIndexChanged.connect(lambda _: self.set_view('zoom_beats', self.zoom_combo.currentData()))
         form.addRow('Waveform zoom', self.zoom_combo)
         self.position_combo = QComboBox()
@@ -822,8 +839,18 @@ class MainWindow(QMainWindow):
             self._zoom_keys_down[idx] = down
 
     def zoom(self, direction):
-        beats = max(4, min(512, int(self.session.view['zoom_beats'] * (2 if direction > 0 else .5))))
-        self.zoom_combo.setCurrentIndex(max(0, self.zoom_combo.findData(beats)))
+        self.zoom_by(2 if direction > 0 else .5)
+
+    def zoom_by(self, factor):
+        """Smooth zoom from a trackpad, wheel, controller or key: 4 to 512 beats across the lane."""
+        beats = max(4.0, min(512.0, self.session.view['zoom_beats'] * factor))
+        self.session.view['zoom_beats'] = beats
+        nearest = min(range(self.zoom_combo.count()), key=lambda i: abs(math.log2(self.zoom_combo.itemData(i) / beats)))
+        self.zoom_combo.blockSignals(True)
+        self.zoom_combo.setCurrentIndex(nearest)
+        self.zoom_combo.blockSignals(False)
+        self.canvas.update()
+        self.save_zoom.start()
 
     def set_view(self, key, value):
         self.session.view[key] = value
