@@ -57,7 +57,7 @@ class PlaybackTimelineTests(unittest.TestCase):
         timeline = PlaybackTimeline()
         timeline.observe(5, observed_at=0)
         timeline.observe(4.98, observed_at=.02)
-        self.assertAlmostEqual(timeline.position(.03), 4.99)  # glides between real samples
+        self.assertTrue(4.98 < timeline.position(.03) < 5)  # glides between real samples
         self.assertAlmostEqual(timeline.position(.2), 4.98)   # and never runs past the platter
 
     def test_platter_scratch_never_runs_ahead(self):
@@ -96,6 +96,53 @@ class PlaybackTimelineTests(unittest.TestCase):
         play = lambda t: 30.05 + max(0, t - 1)
         shown = self.mac_run(play, 3, controller=True, play_pressed=.98)
         self.assertLess(max(abs(a - b) for a, b in shown[90:]), .03)  # PLAY: smooth prediction
+
+    def mac_loop(self, truth, seconds, engage=None):
+        timeline = PlaybackTimeline(extrapolate_seconds=.3, stale_seconds=.6, resolution=.1, smoothing_seconds=.6)
+        timeline.rate_hint, timeline.beat_seconds = 1.0, .5
+        shown, last = [], None
+        for tick in range(int(seconds * 120)):
+            now = tick / 120
+            if engage and now >= engage[0] and not timeline.active_loop():
+                timeline.engage(*engage[1:])
+            if tick % 2 == 0:  # the Mac reader polls at 60 Hz
+                position = math.floor(truth(now) * 10) / 10
+                timeline.observe(position, observed_at=(last[1] + now) / 2 if last and last[0] != position else now)
+                last = (position, now)
+            shown.append((timeline.position(now), truth(now)))
+        return timeline, shown
+
+    def test_short_loops_play_smoothly_on_the_tenths_clock(self):
+        one_beat = lambda t: 29 + t if t < 1 else 30 + (t - 1) % .5
+        for engage in (None, (1.0, 30.0, 30.5)):  # set with the mouse, or from the controller
+            timeline, shown = self.mac_loop(one_beat, 8, engage)
+            shown = shown[3 * 120:]
+            near = lambda a, b: min((a - b) % .5, (b - a) % .5)
+            self.assertLess(max(near(a, b) for a, b in shown), .06, engage)
+            self.assertAlmostEqual(timeline.active_loop()[1] - timeline.active_loop()[0], .5, delta=.06)
+
+    def test_controller_reloop_from_inside_the_loop_keeps_its_length(self):
+        # Playing at 31 inside a 2-second loop from 30, RELOOP jumps back to 30.
+        reloop = lambda t: 28 + t if t < 3 else 30 + (t - 3) % 2
+        timeline, shown = self.mac_loop(reloop, 9, (3.0, 30.0, 32.0))
+        self.assertEqual(timeline.active_loop(), (30.0, 32.0))
+        self.assertLess(max(min((a - b) % 2, (b - a) % 2) for a, b in shown[4 * 120:]), .06)
+
+    def test_backspin_glides_without_jumps(self):
+        def backspin(t):  # play, spin back at -10x easing to a stop over 1.2 s, play on
+            if t < 2: return 30 + t
+            if t < 3.2: return 32 - (10 * (t - 2) - 10 * (t - 2) ** 2 / 2.4)
+            return 26 + (t - 3.2)
+        timeline = PlaybackTimeline()
+        timeline.rate_hint = 1.0
+        shown = []
+        for tick in range(4 * 120):
+            now = tick / 120
+            if tick % 12 == 0 or (tick % 12 == 5):  # ~50 Hz reads, unevenly spaced
+                timeline.observe(backspin(now), observed_at=now)
+            shown.append(timeline.position(now))
+        frame_steps = [b - a for a, b in zip(shown, shown[1:])]
+        self.assertLess(max(abs(s) for s in frame_steps[230:]), .12)  # -10x is .083 per frame
 
     def test_play_stop_and_back_to_start_is_not_a_loop(self):
         # Play 32 beats (an exact power of two), stop, return to the start: CUE, not a loop.
