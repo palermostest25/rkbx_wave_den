@@ -489,6 +489,7 @@ class MainWindow(QMainWindow):
         self.connected_screen = None
         # Esc/F11 out of full screen holds a window until the monitor is plugged in again.
         self.hold_windowed = False
+        self._bound_at = -1e9
         self._settings_dirty = False
         self._zoom_keys_down = [False, False]
         self.session.changed.connect(self.poll_global_zoom)
@@ -746,20 +747,27 @@ class MainWindow(QMainWindow):
         screen = find_screen(key, QApplication.screens())
         if screen is None:
             if self.connected_screen is not None:
-                self.connected_screen = None
                 self.leave_fullscreen()
                 self.update_status('Monitor unplugged · windowed until it is connected again')
             return
         if self.hold_windowed:
             return
-        # macOS animates into full screen; re-binding mid-animation would restart it. Only
-        # Windows needs the size check, where the taskbar can take part of the monitor back.
+        # macOS animates into full screen for about a second and may not report it meanwhile;
+        # re-binding then would leave full screen and start again. Only Windows needs the
+        # size check, where the taskbar can take part of the monitor back.
+        if screen is self.connected_screen and time.monotonic() - self._bound_at < 3:
+            return
         resized = sys.platform == 'win32' and self.geometry() != screen.geometry()
         if screen is not self.connected_screen or not self.isFullScreen() or resized:
-            bind_fullscreen(self, screen)
-            self.connected_screen = screen
+            self.bind(screen)
+
+    def bind(self, screen):
+        bind_fullscreen(self, screen)
+        self.connected_screen = screen
+        self._bound_at = time.monotonic()
 
     def leave_fullscreen(self):
+        self.connected_screen = None
         self.showNormal()
         area = QApplication.primaryScreen().availableGeometry() if self.screen() is None else self.screen().availableGeometry()
         width, height = min(1280, area.width()), min(800, area.height())
@@ -773,10 +781,8 @@ class MainWindow(QMainWindow):
             screen = self.screen() or QApplication.primaryScreen()
             self.session.render.display_key = screen_key(screen)
             self.refresh_screens()
-            bind_fullscreen(self, screen)
-            self.connected_screen = screen
+            self.bind(screen)
         else:
-            self.connected_screen = None
             self.leave_fullscreen()
         self.persist()
 
