@@ -62,6 +62,7 @@ class QtAppTests(unittest.TestCase):
         self.assertEqual(handle, self.window.winId())
 
     def test_selecting_monitor_automatically_fills_entire_panel(self):
+        self.native_fullscreen()
         screen = self.app.screens()[0]
         self.window.select_screen(1)
         self.settle(lambda: self.window.isFullScreen() and self.window.geometry() == screen.geometry())
@@ -128,6 +129,7 @@ class QtAppTests(unittest.TestCase):
         self.assertEqual(self.session.view['zoom_beats'], 4)
 
     def test_remembered_monitor_is_filled_whenever_it_is_connected(self):
+        self.native_fullscreen()
         screen = self.app.screens()[0]
         self.session.render.fill_display = True
         self.session.render.display_key = 'Portable|15 inch|unplugged'
@@ -148,11 +150,17 @@ class QtAppTests(unittest.TestCase):
         self.assertTrue(self.window.isFullScreen())
 
     def settle(self, done, timeout=3.0):
-        # Native full-screen transitions animate (about a second on macOS).
+        # Native full-screen transitions animate.
         deadline = time.monotonic() + timeout
         while not done() and time.monotonic() < deadline:
             QTest.qWait(50)
         QTest.qWait(50)
+
+    def native_fullscreen(self):
+        # macOS completes full screen only for a foreground app bundle, never for a test
+        # process; the same logic runs offscreen and on Windows' native high-DPI display.
+        if self.app.platformName() == 'cocoa':
+            self.skipTest('native macOS full screen needs a foreground app bundle')
 
     def assert_native_windows_coverage(self):
         from ctypes import wintypes
