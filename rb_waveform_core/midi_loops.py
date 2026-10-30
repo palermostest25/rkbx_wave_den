@@ -47,7 +47,7 @@ def action(name):
     fixed = {'LoopIn': ('in', None), 'LoopOut': ('out', None), 'ReloopExit': ('reloop', None),
              'AutoLoop': ('auto', None), '4BeatLoop': ('auto', None), '4BeatLoopLongPress': ('auto', 4),
              'LoopHalf': ('scale', .5), 'LoopDouble': ('scale', 2), 'Memory': ('memory', None),
-             'PlayPause': ('play', None), 'Cue': ('play', None)}
+             'PlayPause': ('play', None), 'Cue': ('play', None), 'Zoom': ('zoom', 'relative')}
     if name in fixed:
         return fixed[name]
     match = re.fullmatch(r'BeatLoop(1_)?(\d+)', name)
@@ -87,9 +87,11 @@ def load_map(path):
             kind = 'auto', 2 ** ((kind[1] - first) % 8 - 2)
         status, data1 = int(row[3][:2], 16), int(row[3][2:], 16)
         # Deck columns hold the MIDI channel offset each deck sends on.
-        for deck, offset in enumerate(row[4:8]):
-            if offset.strip().isdigit() and int(offset) < 16:
-                table.setdefault((status + int(offset), data1), (deck, kind))
+        offsets = [(deck, int(o)) for deck, o in enumerate(row[4:8]) if o.strip().isdigit() and int(o) < 16]
+        for deck, offset in offsets:
+            table.setdefault((status + offset, data1), (deck, kind))
+        if not offsets:  # a control for all decks, such as waveform zoom
+            table.setdefault((status, data1), (None, kind))
     return name, table
 
 
@@ -183,13 +185,14 @@ class MidiLoopListener:
     def _receive(self, port, data):
         stamp = time.monotonic()
         table = self._tables.get(port)
-        if not table:
-            return
         for status, data1, value in messages(data):
-            # Presses only: note-on velocity or button CC value above zero.
-            if value and (status, data1) in table:
-                deck, (kind, value) = table[status, data1]
-                self._queue.put((deck, kind, value, stamp))
+            if not table or (status, data1) not in table:
+                continue
+            deck, (kind, extra) = table[status, data1]
+            if kind == 'zoom':
+                self._queue.put((None, 'zoom', (extra, value), stamp))
+            elif value:  # presses only: note-on velocity or button CC value above zero
+                self._queue.put((deck, kind, extra, stamp))
 
     def _attach(self, port, name):
         found = find_map(name, self.maps)

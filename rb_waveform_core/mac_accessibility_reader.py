@@ -108,11 +108,11 @@ class RekordboxAccessibilityReader:
 
     def _run(self):
         from .mac_ax import Accessibility
-        from .library import ReadOnlyLibrary
+        from .library import Libraries
         ax=None; library=None
         states={i:DeckState(i) for i in range(self.deck_count)}
         names={}; bindings=[]; pid=None; next_scan=0; prompted=False
-        next_meta=0; loaded={}; last_read={}
+        next_meta=0; loaded={}; last_read={}; retry={}
         try:
             ax=Accessibility()
             while not self._stop_event.is_set():
@@ -169,17 +169,23 @@ class RekordboxAccessibilityReader:
                         try:bpm=float(ax.text(f.bpm.element))
                         except ValueError:bpm=None
                         identity=(title,artist,round(pos+abs(remaining)))
-                        if identity!=names.get(f.deck):
+                        # An unmatched track is looked up again: a stream may still be analysing,
+                        # or reach the library a moment after it loads.
+                        if identity!=names.get(f.deck) or started>=retry.get(f.deck,float('inf')):
                             names[f.deck]=identity
+                            retry.pop(f.deck,None)
                             state.anlz_path=None
                             missing=None
                             if title and title!='Not Loaded.':
-                                if library is None:library=ReadOnlyLibrary()
-                                track=library.resolve(title,artist,pos+abs(remaining))
+                                if library is None:library=Libraries()
+                                length=pos+abs(remaining)
+                                track=library.resolve(title,artist,length if length>1 else None,bpm)
                                 if track:
                                     state.anlz_path=str(track.analysis_folder)
                                 else:
-                                    missing='No unique analysis match for '+title
+                                    retry[f.deck]=started+2
+                                    missing=(f'No library match for {title} by {artist or "unknown artist"} '
+                                             f'({int(length//60)}:{int(length%60):02d}) · retrying')
                             state.time_seconds=None
                             self._queue.put(state.snapshot('anlz_path'))
                             if missing:
@@ -190,7 +196,7 @@ class RekordboxAccessibilityReader:
                         self._queue.put(state.snapshot('accessibility',when=stamp))
                 except Exception as exc:
                     self.connected=False;self.status=str(exc)
-                    bindings=[];next_scan=0;names.clear();loaded.clear();last_read.clear()
+                    bindings=[];next_scan=0;names.clear();loaded.clear();last_read.clear();retry.clear()
                     self._stop_event.wait(.5)
                 self._stop_event.wait(max(0,self.interval-(time.monotonic()-started)))
         except Exception as exc:
