@@ -79,6 +79,14 @@ class BridgeCommandTests(unittest.TestCase):
             self.assertEqual(bridge.request_load(0, 2**32)[0], False)  # not a collection id
             bridge.close()
 
+    def test_short_file_from_an_older_bridge_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'state.bin'
+            path.write_bytes(bytes(state(version=mb.VERSION - 1))[:4664])
+            os.chmod(path, 0o600)
+            with self.assertRaises(mb.OlderBridge):
+                mb.Bridge(path)
+
     def test_unprivate_state_file_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'state.bin'

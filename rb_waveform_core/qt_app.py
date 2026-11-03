@@ -666,12 +666,21 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, 'Rekordbox', str(exc))
 
     def connect_rekordbox(self):
-        from .mac_bridge import launch
-        try:
-            launch()
-            self.update_status('Starting Rekordbox with Wave…')
-        except Exception as exc:
-            QMessageBox.information(self, 'Connect Rekordbox', str(exc))
+        from .mac_bridge import rekordbox_pid, restart
+        if rekordbox_pid() and QMessageBox.question(
+                self, 'Connect Rekordbox', 'Restart Rekordbox so Wave can connect to it?\n\n'
+                'Playback stops while it restarts. Rekordbox asks first if a deck is playing.') != QMessageBox.StandardButton.Yes:
+            return
+        self.update_status('Restarting Rekordbox with Wave…' if rekordbox_pid() else 'Starting Rekordbox with Wave…')
+        job = self.session.loader.submit(restart, self.session.view.get('hide_rekordbox', True))
+        def finished():
+            if job.done():
+                self.connect_watch.stop()
+                if job.exception():
+                    QMessageBox.information(self, 'Connect Rekordbox', str(job.exception()))
+        self.connect_watch = QTimer(self)
+        self.connect_watch.timeout.connect(finished)
+        self.connect_watch.start(200)
 
     def button(self, title, action):
         button = QPushButton(title)

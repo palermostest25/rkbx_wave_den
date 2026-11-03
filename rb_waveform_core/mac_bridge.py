@@ -99,8 +99,7 @@ def parse(buffer):
             return None
         if version != VERSION:
             # A Rekordbox started by an earlier Wave: never misread its layout.
-            return Snapshot(pid, UNSUPPORTED, 'Rekordbox has an older Wave bridge loaded: quit it and press CONNECT',
-                            0, 0, ())
+            return Snapshot(pid, UNSUPPORTED, OLDER, 0, 0, ())
         if seq & 1:
             continue
         decks = []
@@ -120,6 +119,13 @@ def parse(buffer):
     return None
 
 
+OLDER = 'Rekordbox has an older Wave bridge loaded: press CONNECT to restart it'
+
+
+class OlderBridge(OSError):
+    """The running Rekordbox loaded a bridge from an earlier Wave, with another layout."""
+
+
 class Bridge:
     """The bridge's shared file: read deck state, ask Rekordbox to load tracks."""
     def __init__(self, path=None):
@@ -127,9 +133,14 @@ class Bridge:
         self.file = open(self.path, 'r+b')
         try:
             stat = os.fstat(self.file.fileno())
-            # Only ever our own private file of the full size: a short one would fault on read.
-            if stat.st_uid != os.getuid() or stat.st_mode & 0o077 or stat.st_size < SIZE:
-                raise OSError('Wave bridge state file is not private or not complete')
+            if stat.st_uid != os.getuid() or stat.st_mode & 0o077:
+                raise OSError('Wave bridge state file is not private')
+            # Mapping past a short file would fault on read: an earlier layout is reported instead.
+            if stat.st_size < SIZE:
+                header = os.pread(self.file.fileno(), 12, 0)
+                if len(header) == 12 and header[:8] == MAGIC and struct.unpack_from('<I', header, 8)[0] != VERSION:
+                    raise OlderBridge(OLDER)
+                raise OSError('Wave bridge state file is not complete')
             self.map = mmap.mmap(self.file.fileno(), SIZE)
         except Exception:
             self.file.close()
@@ -220,6 +231,20 @@ def launch(hidden=False):
     config = install()
     subprocess.run(['/usr/bin/open', *(('-g', '-j') if hidden else ()), '-a', str(APP),
                     '--env', f'OPENSSL_CONF={config}', '--env', 'RKBX_WAVE_BRIDGE=1'], check=True, timeout=15)
+
+
+def restart(hidden=False):
+    """Quit Rekordbox the way its own menu does - it asks first if a deck is playing - then start it
+    with the bridge."""
+    if rekordbox_pid():
+        subprocess.run(['/usr/bin/osascript', '-e', 'tell application id "com.pioneerdj.rekordboxdj" to quit'],
+                       timeout=60, capture_output=True)
+        deadline = time.monotonic() + 30
+        while rekordbox_pid() and time.monotonic() < deadline:
+            time.sleep(.5)
+        if rekordbox_pid():
+            raise RuntimeError('Rekordbox is still open; it may be waiting for you to confirm quitting')
+    launch(hidden)
 
 
 def show():
@@ -325,9 +350,14 @@ class RekordboxBridgeReader:
                             state_file.stat().st_ino != os.fstat(self.bridge.file.fileno()).st_ino:
                         self.bridge.close()  # replaced on disk: follow the new one
                         self.bridge = None
+                    older = False
                     if self.bridge is None and state_file.exists():
-                        self.bridge = Bridge(state_file)
-                    snapshot = self.bridge.snapshot() if self.bridge else None
+                        try:
+                            self.bridge = Bridge(state_file)
+                        except OlderBridge:
+                            older = True  # this Rekordbox still runs the earlier bridge: use Accessibility meanwhile
+                    snapshot = self.bridge.snapshot() if self.bridge else (
+                        Snapshot(pid or 0, UNSUPPORTED, OLDER, 0, 0, ()) if older else None)
                     if snapshot is None and self.bridged:
                         # Caught Rekordbox mid-write (its thread was pre-empted): read again, never disconnect.
                         self._stop_event.wait(.002)
