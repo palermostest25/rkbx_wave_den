@@ -133,6 +133,13 @@ class TouchAndStateTests(unittest.TestCase):
             self.assertFalse(page.keyboard.isVisible())
             self.assertIs(window.pages.currentWidget(),page)
             window.escape(); self.assertIs(window.pages.currentWidget(),window.canvas)
+            profile=Path(directory)/'import.json'; session.save(profile)
+            with patch('rb_waveform_core.qt_app.QFileDialog.getOpenFileName',return_value=(str(profile),'')), \
+                    patch.object(session,'connect_source'):
+                window.import_profile()
+            window.toggle_settings()
+            window.toggle_settings()
+            self.assertIs(window.pages.currentWidget(),window.settings_page)
             window.close(); self.app.processEvents()
 
 

@@ -829,7 +829,7 @@ class MainWindow(QMainWindow):
 
     def toggle_settings(self):
         opening = self.pages.currentWidget() is not self.settings_page
-        self.pages.setCurrentIndex(1 if opening else 0)
+        self.pages.setCurrentWidget(self.settings_page if opening else self.canvas)
         self.settings_button.setText('BACK' if opening else 'SETTINGS')
         self.browse_button.setText('BROWSE')
         if opening:
