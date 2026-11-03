@@ -259,12 +259,62 @@ def extract_beat_grid(folder: Path | str) -> Optional[list[BeatGridEntry]]:
     try:
         tags = getattr(AnlzFile.parse_file(str(anlz_file)), "tags", None)
     except Exception:
-        return None
+        # Some analysers write other tags rekordbox accepts but the strict parser rejects;
+        # the beat grid itself is still sound, so read just that.
+        return _raw_beat_grid(anlz_file)
 
     if not tags:
         return None
 
     return _extract_beat_grid(tags)
+
+
+def _raw_tag(path, wanted):
+    """(header, body) of the first ``wanted`` tag, read without the strict parser; None if absent."""
+    import struct
+    try:
+        data = Path(path).read_bytes()
+        offset = struct.unpack_from('>I', data, 4)[0]
+        while offset + 12 <= len(data):
+            kind, header, length = data[offset:offset + 4], *struct.unpack_from('>II', data, offset + 4)
+            if length < 12 or header > length or offset + length > len(data):
+                return None
+            if kind == wanted:
+                return data[offset:offset + header], data[offset + header:offset + length]
+            offset += length
+    except (OSError, struct.error):
+        pass
+    return None
+
+
+def _raw_beat_grid(path) -> Optional[list[BeatGridEntry]]:
+    """PQTZ: beat (u16), tempo x100 (u16), time ms (u32) per entry."""
+    import struct
+    tag = _raw_tag(path, b'PQTZ')
+    if not tag or len(tag[0]) < 24:
+        return None
+    header, body = tag
+    count = struct.unpack_from('>I', header, 20)[0]
+    if 8 * count > len(body):
+        return None
+    return [BeatGridEntry(float(ms), beat, tempo / 100)
+            for beat, tempo, ms in (struct.unpack_from('>HHI', body, 8 * i) for i in range(count))] or None
+
+
+# Files whose PWVC is 100/100/100 store hotter 3-band heights than the rest (the high band ~5x),
+# measured against each file's own PWV5 colour waveform across a 4,300-track library. These
+# per-band factors bring them to the scale rekordbox draws every other file at.
+UNSCALED_BAND_GAINS = (0.85, 0.76, 0.19)
+
+
+def band_gains(folder: Path | str) -> tuple:
+    """Per-band factors for this folder's 3-band waveform: (1, 1, 1) unless it is unscaled."""
+    import struct
+    for path in sorted(Path(folder).glob('*.2EX')):
+        tag = _raw_tag(path, b'PWVC')
+        if tag and len(tag[1]) >= 6 and struct.unpack_from('>HHH', tag[1], len(tag[1]) - 6) == (100, 100, 100):
+            return UNSCALED_BAND_GAINS
+    return (1.0, 1.0, 1.0)
 
 
 def extract_beat_grid_downbeats(folder: Path | str) -> Optional[list[BeatGridEntry]]:

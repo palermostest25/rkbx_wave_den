@@ -30,17 +30,38 @@ class CatalogTests(unittest.TestCase):
           INSERT INTO djmdContent VALUES('2','Nine','a','k',9000,90,'/nine.wav',0);
           INSERT INTO djmdContent VALUES('3','100%_remix','a','k',12800,240,'/remix.wav',0);
           INSERT INTO djmdContent VALUES('4','100abc remix','a','k',12900,240,'/other.wav',1);
+          INSERT INTO djmdContent VALUES('5','$A7:v1:abc==:def==','a','k',12000,200,'spotify:track:x',0);
+          CREATE TABLE djmdPlaylist(ID TEXT,Seq INTEGER,Name TEXT,Attribute INTEGER,ParentID TEXT);
+          CREATE TABLE djmdSongPlaylist(PlaylistID TEXT,ContentID TEXT,TrackNo INTEGER);
+          INSERT INTO djmdPlaylist VALUES('f',1,'Gigs',1,'root');
+          INSERT INTO djmdPlaylist VALUES('p',1,'Friday',0,'f');
+          INSERT INTO djmdPlaylist VALUES('s',2,'Smart',4,'root');
+          INSERT INTO djmdSongPlaylist VALUES('p','2',1);
+          INSERT INTO djmdSongPlaylist VALUES('p','1',2);
         ''')
         c.commit(); c.close()
         # Match the application's connection wrapper while enforcing the fixture's read-only URI.
         def open_library():
             connection=sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True)
-            return SimpleNamespace(connection=connection,close=connection.close)
+            return SimpleNamespace(connection=connection,close=connection.close,path=self.path)
         self.reader = patch.object(catalog,'ReadOnlyLibrary',open_library)
         self.reader.start()
 
     def tearDown(self):
         self.reader.stop(); self.temp.cleanup()
+
+    def test_playlists_drill_down_in_running_order(self):
+        top=catalog.categories('','PLAYLIST')
+        self.assertEqual([(c.name,c.folder) for c in top],[('Gigs',True)])  # smart lists stay in Rekordbox
+        inner=catalog.categories('','PLAYLIST',top[0].identifier)
+        self.assertEqual([(c.name,c.count) for c in inner],[('Friday',2)])
+        total,rows=catalog.browse(scope=('PLAYLIST','p'),sort=catalog.ORDER)
+        self.assertEqual((total,[r.title for r in rows]),(2,['Nine','Ten']))
+        self.assertEqual([c.name for c in catalog.categories('','KEY')],['8A'])
+        with self.assertRaises(ValueError): catalog.browse(sort=catalog.ORDER)  # no order outside a list
+
+    def test_encrypted_streaming_entries_are_never_listed(self):
+        self.assertNotIn('$A7',' '.join(r.title for r in catalog.browse()[1]))
 
     def test_numeric_bpm_duration_sort_and_global_paging(self):
         total, rows=catalog.browse(sort='BPM',offset=1,limit=1)
@@ -141,6 +162,53 @@ class TouchAndStateTests(unittest.TestCase):
             window.toggle_settings()
             self.assertIs(window.pages.currentWidget(),window.settings_page)
             window.close(); self.app.processEvents()
+
+    def test_toolbar_highlights_the_active_view(self):
+        from rb_waveform_core.qt_app import MainWindow
+        with tempfile.TemporaryDirectory() as directory, \
+                patch('rb_waveform_core.qt_browser.sources',return_value=[('Collection','')]), \
+                patch('rb_waveform_core.qt_browser.browse',return_value=(0,[])):
+            session=Session(demo=True,config_path=Path(directory)/'settings.json')
+            window=MainWindow(session); window.show()
+            active=lambda b: bool(b.property('selected'))
+            self.assertEqual((active(window.browse_button),active(window.settings_button)),(False,False))
+            window.toggle_browser()
+            self.assertEqual((active(window.browse_button),active(window.settings_button)),(True,False))
+            window.toggle_settings()
+            self.assertEqual((active(window.browse_button),active(window.settings_button)),(False,True))
+            window.escape()
+            self.assertEqual((active(window.browse_button),active(window.settings_button)),(False,False))
+            window.close(); self.app.processEvents()
+
+
+class DeckHeaderTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app=QApplication.instance() or QApplication([])
+        cls.app.setQuitOnLastWindowClosed(False)
+
+    def test_deck_clocks_and_cue_countdown(self):
+        from rb_waveform_core.qt_display import clock, countdown
+        from rb_waveform_core.cues import CueMarker
+        self.assertEqual(clock(207.34),'03:27.3')
+        self.assertEqual(clock(-1),'00:00.0')
+        cues=[CueMarker(30.0,(255,0,0),True),CueMarker(10.0,(0,0,255),False,1)]
+        # 120 BPM: half a second a beat; 10 s to the 30 s cue is 20 beats, five bars.
+        self.assertEqual(countdown(20.0,cues,120),'5.0')
+        self.assertEqual(countdown(29.9,cues,120),'0.1')
+        self.assertIsNone(countdown(31.0,cues,120))
+
+    def test_deck_info_bar_renders_without_crashing(self):
+        from rb_waveform_core.qt_display import WaveformCanvas
+        with tempfile.TemporaryDirectory() as directory:
+            session=Session(demo=True,config_path=Path(directory)/'s.json')
+            # Demo decks carry a title, BPM and hot cues A/B, so the header's every branch runs.
+            deck=session.decks[0]
+            self.assertTrue(deck.song_name)
+            self.assertTrue(any(not c.is_memory for c in deck.cues))
+            canvas=WaveformCanvas(session); canvas.resize(1280,800)
+            canvas.grab()  # paintEvent -> draw_deck header must not raise
+            session.close()
 
 
 class DeviceCatalogTests(unittest.TestCase):

@@ -29,6 +29,11 @@ class ReadOnlyLibraryTests(unittest.TestCase):
           INSERT INTO djmdContent VALUES('7','Stream','artist',213,13636,'/v4/catalog/tracks/1/','/s1/ANLZ.DAT',0,'',0);
           INSERT INTO djmdContent VALUES('8','Stream','artist',170,13483,'/v4/catalog/tracks/2/','/s2/ANLZ.DAT',0,'',0);
           INSERT INTO djmdCue(ContentID,InMsec,OutMsec,Kind) VALUES('4',500,-1,1);
+          ALTER TABLE djmdContent ADD COLUMN KeyID TEXT;
+          ALTER TABLE djmdContent ADD COLUMN ImagePath TEXT;
+          CREATE TABLE djmdKey(ID TEXT,ScaleName TEXT);
+          INSERT INTO djmdKey VALUES('k','8A');
+          UPDATE djmdContent SET KeyID='k',ImagePath='/PIONEER/Artwork/first/artwork.jpg' WHERE ID='1';
         ''')
         con.commit(); con.close()
         self.before = hashlib.sha256(self.path.read_bytes()).digest()
@@ -43,6 +48,9 @@ class ReadOnlyLibraryTests(unittest.TestCase):
         track = self.db.resolve('Song','Example',180,128)
         self.assertEqual(track.identifier,'1')
         self.assertEqual(track.analysis_folder,self.path.parent/'share/PIONEER/USBANLZ/first')
+        self.assertEqual((track.key,track.artwork),('8A',self.path.parent/'share/PIONEER/Artwork/first/artwork.jpg'))
+        self.assertEqual(self.db.resolve_path('/music/song.wav'),track)
+        self.assertIsNone(self.db.resolve_path('/music/other.wav'))
         self.assertEqual(self.db.cues(track.analysis_folder),[(1000,3000,1)])
         self.assertIsNone(self.db.resolve("Song' OR 1=1 --"))
 

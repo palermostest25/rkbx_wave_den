@@ -7,6 +7,10 @@ include README.md
 recursive-include rb_waveform_core *.py
 include rb_waveform_core/data/offsets
 include rb_waveform_core/data/default_config.json
+include rb_waveform_core/data/check.svg
+# Rekordbox bridge (macOS): the built library and its source, rebuilt with native/mac_bridge/build.sh
+include rb_waveform_core/data/wave-bridge.dylib
+recursive-include native *.cpp *.h *.sh
 
 # Keep experimental / maintenance code out of the distribution (stays in git)
 prune rb_waveform_lab

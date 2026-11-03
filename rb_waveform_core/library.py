@@ -33,6 +33,8 @@ class LibraryTrack:
     bpm: float
     audio_path: Path
     analysis_folder: Path
+    key: str = ''
+    artwork: Path | None = None
 
 
 class ReadOnlyLibrary:
@@ -56,28 +58,45 @@ class ReadOnlyLibrary:
     QUERY = '''
         SELECT c.ID,c.Title,coalesce(a.Name,''),c.Length,c.BPM,c.FolderPath,c.AnalysisDataPath,
                (SELECT count(*) FROM djmdCue q WHERE q.ContentID=c.ID),
-               coalesce(c.DJPlayCount,0),coalesce(c.updated_at,'')
+               coalesce(c.DJPlayCount,0),coalesce(c.updated_at,''),
+               coalesce((SELECT k.ScaleName FROM djmdKey k WHERE k.ID=c.KeyID),''),coalesce(c.ImagePath,'')
         FROM djmdContent c LEFT JOIN djmdArtist a ON a.ID=c.ArtistID
         WHERE c.Title=? COLLATE NOCASE AND coalesce(c.rb_local_deleted,0)=0 LIMIT 100
     '''
+    PATH_QUERY = QUERY.replace('c.Title=? COLLATE NOCASE', 'c.FolderPath=?')
 
     @property
     def analysis_root(self):
         return self.path.parent/'share'
 
-    def resolve(self, title, artist='', length=None, bpm=None):
-        rows = self.connection.execute(self.QUERY, (title,)).fetchall()
+    def _tracks(self, rows):
         tracks = []
-        for identifier, name, performer, duration, tempo, audio, analysis, cues, plays, updated in rows:
-            if artist and _normal(performer) != _normal(artist):
-                continue
+        for identifier, name, performer, duration, tempo, audio, analysis, cues, plays, updated, key, image in rows:
             if not analysis:
                 continue
             relative = Path(str(analysis).replace('\\','/').lstrip('/'))
             folder = self.analysis_root/relative.parent
             track = LibraryTrack(str(identifier), name, performer, round(float(duration or 0)),
-                float(tempo or 0)/100, Path(audio or ''), folder)
+                float(tempo or 0)/100, Path(audio or ''), folder, key or '',
+                self.analysis_root/str(image).replace('\\','/').lstrip('/') if image else None)
             tracks.append((track, (folder.is_dir(), int(cues or 0), int(plays or 0), str(updated))))
+        return tracks
+
+    def library_path(self, audio_path):
+        """How this library stores ``audio_path``, or None when the file is not in it."""
+        return str(audio_path)
+
+    def resolve_path(self, audio_path):
+        """The track Rekordbox has loaded from exactly this file."""
+        stored = self.library_path(audio_path)
+        if not stored:
+            return None
+        tracks = self._tracks(self.connection.execute(self.PATH_QUERY, (stored,)).fetchall())
+        return max(tracks, key=lambda item: item[1])[0] if tracks else None
+
+    def resolve(self, title, artist='', length=None, bpm=None):
+        tracks = [item for item in self._tracks(self.connection.execute(self.QUERY, (title,)).fetchall())
+                  if not artist or _normal(item[0].artist) == _normal(artist)]
         if length is not None:
             # The deck's clocks give the length to a tenth, and a stream decodes up to a couple
             # of seconds off the library's whole-second Length; other versions differ by more.
@@ -116,13 +135,28 @@ class DeviceLibrary(ReadOnlyLibrary):
             from pyrekordbox.utils import deobfuscate
             key = deobfuscate(BLOB)
         super().__init__(path, key=key)
+        # Older exports have no key table; their tracks show no key rather than failing.
+        columns = {r[1] for r in self.connection.execute('PRAGMA table_info(content)')}
+        key_columns = {r[1] for r in self.connection.execute('PRAGMA table_info("key")')}
+        if 'key_id' in columns and {'key_id', 'name'} <= key_columns:
+            keyed = "(SELECT k.name FROM \"key\" k WHERE k.key_id=c.key_id)"
+            self.QUERY = self.QUERY.replace("'' /*key*/", f"coalesce({keyed},'')")
+            self.PATH_QUERY = self.PATH_QUERY.replace("'' /*key*/", f"coalesce({keyed},'')")
 
     QUERY = '''
         SELECT c.content_id,c.title,coalesce(a.name,''),c.length/1000.0,c.bpmx100,c.path,
-               c.analysisDataFilePath,(SELECT count(*) FROM cue q WHERE q.content_id=c.content_id),0,''
+               c.analysisDataFilePath,(SELECT count(*) FROM cue q WHERE q.content_id=c.content_id),0,'','' /*key*/,''
         FROM content c LEFT JOIN artist a ON a.artist_id=c.artist_id_artist
         WHERE c.title=? COLLATE NOCASE LIMIT 100
     '''
+    PATH_QUERY = QUERY.replace('c.title=? COLLATE NOCASE', 'c.path=?')
+
+    def library_path(self, audio_path):
+        # A stick stores paths from its own root: /Volumes/STICK/Contents/x.mp3 is /Contents/x.mp3.
+        try:
+            return '/' + Path(audio_path).relative_to(self.analysis_root).as_posix()
+        except ValueError:
+            return None
 
     @property
     def analysis_root(self):
@@ -130,14 +164,15 @@ class DeviceLibrary(ReadOnlyLibrary):
 
 
 def device_library_paths():
-    """exportLibrary.db on every mounted drive: /Volumes on macOS, drive letters on Windows."""
-    import sys
-    if sys.platform == 'win32':
-        roots = [Path(f'{letter}:/') for letter in 'DEFGHIJKLMNOPQRSTUVWXYZ']
-    else:
-        roots = [p for p in Path('/Volumes').glob('*') if not p.is_symlink()]
+    """exportLibrary.db on every local drive: USB sticks and disks, never network shares, whose
+    servers can take seconds to answer (or never do) and would stall the lookup."""
+    import psutil
     found = []
-    for root in roots:
+    for partition in psutil.disk_partitions(all=False):
+        remote = 'remote' in partition.opts.split(',') or partition.fstype.lower() in NETWORK_FILESYSTEMS
+        root = Path(partition.mountpoint)
+        if remote or root == Path('/') or str(root).startswith('/System/'):
+            continue
         try:
             path = root/'PIONEER'/'rekordbox'/'exportLibrary.db'
             if path.is_file():
@@ -145,6 +180,9 @@ def device_library_paths():
         except OSError:
             pass
     return found
+
+
+NETWORK_FILESYSTEMS = {'smbfs', 'nfs', 'afpfs', 'webdav', 'cifs', 'ftp', 'macfuse', 'osxfuse', 'fuse'}
 
 
 class Libraries:
@@ -159,6 +197,17 @@ class Libraries:
         track = self.main.resolve(title, artist, length, bpm)
         if track:
             return track
+        for library in self._devices():
+            try:
+                track = library.resolve(title, artist, length, bpm)
+            except Exception:
+                continue  # an unreadable or older-format stick is skipped, never fatal
+            if track:
+                return track
+        return None
+
+    def _devices(self):
+        """Open libraries of the sticks mounted now, reopened when a stick's library changes."""
         paths = device_library_paths()
         for path in list(self.devices):
             if path not in paths:
@@ -170,12 +219,15 @@ class Libraries:
                     if path in self.devices:
                         self.devices.pop(path)[1].close()
                     self.devices[path] = (mtime, DeviceLibrary(path))
-                track = self.devices[path][1].resolve(title, artist, length, bpm)
             except Exception:
-                continue  # an unreadable or older-format stick is skipped, never fatal
-            if track:
-                return track
-        return None
+                continue
+            yield self.devices[path][1]
+
+    def resolve_path(self, audio_path):
+        if self.main is None:
+            self.main = ReadOnlyLibrary()
+        return self.main.resolve_path(audio_path) or next(
+            (track for library in self._devices() if (track := library.resolve_path(audio_path))), None)
 
     def close(self):
         if self.main:

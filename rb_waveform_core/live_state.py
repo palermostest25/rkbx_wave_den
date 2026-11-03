@@ -80,6 +80,11 @@ class PlaybackTimeline:
         self._quantum: Optional[float] = None
         self._ticked = 0.0
 
+    def timing(self, settings):
+        """Adopt the clock characteristics of the source now feeding this deck."""
+        for name, value in settings.items():
+            setattr(self, name, value)
+
     def started(self, now):
         """PLAY or CUE pressed on the controller just before this motion."""
         return self.play_pressed is not None and 0 <= now - self.play_pressed < .6

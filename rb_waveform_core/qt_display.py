@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import bisect
+import time
 import math
 from collections import OrderedDict
 from dataclasses import replace
@@ -37,6 +38,10 @@ def bind_fullscreen(window, screen):
     from .windows_window import cover_monitor
     cover_monitor(int(window.winId()))
 
+
+
+DECK_BLUE = '#1f8fff'
+LOOP_ORANGE = '#ffa21a'
 
 
 def beat_label(beats):
@@ -127,6 +132,7 @@ class WaveformCanvas(QWidget):
         super().__init__(parent)
         self.session = session
         self.tiles = WaveformTiles()
+        self.info = DeckInfoBar(session)
         self.upcoming = []
         self.setMinimumSize(560, 280)
         self.setMouseTracking(True)
@@ -150,15 +156,25 @@ class WaveformCanvas(QWidget):
             return True
         return super().event(event)
 
+    def info_height(self, decks):
+        if not self.session.view.get('deck_info', True):
+            return 0
+        wanted = min(340, max(150, self.height() * .3)) * self.session.render.ui_scale
+        # The waveforms come first: never squeeze a lane below a readable height.
+        return max(0, min(wanted, self.height() - 70 * decks))
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.fillRect(self.rect(), QColor('black'))
         order = self.session.order()
-        height = self.height() / len(order)
+        info = self.info_height(len(order))
+        height = (self.height() - info) / len(order)
         self.upcoming = []
         for row, idx in enumerate(order):
             self.draw_deck(painter, idx, QRectF(0, row * height, self.width(), height))
+        if info:
+            self.info.draw(painter, QRectF(0, self.height() - info, self.width(), info), order)
         painter.end()
         # Render one tile ahead per frame (~3 ms), so four decks never fill a frame at once.
         for analysis, tile, reduction in self.upcoming:
@@ -178,22 +194,25 @@ class WaveformCanvas(QWidget):
         rail = max(54, font_size * 2.7)
         p.fillRect(QRectF(0, bounds.top(), rail - 7, bounds.height()), QColor('#101010'))
         badge = QRectF(7, bounds.top() + 14, rail - 21, bounds.height() - 28)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(QColor('#e5e5e5'), 1))
+        # Lit while the deck plays, like the deck numbers on the AZ's enlarged waveforms.
+        playing = bool(s.timelines[idx].playing)
+        p.setBrush(QColor(DECK_BLUE) if playing else Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor(DECK_BLUE if playing else '#5b636d'), 1))
         p.drawRect(badge)
         number_font = QFont(font)
         number_font.setPixelSize(round(font_size * 1.5))
+        number_font.setBold(True)
         p.setFont(number_font)
+        p.setPen(QColor('white' if playing else '#d6dade'))
         p.drawText(badge, Qt.AlignmentFlag.AlignCenter, str(idx + 1))
         p.setFont(font)
         if bounds.top() > 0:
             p.setPen(QColor('#252525'))
             p.drawLine(QPointF(0, bounds.top()), QPointF(bounds.right(), bounds.top()))
-        header = font_size + 12 if s.view.get('track_headers', False) else 0
         flag_h = max(19, font_size + 4)
-        signal = QRectF(rail, bounds.top() + header + flag_h + 3,
+        signal = QRectF(rail, bounds.top() + flag_h + 3,
                         max(1, bounds.width() - rail - 8),
-                        max(1, bounds.height() - header - 2 * flag_h - 14))
+                        max(1, bounds.height() - 2 * flag_h - 14))
         position = s.position(idx)
         if deck.analysis is None or position is None:
             p.setPen(QColor('#aab0b8'))
@@ -203,14 +222,6 @@ class WaveformCanvas(QWidget):
             text = s.errors.get(idx, waiting)
             p.drawText(signal.adjusted(24, 0, -24, 0), Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap, text)
             return
-        if header:
-            p.setPen(QColor('#c3c8ce'))
-            text_rect = QRectF(rail, bounds.top() + 3, signal.width() - 180, header)
-            title = p.fontMetrics().elidedText(deck.song_name, Qt.TextElideMode.ElideRight, int(text_rect.width()))
-            p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter, title)
-            p.setPen(QColor('white'))
-            p.drawText(QRectF(bounds.right() - 180, bounds.top(), 165, header), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                       f'{deck.current_bpm:.1f} BPM' if deck.current_bpm else '')
         bpm = deck.original_bpm or deck.current_bpm or 120.0
         visible = s.view['zoom_beats'] * 60 / bpm
         fraction = s.view['playhead']
@@ -247,7 +258,7 @@ class WaveformCanvas(QWidget):
                 p.fillRect(QRectF(left, signal.top(), right - left, signal.height()), tint)
             timeline = s.timelines[idx]
             loop = timeline.active_loop()
-            orange = QColor('#ffa21a')
+            orange = QColor(LOOP_ORANGE)
             pill_font = QFont(font)
             pill_font.setBold(True)
             pill_font.setPixelSize(round(font_size * .72))
@@ -334,6 +345,247 @@ class WaveformCanvas(QWidget):
         # A white playhead is distinct from red first-beat ticks.
         x = x_at(position)
         p.setPen(QPen(QColor('#060606'), 5))
-        p.drawLine(QPointF(x, bounds.top() + header + 2), QPointF(x, bounds.bottom() - 4))
+        p.drawLine(QPointF(x, bounds.top() + 2), QPointF(x, bounds.bottom() - 4))
         p.setPen(QPen(QColor('#f8f8f8'), 2.2))
-        p.drawLine(QPointF(x, bounds.top() + header + 2), QPointF(x, bounds.bottom() - 4))
+        p.drawLine(QPointF(x, bounds.top() + 2), QPointF(x, bounds.bottom() - 4))
+
+
+def clock(seconds, tenths=True):
+    """mm:ss.t as the deck displays show it."""
+    seconds = max(0.0, seconds)
+    whole = int(seconds * 10) if tenths else int(seconds) * 10
+    return f'{whole // 600:02}:{whole // 10 % 60:02}' + (f'.{whole % 10}' if tenths else '')
+
+
+def countdown(position, cues, bpm):
+    """Bars.beats to the next cue ahead, as rekordbox counts down to it; None with none ahead."""
+    ahead = [c.time_sec for c in cues if c.time_sec > position + .05]
+    if not ahead or not bpm:
+        return None
+    beats = math.ceil((min(ahead) - position) * bpm / 60 - 1e-6)
+    return f'{beats // 4}.{beats % 4}'
+
+
+class DeckInfoBar:
+    """The AZ's lower screen: one panel per deck with its track, tempo, time and overview."""
+    WARN_SECONDS = 30  # the decks flash their overview through a track's last 30 seconds
+
+    def __init__(self, session):
+        self.session = session
+        self.overviews = OrderedDict()  # id(analysis) -> (analysis, colours, image)
+        self.artwork = OrderedDict()    # path -> image (None when unreadable)
+
+    def draw(self, p, bounds, order):
+        p.fillRect(bounds, QColor('#0b0c0e'))
+        p.setPen(QColor('#2a2e33'))
+        p.drawLine(bounds.topLeft(), bounds.topRight())
+        width = bounds.width() / len(order)
+        for column, idx in enumerate(order):
+            self.panel(p, idx, QRectF(bounds.left() + column * width, bounds.top(), width, bounds.height()).adjusted(4, 7, -4, -6))
+
+    def overview(self, analysis):
+        s = self.session
+        colours = (tuple(s.colors.low_color), tuple(s.colors.mid_color), tuple(s.colors.high_color))
+        entry = self.overviews.get(id(analysis))
+        if entry and entry[0] is analysis and entry[1] == colours:
+            return entry[2]
+        cfg = replace(s.render, image_width=max(1, min(1600, len(analysis.low))), image_height=96,
+                      margin_px=1, background_color=(0, 0, 0))
+        # Averaged, as an overview should read: the loudest bin per column paints it all white.
+        image = render_waveform_image(analysis, s.colors, cfg, reduce='mean')
+        result = QImage(image.tobytes(), image.width, image.height, image.width * 3,
+                        QImage.Format.Format_RGB888).convertToFormat(QImage.Format.Format_RGB32)
+        self.overviews[id(analysis)] = (analysis, colours, result)
+        while len(self.overviews) > 8:
+            self.overviews.popitem(last=False)
+        return result
+
+    def cover(self, path):
+        if path not in self.artwork:
+            image = QImage(path)
+            self.artwork[path] = None if image.isNull() else image
+            while len(self.artwork) > 16:
+                self.artwork.popitem(last=False)
+        return self.artwork[path]
+
+    @staticmethod
+    def font(size, bold=False):
+        font = QFont('Arial')
+        font.setPixelSize(max(9, round(size)))
+        font.setBold(bold)
+        return font
+
+    def text(self, p, rect, text, size, colour, align=Qt.AlignmentFlag.AlignLeft, bold=False):
+        p.setFont(self.font(size, bold))
+        p.setPen(QColor(colour))
+        shown = p.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, max(1, int(rect.width())))
+        p.drawText(rect, align | Qt.AlignmentFlag.AlignVCenter, shown)
+
+    def chip(self, p, x, y, h, text, fill, ink, align_right=False):
+        p.setFont(self.font(h * .62, True))
+        w = p.fontMetrics().horizontalAdvance(text) + h * .7
+        box = QRectF(x - w if align_right else x, y, w, h)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(fill))
+        p.drawRoundedRect(box, 3, 3)
+        p.setPen(QColor(ink))
+        p.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+        return box
+
+    def panel(self, p, idx, r):
+        s = self.session
+        deck = s.decks[idx]
+        timeline = s.timelines[idx]
+        meta = getattr(s, 'meta', {}).get(idx) or {}
+        playing = bool(timeline.playing)
+        position = s.position(idx)
+        loaded = deck.analysis is not None and position is not None
+        p.setPen(QPen(QColor('#24282d'), 1))
+        p.setBrush(QColor('#131518'))
+        p.drawRect(r)
+        pad = max(5.0, r.height() * .035)
+        inner = r.adjusted(pad, pad, -pad, -pad)
+        gap = max(4.0, pad * .8)
+        h = inner.height()
+        line = h * .13                      # title / artist lines
+        big = h * .27                       # artwork, remaining time, BPM
+        info = h * .13                      # elapsed, key, tempo, loop, countdown
+        top = inner.top()
+        # Deck number, lit while playing, beside the title and artist.
+        badge = QRectF(inner.left(), top, 2 * line, 2 * line)
+        p.setPen(QPen(QColor(DECK_BLUE if playing else '#5b636d'), 1))
+        p.setBrush(QColor(DECK_BLUE) if playing else Qt.BrushStyle.NoBrush)
+        p.drawRect(badge)
+        self.text(p, badge, str(idx + 1), line * 1.3, 'white' if playing else '#d6dade', Qt.AlignmentFlag.AlignCenter, True)
+        text_x = badge.right() + gap
+        text_w = inner.right() - text_x
+        if not loaded:
+            self.text(p, QRectF(text_x, top, text_w, line), 'No track loaded', line * .7, '#7d858e')
+            if s.errors.get(idx):
+                self.text(p, QRectF(text_x, top + line, text_w, line), s.errors[idx], line * .55, '#9aa3ad')
+        else:
+            # MASTER, SYNC and key lock, dim until Rekordbox reports them on (bridge only).
+            status = getattr(s.reader, 'deck_status', {}).get(idx)
+            if status is not None:
+                chip_h = line * .78
+                right = inner.right()
+                for label, on, fill, ink in (('MT', status.master_tempo, '#d63a3a', 'white'),
+                                             ('SYNC', status.sync, DECK_BLUE, 'white'),
+                                             ('MASTER', status.master, LOOP_ORANGE, 'black')):
+                    right = self.chip(p, right, top + (line - chip_h) / 2, chip_h, label,
+                                      fill if on else '#1c1f23', ink if on else '#4f565e', align_right=True).left() - gap * .6
+                text_w = right - gap - text_x
+            self.text(p, QRectF(text_x, top, text_w, line), meta.get('title') or deck.song_name or 'Unknown',
+                      line * .72, '#f1f3f5', bold=True)
+            self.text(p, QRectF(text_x, top + line, text_w, line), meta.get('artist') or '', line * .6, '#9aa3ad')
+        row = top + 2 * line + gap
+        # Artwork (or an empty sleeve) with the play state on it.
+        art = QRectF(inner.left(), row, big, big)
+        image = self.cover(meta['artwork']) if loaded and meta.get('artwork') else None
+        if image is not None:
+            p.drawImage(art, image)
+        else:
+            p.fillRect(art, QColor('#1c1f23'))
+            p.setPen(QPen(QColor('#2c3137'), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(art.center(), big * .3, big * .3)
+            p.drawEllipse(art.center(), big * .06, big * .06)
+        if loaded:
+            g = big * .34
+            glyph = QRectF(art.left() + 3, art.bottom() - g - 3, g, g)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(0, 0, 0, 170))
+            p.drawRect(glyph)
+            p.setBrush(QColor('#34c759' if playing else '#c9ced4'))
+            if playing:
+                p.drawPolygon(QPolygonF([QPointF(glyph.left() + g * .32, glyph.top() + g * .22),
+                                         QPointF(glyph.left() + g * .32, glyph.bottom() - g * .22),
+                                         QPointF(glyph.right() - g * .22, glyph.center().y())]))
+            else:
+                for x in (.28, .56):
+                    p.drawRect(QRectF(glyph.left() + g * x, glyph.top() + g * .24, g * .16, g * .52))
+        duration = deck.analysis.duration_seconds if loaded else 0
+        remaining = max(0.0, duration - position) if loaded else 0
+        warn = loaded and duration > 0 and remaining < self.WARN_SECONDS
+        blink = warn and playing and time.monotonic() % 1 < .5
+        details = row + big + gap * .5
+        if loaded:
+            original, current = deck.original_bpm, deck.current_bpm or deck.original_bpm
+            bpm_w = min(inner.width() * .36, big * 2.6)
+            label = big * .26
+            # Remaining time, large; BPM, large, at the right.
+            time_x = art.right() + gap * 1.5
+            self.text(p, QRectF(time_x, row, inner.width(), label), 'REMAIN', label * .8, '#7d858e')
+            self.text(p, QRectF(time_x, row + label, inner.right() - bpm_w - time_x, big - label),
+                      '-' + clock(remaining), min((big - label) * .9, (inner.right() - bpm_w - time_x) / 4.3),
+                      '#ff3b30' if warn else '#ffffff', bold=True)
+            self.text(p, QRectF(inner.right() - bpm_w, row, bpm_w, label), 'BPM', label * .8, '#7d858e',
+                      Qt.AlignmentFlag.AlignRight)
+            self.text(p, QRectF(inner.right() - bpm_w, row + label, bpm_w, big - label),
+                      f'{current:.1f}' if current else '--', min((big - label) * .9, bpm_w / 3.2), '#ffffff',
+                      Qt.AlignmentFlag.AlignRight, True)
+            # Elapsed, key and tempo at the left; loop and countdown to the next cue at the right.
+            x = inner.left()
+            self.text(p, QRectF(x, details, info * 4.6, info), clock(position), info * .62, '#9aa3ad')
+            x += info * 4.6
+            chip_h = info * .82
+            y = details + (info - chip_h) / 2
+            shift = getattr(getattr(s.reader, 'deck_status', {}).get(idx), 'key_shift', 0)
+            if meta.get('key'):
+                x = self.chip(p, x, y, chip_h, meta['key'] + (f' {shift:+d}' if shift else ''),
+                              '#1f3a2a', '#7ee2a8').right() + gap
+            if original and current:
+                pct = (current / original - 1) * 100
+                self.text(p, QRectF(x, details, info * 4, info), f'{pct:+.2f}%', info * .62,
+                          '#f1f3f5' if abs(pct) >= .005 else '#7d858e')
+            right = inner.right()
+            loop = timeline.active_loop()
+            if loop and original:
+                right = self.chip(p, right, y, chip_h, 'LOOP ' + beat_label((loop[1] - loop[0]) * original / 60),
+                                  LOOP_ORANGE, 'black', align_right=True).left() - gap
+            bars = countdown(position, deck.cues, original)
+            if bars:
+                self.text(p, QRectF(right - info * 5, details, info * 5, info), f'{bars} Bars', info * .62, '#d6dade',
+                          Qt.AlignmentFlag.AlignRight)
+        overview = QRectF(inner.left(), details + info + gap * .5, inner.width(), inner.bottom() - details - info - gap * .5)
+        # Whole-track overview: played part dimmed, cues above and below, the playhead white.
+        p.fillRect(overview, QColor('#050506'))
+        if loaded and duration > 0:
+            p.drawImage(overview, self.overview(deck.analysis))
+            def x_at(t):
+                return overview.left() + max(0.0, min(1.0, t / duration)) * overview.width()
+            p.fillRect(QRectF(overview.left(), overview.top(), x_at(position) - overview.left(), overview.height()),
+                       QColor(0, 0, 0, 135))
+            for cue in deck.cues:
+                if cue.end_sec is not None:
+                    tint = QColor(*cue.color)
+                    tint.setAlpha(70)
+                    p.fillRect(QRectF(x_at(cue.time_sec), overview.top(), x_at(cue.end_sec) - x_at(cue.time_sec), overview.height()), tint)
+            loop = timeline.active_loop()
+            if loop:
+                p.fillRect(QRectF(x_at(loop[0]), overview.top(), max(2.0, x_at(loop[1]) - x_at(loop[0])), overview.height()),
+                           QColor(255, 143, 0, 110))
+            # Minute ticks along the bottom edge.
+            p.setPen(QPen(QColor('#4a5058'), 1))
+            for minute in range(1, int(duration // 60) + 1):
+                x = x_at(minute * 60)
+                p.drawLine(QPointF(x, overview.bottom() - 4), QPointF(x, overview.bottom()))
+            mark = max(5.0, overview.height() * .16)
+            for cue in deck.cues:
+                x = x_at(cue.time_sec)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(*cue.color))
+                if cue.is_memory:
+                    p.drawPolygon(QPolygonF([QPointF(x - mark * .6, overview.bottom()), QPointF(x + mark * .6, overview.bottom()),
+                                             QPointF(x, overview.bottom() - mark)]))
+                else:
+                    p.drawPolygon(QPolygonF([QPointF(x - mark * .6, overview.top()), QPointF(x + mark * .6, overview.top()),
+                                             QPointF(x, overview.top() + mark)]))
+            x = x_at(position)
+            p.setPen(QPen(QColor('#060606'), 4))
+            p.drawLine(QPointF(x, overview.top()), QPointF(x, overview.bottom()))
+            p.setPen(QPen(QColor('#ffffff'), 2))
+            p.drawLine(QPointF(x, overview.top()), QPointF(x, overview.bottom()))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor('#ff3b30' if blink else '#2a2e33'), 2 if blink else 1))
+        p.drawRect(overview)
