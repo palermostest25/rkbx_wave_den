@@ -34,7 +34,8 @@ class PlaybackTimeline:
     """
 
     def __init__(self, *, extrapolate_seconds=0.08, stale_seconds=0.25, resolution=0.0,
-                 smoothing_seconds=0.3):
+                 smoothing_seconds=0.3, infer_loops=True):
+        self.infer_loops = infer_loops
         self.extrapolate_seconds = max(0.0, float(extrapolate_seconds))
         self.stale_seconds = max(self.extrapolate_seconds, float(stale_seconds))
         self.resolution = max(0.0, float(resolution))
@@ -99,12 +100,14 @@ class PlaybackTimeline:
         """Engaged loop bounds: authoritative when the source reports loops, else inferred."""
         if self.loop_active and self.loop_start is not None:
             return self.loop_start, self.loop_end
-        if self.loop_active is None and self.inferred_loop:
+        if self.infer_loops and self.loop_active is None and self.inferred_loop:
             return self.inferred_loop
         return None
 
     def _note_jump(self, start, end, stamp):
         """Readers without loop state still reveal a loop: it jumps back by the same span."""
+        if not self.infer_loops:
+            return
         previous, self._jump = self._jump, (start, end, stamp)
         # A loop keeps playing after it jumps back; CUE or a jump to the start stops, so
         # either kind of match only becomes a loop once playback carries on from it.

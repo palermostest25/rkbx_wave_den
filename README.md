@@ -33,20 +33,26 @@ Hot-cue flags and memory cues retain exact track positions. Nearby labels use fr
 
 ### Platter, monitor and colours
 
-- **Platters:** when you scratch, jog-cue or move a deck by hand, Wave stops predicting and glides between real positions, so the waveform never runs ahead and snaps back. Normal playback still runs predicted and smooth. On macOS rekordbox shows time in tenths of a second. For tiny moves, Wave uses the edge of the tenth the platter just crossed, so a small wiggle no longer jitters. With a controller connected, its PLAY and CUE buttons tell a motor start from a hand nudge.
+- **Platters:** when you scratch, jog-cue or move a deck by hand, Wave stops predicting and glides between real positions, so the waveform never runs ahead and snaps back. Normal playback still runs predicted and smooth. On macOS rekordbox shows time in tenths of a second. For tiny moves, Wave uses the edge of the tenth the platter just crossed, so a small wiggle no longer jitters. Controller PLAY/CUE presses do not determine transport state.
 - **Monitor:** full screen on a monitor is remembered. Whenever that monitor is connected, at launch or when plugged in, Wave fills it; otherwise Wave stays a normal window. F11/Esc leave full screen for now, and plugging the monitor in again returns to it.
 - **Zoom:** pinch on a trackpad, scroll with two fingers or a mouse wheel over the waveforms, or turn **SHIFT + BROWSE** on the controller. That is rekordbox's own waveform zoom, so plain BROWSE still only browses tracks. +/− keys and the Settings menu step through fixed sizes (1 to 128 bars).
 - **Waveform style:** Settings → Waveform → *Rekordbox* or *Wave classic* (the earlier look). The Rekordbox palette comes from flat-colour pixels measured on rekordbox 7's own decks: lows `#0054E2`, mids `#FFA600`, mids inside the bass `#B46607`, highs `#F6ECD9`. The lows and mids match a published rekordbox-style Mixxx skin (`#0055E1`, `#FFA600`). Bands are read and scaled the way rekordbox 7 draws them. I measured them against rekordbox's own deck drawing of a track: each stored PWV7 column (low, mid, high) correlates r = 0.89–0.95 with one band colour. All three bands share one linear scale that fills the lane at a raw value of about 100, with a thin highs line kept through the centre.
 
 ### Live hot cues and memory cues
 
-Cue edits appear on the waveform as you make them, on Windows and macOS, however you make them: on the controller, with the mouse, by adding or deleting. Wave re-reads the loaded tracks' cues from rekordbox's library several times a second (read-only). rekordbox saves cue edits there straight away. With a controller, hot-cue pads, SHIFT+pad (delete) and MEMORY show on the press itself, and the library then confirms them.
+Cue edits appear after they are read back from Rekordbox’s library. Wave polls loaded tracks’ cues several times a second using a read-only connection. Controller presses do not add or delete markers speculatively; Rekordbox must save the change before Wave shows it.
 
-### Live loops from your controller
+### Authoritative live state
 
-Wave listens to your DJ controller's MIDI alongside rekordbox and decodes it with the `.midi.csv` map rekordbox itself ships for that controller (all 56 rekordbox maps with loop buttons are supported, and your own MIDI-learn maps take priority). Pressing **IN** shows an IN flag at once, with the loop-to-be growing toward the playhead. **OUT**, **auto/4-beat loop**, beat-loop pads, **½×/2×** and **RELOOP/EXIT** draw or clear the loop the moment you press them, with its length in beats. Wave only listens: it never sends anything to the controller, so rekordbox behaves exactly as before.
+Rekordbox is the source of playback position and BPM. Wave interpolates between observations for smooth rendering, but does not treat controller buttons or repeated backward jumps as confirmation of a loop. Native readers currently do **not** expose authoritative engaged-loop bounds. Saved loops remain visible; live loop shading requires a reader that supplies actual loop start, end and engagement (the existing OSC protocol accepts these fields, but requires a separate compatible sender).
 
-Loop points snap to the beat grid, as with rekordbox's default quantize. If rekordbox plays a slightly different loop, the next wrap corrects it. Without a controller (loops set with the mouse), a loop appears from its first repeat. On Windows, classic MIDI drivers let only one app open a port, so this works only where the controller's driver shares its port. Otherwise the status line says so.
+Controller MIDI remains a display input for SHIFT + BROWSE zoom. Wave sends no MIDI commands to Rekordbox or the controller.
+
+### Touch collection browser (development branch)
+
+**BROWSE** opens a read-only collection browser in the same window. Search title/artist with the physical or built-in touch keyboard. Tap TITLE, ARTIST, BPM, KEY or TIME to sort the entire result set, ascending/descending. Scroll rows by touch or wheel; PREVIOUS/NEXT navigate 200-track pages. REFRESH discovers mounted OneLibrary USB exports. Search, sorting and source discovery run in a worker so they do not block waveform painting. Older USB schemas without key metadata show an empty key.
+
+This is an incomplete step toward the requested Stembox-style workflow: **direct deck loading is not implemented**. Browsing does not load an analysis file and pretend a Rekordbox deck has loaded. Native command/acknowledgement integration, hardware Browse navigation, USB playlists, full performance controls and physical Surface Pro 7 acceptance remain outstanding. No release of this branch should be described as the completed touch DJ product.
 
 No saved loop is falsely presented as currently engaged. Unknown native versions fail with an explanatory connection status. Streaming analysis depends on accessible ANLZ files.
 
