@@ -159,7 +159,7 @@ class WaveformCanvas(QWidget):
     def info_height(self, decks):
         if not self.session.view.get('deck_info', True):
             return 0
-        wanted = min(340, max(150, self.height() * .3)) * self.session.render.ui_scale
+        wanted = min(340, max(150, self.height() * .3)) * self.session.render.ui_scale * self.session.view.get('info_size', 1)
         # The waveforms come first: never squeeze a lane below a readable height.
         return max(0, min(wanted, self.height() - 70 * decks))
 
@@ -198,7 +198,7 @@ class WaveformCanvas(QWidget):
         playing = bool(s.timelines[idx].playing)
         p.setBrush(QColor(DECK_BLUE) if playing else Qt.BrushStyle.NoBrush)
         p.setPen(QPen(QColor(DECK_BLUE if playing else '#5b636d'), 1))
-        p.drawRect(badge)
+        rounded(p, badge, 6)
         number_font = QFont(font)
         number_font.setPixelSize(round(font_size * 1.5))
         number_font.setBold(True)
@@ -350,6 +350,13 @@ class WaveformCanvas(QWidget):
         p.drawLine(QPointF(x, bounds.top() + 2), QPointF(x, bounds.bottom() - 4))
 
 
+def rounded(p, rect, radius):
+    """A smooth rounded box without antialiasing the waveform lines drawn around it."""
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    p.drawRoundedRect(rect, radius, radius)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+
 def clock(seconds, tenths=True):
     """mm:ss.t as the deck displays show it."""
     seconds = max(0.0, seconds)
@@ -442,7 +449,7 @@ class DeckInfoBar:
         loaded = deck.analysis is not None and position is not None
         p.setPen(QPen(QColor('#24282d'), 1))
         p.setBrush(QColor('#131518'))
-        p.drawRect(r)
+        rounded(p, r, 10)
         pad = max(5.0, r.height() * .035)
         inner = r.adjusted(pad, pad, -pad, -pad)
         gap = max(4.0, pad * .8)
@@ -455,7 +462,7 @@ class DeckInfoBar:
         badge = QRectF(inner.left(), top, 2 * line, 2 * line)
         p.setPen(QPen(QColor(DECK_BLUE if playing else '#5b636d'), 1))
         p.setBrush(QColor(DECK_BLUE) if playing else Qt.BrushStyle.NoBrush)
-        p.drawRect(badge)
+        rounded(p, badge, 6)
         self.text(p, badge, str(idx + 1), line * 1.3, 'white' if playing else '#d6dade', Qt.AlignmentFlag.AlignCenter, True)
         text_x = badge.right() + gap
         text_w = inner.right() - text_x
@@ -481,7 +488,7 @@ class DeckInfoBar:
         row = top + 2 * line + gap
         # Artwork (or an empty sleeve) with the play state on it.
         art = QRectF(inner.left(), row, big, big)
-        image = self.cover(meta['artwork']) if loaded and meta.get('artwork') else None
+        image = self.cover(meta['artwork']) if loaded and meta.get('artwork') and s.view.get('artwork', True) else None
         if image is not None:
             p.drawImage(art, image)
         else:
@@ -506,7 +513,7 @@ class DeckInfoBar:
                     p.drawRect(QRectF(glyph.left() + g * x, glyph.top() + g * .24, g * .16, g * .52))
         duration = deck.analysis.duration_seconds if loaded else 0
         remaining = max(0.0, duration - position) if loaded else 0
-        warn = loaded and duration > 0 and remaining < self.WARN_SECONDS
+        warn = loaded and duration > 0 and remaining < s.view.get('end_warning', self.WARN_SECONDS)
         blink = warn and playing and time.monotonic() % 1 < .5
         details = row + big + gap * .5
         if loaded:
@@ -515,9 +522,11 @@ class DeckInfoBar:
             label = big * .26
             # Remaining time, large; BPM, large, at the right.
             time_x = art.right() + gap * 1.5
-            self.text(p, QRectF(time_x, row, inner.width(), label), 'REMAIN', label * .8, '#7d858e')
+            elapsed_mode = s.view.get('time_mode') == 'elapsed'
+            self.text(p, QRectF(time_x, row, inner.width(), label), 'ELAPSED' if elapsed_mode else 'REMAIN', label * .8, '#7d858e')
             self.text(p, QRectF(time_x, row + label, inner.right() - bpm_w - time_x, big - label),
-                      '-' + clock(remaining), min((big - label) * .9, (inner.right() - bpm_w - time_x) / 4.3),
+                      clock(position) if elapsed_mode else '-' + clock(remaining),
+                      min((big - label) * .9, (inner.right() - bpm_w - time_x) / 4.3),
                       '#ff3b30' if warn else '#ffffff', bold=True)
             self.text(p, QRectF(inner.right() - bpm_w, row, bpm_w, label), 'BPM', label * .8, '#7d858e',
                       Qt.AlignmentFlag.AlignRight)
@@ -526,7 +535,8 @@ class DeckInfoBar:
                       Qt.AlignmentFlag.AlignRight, True)
             # Elapsed, key and tempo at the left; loop and countdown to the next cue at the right.
             x = inner.left()
-            self.text(p, QRectF(x, details, info * 4.6, info), clock(position), info * .62, '#9aa3ad')
+            self.text(p, QRectF(x, details, info * 4.6, info), '-' + clock(remaining) if elapsed_mode else clock(position),
+                      info * .62, '#9aa3ad')
             x += info * 4.6
             chip_h = info * .82
             y = details + (info - chip_h) / 2
