@@ -44,6 +44,7 @@ constexpr int kDevice = 2;                           // ... and for a device, as
 constexpr uint64_t kMainComponent = 0x10546d800ULL;  // MainComponent::getInstance's static
 constexpr uint64_t kUiManager = 0x568;               // MainComponent -> djplay::UiManager*
 constexpr uint64_t kLoadMessageVtable = 0x10517e590ULL;  // djplay::DjplayCommonMessage address point
+constexpr uint64_t kBrowseView = 0x1053fd840ULL;         // BrowseBasicView::getInstance's static
 [[maybe_unused]] constexpr uint64_t kLoadMessageDtor = 0x1002e24a0ULL;    // its first slot, checked before use
 
 struct Code { uint64_t address, size, hash; };
@@ -51,7 +52,9 @@ enum : int { NUM_PLAYERS, IS_LOADED, IS_PLAYING, POSITION_MS, TOTAL_MS, FILE_PAT
              RUNNING_LOOP, IS_LOOPING, STRING_DTOR, ENGINE_HOLDER_GET, IS_LOADING, TRACK_CTOR,
              TRACK_DTOR, GET_ROW_DATA_TRACK, DATABASE_HOLDER_GET, TRACK_BASIC_INFO, MAIN_COMPONENT, UI_PLAYER,
              POST_MESSAGE, MESSAGE_CTOR, BROWSER_LOAD, WIKI_LOAD, MASTER_TEMPO, GET_MASTER, IS_SYNC,
-             KEY_SHIFT, IS_SLIP, KEY_SYNCING, SET_MASTER_TEMPO, TEMPO_SELECT, ALL_DEVICES, DEVICE_ROOT, CODE_COUNT };
+             KEY_SHIFT, IS_SLIP, KEY_SYNCING, SET_MASTER_TEMPO, TEMPO_SELECT, ALL_DEVICES, DEVICE_ROOT,
+             BROWSE_INSTANCE, FOCUSED_LIST, FOCUSED_TREE, GET_LIST, GET_TREE, NUM_ROWS, LIST_TRACK, SELECTED_IDS,
+             SELECTED_ROWS, FILE_EXTENSION, TREE_PATH, HAS_FOCUS, CODE_COUNT };
 // FNV-1a of each function's first bytes. Entries never called pin layouts the bridge relies on:
 // the *_HOLDER_GET ones the holder's instance at +0x40, BROWSER_LOAD and WIKI_LOAD (hashed whole)
 // the load message the bridge posts as Rekordbox's own browser does.
@@ -90,6 +93,21 @@ constexpr Code kCode[CODE_COUNT] = {
     {0x101ac111c, 0x20, 0x7afac00a87d061adULL},  // djplay::UiPlayer::getTempoSelectStatus
     {0x1020d5b18, 0x20, 0x30ca9940e88081c1ULL},  // db::DatabaseIF::getAllDeviceHandle(Array<long>&)
     {0x1020d5b04, 0x20, 0xadbcf040411634e8ULL},  // db::DatabaseIF::getDeviceRoot(long)
+    // Rekordbox's browser. Whole bodies pin the layout read below: the view's list (+0x268) and tree
+    // (+0x270) managers, the list's row count (+0x258), list box (+0x238), sort map (+0x240/+0x24c)
+    // and tracks (+0x268), the list box's selection (+0x138/+0x144), a track's id (+0x8) and path (+0xa8).
+    {0x100313584, 0x20, 0xe0fc993b33070a96ULL},  // browse::BrowseBasicView::getInstance
+    {0x10032d25c, 0x1b4, 0x95410468c120a585ULL}, // browse::BrowseBasicView::getFocusedListView
+    {0x10032db0c, 0xa0, 0x278bcb503d4c6af7ULL},  // browse::BrowseBasicView::getFocusedTreeView
+    {0x101ce9864, 0x20, 0xce1181edef2b5ae6ULL},  // browse::BrowseListManager::getList
+    {0x101c789d8, 0x20, 0x145234816f0475acULL},  // browse::BrowseTreeManager::getTree
+    {0x100213a98, 0x20, 0xe2249b11b00160b3ULL},  // browse::ListViewer::getNumRows
+    {0x1003ecb98, 0x20, 0x89d894fa77049d59ULL},  // browse::ListViewer::getCurrentListTrack
+    {0x1003e4068, 0x26c, 0xc16e5bde4f104845ULL}, // browse::ListViewer::getSelectedTrackIDs
+    {0x100e7bb74, 0x7c, 0x042df1eb3b6ed0a5ULL},  // browse::CustomListBox::getSelectedRows
+    {0x1003ec428, 0x20, 0x00b44b89932e8e9fULL},  // db::RowDataTrack::getFileExtension
+    {0x10155fb88, 0x20, 0xfa043bbf6aa07fa2ULL},  // browse::TreeViewer::getCurrentItemPath
+    {0x1026561bc, 0x20, 0x28a3e31698861815ULL},  // juce::Component::hasKeyboardFocus
 };
 
 struct JString {  // juce::String: one pointer to its UTF-8 text; non-trivial, so returned via x8
@@ -119,6 +137,9 @@ using SetDeckFlag = void (*)(const void *engine, int channel, bool);
 using PlayerInt = int (*)(const void *ui_player);
 using AllDevices = void (*)(void *database, LongArray *);
 using DeviceRoot = JString (*)(void *database, long handle);
+using GetComponent = void *(*)(const void *manager);
+using ItemPath = JString (*)(void *tree);
+using HasFocus = bool (*)(const void *component, bool children);
 
 struct Api {
     uintptr_t slide = 0;
@@ -142,6 +163,9 @@ struct Api {
     PlayerInt tempo_select;
     AllDevices all_devices;
     DeviceRoot device_root;
+    GetComponent get_list;
+    ItemPath tree_path;
+    HasFocus has_focus;
     MessageCtor message_ctor;
     PostMessage post_message;
 } api;
@@ -256,6 +280,9 @@ const char *verify_build() {
     api.tempo_select = at<PlayerInt>(TEMPO_SELECT);
     api.all_devices = at<AllDevices>(ALL_DEVICES);
     api.device_root = at<DeviceRoot>(DEVICE_ROOT);
+    api.get_list = at<GetComponent>(GET_LIST);
+    api.tree_path = at<ItemPath>(TREE_PATH);
+    api.has_focus = at<HasFocus>(HAS_FOCUS);
     api.message_ctor = at<MessageCtor>(MESSAGE_CTOR);
     api.post_message = at<PostMessage>(POST_MESSAGE);
     if (*reinterpret_cast<const uint64_t *>(kLoadMessageVtable + api.slide) != kLoadMessageDtor + api.slide)
@@ -315,6 +342,50 @@ void read_devices() {
         free(handles.data);
     }
     memcpy(shared->devices, found, sizeof found);
+}
+
+template <typename T> T field(const void *object, size_t offset) {
+    return *reinterpret_cast<const T *>(static_cast<const uint8_t *>(object) + offset);
+}
+
+// Rekordbox's browser as its controller moves through it: the rows around its cursor, the
+// cursor, and which pane has focus. Only reads, on the main thread that owns all of it.
+void read_browser(bool with_path) {
+    BridgeBrowser &b = shared->browser;
+    const void *view = field<const void *>(reinterpret_cast<const void *>(kBrowseView + api.slide), 0);
+    const void *lists = view ? field<const void *>(view, 0x268) : nullptr;
+    const void *trees = view ? field<const void *>(view, 0x270) : nullptr;
+    const void *list = lists && field<const void *>(lists, 0x108) ? api.get_list(lists) : nullptr;
+    void *tree = trees ? field<void *>(trees, 0x100) : nullptr;
+    b.focus = tree && api.has_focus(tree, true) ? 1 : list && api.has_focus(list, true) ? 0 : 2;
+    if (tree && with_path) {
+        JString path = api.tree_path(tree);
+        snprintf(b.tree_path, sizeof b.tree_path, "%s", path.text ? path.text : "");
+    }
+    if (!list) { b.rows = -1; b.cursor = -1; b.first = 0; b.count = 0; return; }
+    const int rows = field<int>(list, 0x258);
+    const void *box = field<const void *>(list, 0x238);
+    const int *ranges = box ? field<const int *>(box, 0x138) : nullptr;
+    const int cursor = box && ranges && field<int>(box, 0x144) > 0 ? ranges[0] : -1;
+    const int *order = field<const int *>(list, 0x240);
+    const int ordered = field<int>(list, 0x24c);
+    const void *tracks = field<const void *>(list, 0x268);
+    const int stored = tracks ? field<int>(tracks, 0xc) : 0;
+    const void *const *track_data = tracks ? field<const void *const *>(tracks, 0) : nullptr;
+    int first = cursor < 0 ? 0 : cursor - int(kBrowseRows) / 4;
+    first = first > rows - int(kBrowseRows) ? rows - int(kBrowseRows) : first;
+    first = first < 0 ? 0 : first;
+    int count = 0;
+    for (int row = first; row < rows && count < int(kBrowseRows); ++row, ++count) {
+        // As Rekordbox maps a list row to its track: through the sort order, when the row is in it.
+        const int index = row < ordered && order ? order[row] : 0;
+        const void *track = track_data && index >= 0 && index < stored ? track_data[index] : nullptr;
+        BrowseRow &out = b.rows_[count];
+        out.id = track ? field<uint32_t>(track, 0x8) : 0;
+        const char *path = track ? field<const char *>(track, 0xa8) : nullptr;
+        snprintf(out.path, sizeof out.path, "%s", path ? path : "");
+    }
+    b.rows = rows; b.cursor = cursor; b.first = first; b.count = count;
 }
 
 bool known_device(int64_t handle) {
@@ -405,6 +476,7 @@ void tick() {
     shared->status = players > 0 ? kStatusLive : kStatusStarting;
     shared->master = players > 0 ? api.master(dj) : -1;
     if (ticks % 200 == 1) read_devices();
+    if (ticks % 5 == 0) read_browser(ticks % 10 == 0);
     shared->deck_count = static_cast<uint32_t>(players < 0 ? 0 : players > int(kBridgeDecks) ? int(kBridgeDecks) : players);
     for (uint32_t ch = 0; ch < shared->deck_count; ++ch) {
         BridgeDeck &deck = shared->decks[ch];

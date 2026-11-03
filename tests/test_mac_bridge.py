@@ -178,3 +178,40 @@ class LoadFlowTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BrowserMirrorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_rekordbox_browser_is_read_with_its_cursor(self):
+        buffer = state()
+        mb.BROWSER.pack_into(buffer, mb.BROWSER_AT, 120, 41, 25, 2, 0, b'Playlists/Gigs/Friday')
+        for i, (ident, path) in enumerate(((7, b'/Volumes/GIG/Contents/a.mp3'), (8, b'/Music/b.m4a'))):
+            mb.ROW.pack_into(buffer, mb.BROWSER_AT + mb.BROWSER.size + i * mb.ROW.size, ident, path)
+        browser = mb.parse(buffer).browser
+        self.assertEqual((browser.rows, browser.cursor, browser.first, browser.focus), (120, 41, 25, 'list'))
+        self.assertEqual(browser.tracks, ((7, '/Volumes/GIG/Contents/a.mp3'), (8, '/Music/b.m4a')))
+
+    def test_linked_view_follows_the_cursor_and_loads_from_the_right_library(self):
+        from rb_waveform_core.qt_browser import BrowserPage
+        from rb_waveform_core.catalog import CatalogTrack
+        with patch('rb_waveform_core.qt_browser.sources', return_value=[('Collection', '')]), \
+                patch('rb_waveform_core.qt_browser.browse', return_value=(0, [])):
+            page = BrowserPage()
+        page.known = {'/Volumes/GIG/Contents/a.mp3': CatalogTrack('7', 'Stick', 'A', 128, '8A', 200, '/Volumes/GIG/Contents/a.mp3'),
+                      '/Music/b.m4a': CatalogTrack('8', 'Home', 'B', 124, '9A', 210, '/Music/b.m4a')}
+        browser = mb.Browser(2, 1, 0, 'list', 'Playlists/Gigs', ((7, '/Volumes/GIG/Contents/a.mp3'), (8, '/Music/b.m4a')))
+        page.mirror(browser, ['/Volumes/GIG'])
+        self.assertEqual(page.selected_track().title, 'Home')       # Rekordbox's cursor row
+        self.assertIn('Gigs', page.heading.text())
+        loads = []
+        page.loadRequested.connect(lambda deck, track, source: loads.append((deck, track.path, source)))
+        page.table.selectRow(0)
+        page.load(0)
+        self.assertEqual(loads, [(0, '/Contents/a.mp3', '/Volumes/GIG/PIONEER/rekordbox/exportLibrary.db')])
+        self.assertTrue(page.go_back())                              # BACK leaves the mirror for Wave's own lists
+        self.assertNotEqual(page.view, ('rekordbox',))
+        page.shutdown()

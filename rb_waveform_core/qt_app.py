@@ -599,6 +599,13 @@ class MainWindow(QMainWindow):
         self.deck_watch = QTimer(self)
         self.deck_watch.timeout.connect(self.sync_load_targets)
         self.deck_watch.start(250)
+        # Follows Rekordbox's own browser as the controller's knob moves it, as the AZ's screen does.
+        self.mirrored = None
+        self.mirror_opened = False
+        self.mirror_moved = 0.0
+        self.browse_watch = QTimer(self)
+        self.browse_watch.timeout.connect(self.follow_rekordbox_browser)
+        self.browse_watch.start(50)
         self.layout.addWidget(self.pages, 1)
         if sys.platform == 'darwin':
             self.display_link = DisplayLinkRepaint(self.canvas)
@@ -648,6 +655,31 @@ class MainWindow(QMainWindow):
             interval = max(1, round(1000 / hz))
         if not self.display_link and self.session.timer.interval() != interval:
             self.session.timer.setInterval(interval)
+
+    def follow_rekordbox_browser(self):
+        reader = self.session.reader
+        browser = getattr(reader, 'browser', None) if reader and getattr(reader, 'bridged', False) else None
+        now = time.monotonic()
+        if browser is None:
+            self.mirrored = None
+            return
+        key = (browser.rows, browser.cursor, browser.first, browser.focus, browser.tree_path,
+               tuple(ident for ident, _ in browser.tracks))
+        if key != self.mirrored:
+            first_look = self.mirrored is None
+            self.mirrored = key
+            if not first_look:  # the knob moved: show it, opening the browser if it was closed
+                self.mirror_moved = now
+                if self.pages.currentWidget() is not self.browser_page:
+                    self.toggle_browser()
+                    self.mirror_opened = True
+            if self.pages.currentWidget() is self.browser_page and (not first_look or self.browser_page.view == ('rekordbox',)):
+                self.browser_page.mirror(browser, [root for _, root in getattr(reader, 'devices', ())])
+        elif self.mirror_opened and now - self.mirror_moved > 10:
+            # Opened by the knob and left alone: back to the waveforms, as after a load on the AZ.
+            self.mirror_opened = False
+            if self.pages.currentWidget() is self.browser_page and self.browser_page.view == ('rekordbox',):
+                self.toggle_browser()
 
     def sync_load_targets(self):
         reader = self.session.reader
@@ -1212,6 +1244,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.screen_check.stop()
         self.deck_watch.stop()
+        self.browse_watch.stop()
         self.browser_page.shutdown()
         self.persist()
         self.session.close()

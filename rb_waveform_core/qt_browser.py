@@ -2,6 +2,7 @@
 bar and search across the top, drill-down lists and tracks in the middle, and a load bar below.
 Queries run on one worker so the waveforms never wait for the library."""
 from collections import OrderedDict
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPainterPath
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QAbstractButton, QLineEdit, QLabel, QTableView,
     QListView, QHeaderView, QAbstractItemView, QScroller, QStackedWidget, QStyledItemDelegate, QFrame, QGridLayout, QStyle)
 
-from .catalog import SORTS, ORDER, sources, source_stats, categories, browse
+from .catalog import SORTS, ORDER, CatalogTrack, sources, source_stats, categories, browse, tracks_for_paths
 
 BLUE = '#1a79eb'
 PAGE = 200
@@ -544,6 +545,10 @@ class BrowserPage(QWidget):
         self.deck_order = None
         self.unavailable = ''
         self.locked = {}
+        self.linked = None           # Rekordbox's own browser while it is shown here
+        self.known = {}              # file -> CatalogTrack, for the rows Rekordbox lists
+        self.resolving = False
+        self.device_roots = ()
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -763,6 +768,9 @@ class BrowserPage(QWidget):
 
     def go_back(self):
         """One level up; False at a category's root, where BACK leaves the browser."""
+        if self.view == ('rekordbox',):
+            self.open_category('PLAYLIST')
+            return True
         if self.trail:
             title, view = self.trail.pop()
             self.navigate(view, title)
@@ -818,7 +826,7 @@ class BrowserPage(QWidget):
 
     def sort_by(self, column):
         field = TrackModel.SORT_FOR.get(column)
-        if not field:
+        if not field or self.view[0] != 'tracks':  # Rekordbox's own list keeps Rekordbox's order
             return
         self.sort = (field, not self.sort[1] if self.sort[0] == field else False)
         self.table.horizontalHeader().setSortIndicatorShown(True)
@@ -858,6 +866,8 @@ class BrowserPage(QWidget):
         if self.running_revision != self.revision:
             self.start_query()
             return
+        if self.view[0] != 'tracks':
+            return  # the view moved on (to Rekordbox's own list) while this query ran
         try:
             total, tracks = future.result()
         except Exception as exc:
@@ -872,6 +882,53 @@ class BrowserPage(QWidget):
         self.appending = False
         if self.message.text() in ('Searching…', 'Opening…') or not self.message.text() or self.view[0] == 'tracks':
             self.message.setText(f'{total:,} tracks' if total else 'No matching tracks')
+
+    # Rekordbox's own browser ------------------------------------------------------------------------
+    def mirror(self, browser, device_roots=()):
+        """Show Rekordbox's list and cursor as its controller moves them; its LOAD buttons load it."""
+        self.device_roots = tuple(device_roots)
+        if self.view != ('rekordbox',):
+            self.trail = []
+            self.kind = ''
+            self.view, self.title = ('rekordbox',), 'REKORDBOX'
+            self.stack.setCurrentWidget(self.table)
+            self.table.horizontalHeader().setSortIndicatorShown(False)
+        self.linked = browser
+        crumbs = [part for part in browser.tree_path.replace('\\', '/').split('/') if part]
+        self.heading.setText('  ›  '.join(['REKORDBOX'] + crumbs[-3:]))
+        self.back.setEnabled(True)
+        for tile in self.tiles.values():
+            tile.set_on(False)
+        paths = [path for _, path in browser.tracks]
+        missing = [path for path in paths if path not in self.known]
+        if missing and not self.resolving:
+            self.resolving = True
+            self.run(tracks_for_paths, self.resolved, missing)
+        rows = [self.known.get(path) or CatalogTrack('', Path(path).stem if path else '…', '', 0.0, '', 0.0, path)
+                for path in paths]
+        self.model.replace(rows, len(rows))
+        row = browser.cursor - browser.first
+        if 0 <= row < len(rows):
+            self.table.selectRow(row)
+            self.table.scrollTo(self.model.index(row, 1), QAbstractItemView.ScrollHint.PositionAtCenter)
+        if browser.focus == 'tree':
+            self.message.setText('Turn the knob to pick a playlist, press it to open; BACK goes up a level.')
+        elif browser.rows >= 0:
+            self.message.setText(f'{browser.cursor + 1:,} of {browser.rows:,} · LOAD on the controller, or tap a deck below'
+                                 if browser.cursor >= 0 else f'{browser.rows:,} tracks')
+
+    def resolved(self, found):
+        self.resolving = False
+        self.known.update(found)
+        if self.linked is not None and self.view == ('rekordbox',):
+            self.mirror(self.linked, self.device_roots)
+
+    def source_for(self, track):
+        """The export a mirrored row's file belongs to: '' for the collection."""
+        for root in self.device_roots:
+            if root and Path(track.path).as_posix().casefold().startswith(Path(root).as_posix().casefold().rstrip('/') + '/'):
+                return str(Path(root) / 'PIONEER' / 'rekordbox' / 'exportLibrary.db')
+        return ''
 
     # Loading ------------------------------------------------------------------------------------
     def selected_track(self):
@@ -888,6 +945,11 @@ class BrowserPage(QWidget):
             self.message.setText('Tap a track first.')
         elif self.locked.get(idx):
             self.message.setText(self.locked[idx])
+        elif self.view == ('rekordbox',):
+            source = self.source_for(track)
+            # A stick's export stores paths from its root; the mirror has the mounted file.
+            relative = '/' + Path(track.path).relative_to(Path(source).parents[2]).as_posix() if source else track.path
+            self.loadRequested.emit(idx, replace(track, path=relative), source)
         else:
             self.loadRequested.emit(idx, track, self.source_path)
 

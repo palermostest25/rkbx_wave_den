@@ -24,24 +24,27 @@ from .rkbx_link_listener import DeckState
 
 APP = Path('/Applications/rekordbox 7/rekordbox.app')
 EXECUTABLE = APP/'Contents'/'MacOS'/'rekordbox'
-MAGIC, VERSION = b'RKWBRDG1', 4
+MAGIC, VERSION = b'RKWBRDG1', 5
 HEADER = struct.Struct('<8sIIIIIiQQ128s')
 DECK = struct.Struct('<IidfffIqqii1024s')
 COMMAND = struct.Struct('<IIIIQq')        # all but the trailing check
 REPLY = struct.Struct('<Ii120s')
 DEVICE = struct.Struct('<q248s')
+BROWSER = struct.Struct('<iiiiI12x512s')
+ROW = struct.Struct('<I4x256s')
 DECKS_AT = HEADER.size
 COMMAND_AT = DECKS_AT + 4*DECK.size
 REPLY_AT = COMMAND_AT + COMMAND.size + 8
 DEVICES_AT = REPLY_AT + REPLY.size
-SIZE = DEVICES_AT + 4*DEVICE.size
+BROWSER_AT = DEVICES_AT + 4*DEVICE.size
+SIZE = BROWSER_AT + BROWSER.size + 64*ROW.size
 STARTING, LIVE, UNSUPPORTED, FAILED = range(4)
 LOADED, PLAYING, LOOPING, MASTER_TEMPO, SYNC, SLIP, KEY_SYNC = 1, 2, 4, 8, 16, 32, 64
 LOAD, MASTER_TEMPO_SET, LOAD_DEVICE = 1, 2, 3
 # Rekordbox keeps the tempo range as its percentage; 100 is WIDE. Checked against its own deck labels.
 TEMPO_RANGES = {6: '±6', 10: '±10', 16: '±16', 100: 'WIDE'}
 REQUESTED = 1
-assert (HEADER.size, DECK.size, SIZE) == (176, 1080, 5688)
+assert (HEADER.size, DECK.size, BROWSER.size, ROW.size, SIZE) == (176, 1080, 544, 264, 23128)
 
 
 def bridge_dir():
@@ -79,6 +82,21 @@ class BridgeDeck:
 
 
 @dataclass(frozen=True)
+class Browser:
+    """Rekordbox's own browser, as its controller moves through it."""
+    rows: int                 # rows in its track list, -1 for none
+    cursor: int               # the row its cursor is on, -1 for none
+    first: int                # the list row ``tracks[0]`` is
+    focus: str                # 'list', 'tree' or ''
+    tree_path: str            # where the tree's cursor is
+    tracks: tuple             # (id, file path) of the rows around the cursor
+
+
+def text(raw):
+    return raw.split(b'\0', 1)[0].decode('utf-8', 'replace')
+
+
+@dataclass(frozen=True)
 class Snapshot:
     pid: int
     status: int
@@ -87,6 +105,7 @@ class Snapshot:
     uptime_ns: int
     decks: tuple
     devices: tuple = ()       # (handle, root path) of each mounted stick
+    browser: Browser | None = None
 
 
 def parse(buffer):
@@ -115,7 +134,11 @@ def parse(buffer):
         devices = tuple((handle, root.split(b'\0', 1)[0].decode('utf-8', 'replace'))
                         for handle, root in (DEVICE.unpack_from(buffer, DEVICES_AT + i*DEVICE.size) for i in range(4)) if handle)
         if HEADER.unpack_from(buffer, 0)[2] == seq:
-            return Snapshot(pid, status, note.split(b'\0', 1)[0].decode('utf-8', 'replace'), ticks, beat, tuple(decks), devices)
+            rows, cursor, first, count, focus, tree = BROWSER.unpack_from(buffer, BROWSER_AT)
+            browser = Browser(rows, cursor, first, ('list', 'tree', '')[min(focus, 2)], text(tree),
+                              tuple((ident, text(path)) for ident, path in
+                                    (ROW.unpack_from(buffer, BROWSER_AT + BROWSER.size + i*ROW.size) for i in range(min(count, 64)))))
+            return Snapshot(pid, status, text(note), ticks, beat, tuple(decks), devices, browser)
     return None
 
 
@@ -273,6 +296,7 @@ class RekordboxBridgeReader:
         self.deck_paths = {}  # deck -> audio file Rekordbox's engine has loaded, while bridged
         self.deck_status = {}  # deck -> BridgeDeck: master, sync, key lock... while bridged
         self.devices = ()      # (handle, root) of the sticks Rekordbox has mounted
+        self.browser = None    # Rekordbox's own browser, while bridged
         self._fallback_factory = fallback
         self._fallback = None
         self._queue = Queue()
@@ -378,6 +402,7 @@ class RekordboxBridgeReader:
                         self.bridged = False
                         self.deck_paths = {}
                         self.deck_status = {}
+                        self.browser = None
                         if pid and snapshot and snapshot.pid == pid and snapshot.status in (UNSUPPORTED, FAILED):
                             reason = snapshot.note
                         elif pid and snapshot and snapshot.pid == pid:
@@ -407,6 +432,7 @@ class RekordboxBridgeReader:
                     last_tick = snapshot.ticks
                     self.deck_status = dict(enumerate(snapshot.decks))
                     self.devices = snapshot.devices
+                    self.browser = snapshot.browser
                     # Rekordbox's tick, not this read, is when the values were true.
                     when = time.time() - max(0, uptime_ns() - snapshot.uptime_ns)/1e9
                     for idx, deck in enumerate(snapshot.decks[:self.deck_count]):

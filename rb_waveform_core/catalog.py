@@ -115,6 +115,23 @@ def _open(source):
     return library, Schema(library, bool(source))
 
 
+def tracks_for_paths(paths):
+    """Rows for files Rekordbox lists, from the collection or a mounted stick; a file in
+    neither still gets a row, named by its file."""
+    from .library import Libraries
+    libraries = Libraries()
+    try:
+        found = {}
+        for path in paths:
+            track = libraries.resolve_path(path) if path else None
+            found[path] = CatalogTrack(track.identifier, track.title, track.artist, track.bpm, track.key, float(track.length),
+                                       path, str(track.artwork) if track.artwork else '') if track else \
+                CatalogTrack('', Path(path).stem if path else '—', '', 0.0, '', 0.0, path)
+        return found
+    finally:
+        libraries.close()
+
+
 def sources():
     return [('Collection', '')] + [(p.parents[2].name, str(p)) for p in device_library_paths()]
 

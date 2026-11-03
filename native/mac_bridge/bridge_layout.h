@@ -9,10 +9,11 @@
 #endif
 
 constexpr char kBridgeMagic[8] = {'R', 'K', 'W', 'B', 'R', 'D', 'G', '1'};
-constexpr uint32_t kBridgeVersion = 4;
+constexpr uint32_t kBridgeVersion = 5;
 constexpr const char *kBridgeStateFile = "state.bin";
 constexpr uint32_t kBridgeDecks = 4;
 constexpr uint32_t kBridgeDevices = 4;
+constexpr uint32_t kBrowseRows = 64;
 
 enum : uint32_t { kStatusStarting = 0, kStatusLive = 1, kStatusUnsupported = 2, kStatusFailed = 3 };
 enum : uint32_t { kDeckLoaded = 1, kDeckPlaying = 2, kDeckLooping = 4, kDeckMasterTempo = 8, kDeckSync = 16,
@@ -58,6 +59,23 @@ struct BridgeReply {           // written by the bridge; seq = the command it an
     char message[120];
 };
 
+struct BrowseRow {             // one row of Rekordbox's track list
+    uint32_t id;               // the track's id in its library
+    uint32_t reserved;
+    char path[256];            // its file: tells the collection from a stick
+};
+
+struct BridgeBrowser {         // Rekordbox's own browser, as its controller moves through it
+    int32_t rows;              // rows in the track list, -1 while there is none
+    int32_t cursor;            // the row its cursor is on, -1 for none
+    int32_t first;             // the list row rows[0] shows
+    int32_t count;             // rows[] filled
+    uint32_t focus;            // 0 track list, 1 playlist tree, 2 neither
+    uint32_t reserved[3];
+    char tree_path[512];       // where the tree's cursor is, as Rekordbox names it
+    BrowseRow rows_[kBrowseRows];
+};
+
 struct BridgeState {           // seqlock: odd while the bridge writes
     char magic[8];
     uint32_t version;
@@ -73,10 +91,13 @@ struct BridgeState {           // seqlock: odd while the bridge writes
     BridgeCommand command;
     BridgeReply reply;
     BridgeDevice devices[kBridgeDevices];
+    BridgeBrowser browser;
 };
 
 static_assert(sizeof(BridgeDeck) == 1080, "layout");
 static_assert(sizeof(BridgeCommand) == 40, "layout");
 static_assert(sizeof(BridgeReply) == 128, "layout");
 static_assert(sizeof(BridgeDevice) == 256, "layout");
-static_assert(sizeof(BridgeState) == 176 + 4 * 1080 + 40 + 128 + 4 * 256, "layout");
+static_assert(sizeof(BrowseRow) == 264, "layout");
+static_assert(sizeof(BridgeBrowser) == 32 + 512 + 64 * 264, "layout");
+static_assert(sizeof(BridgeState) == 176 + 4 * 1080 + 40 + 128 + 4 * 256 + 32 + 512 + 64 * 264, "layout");
