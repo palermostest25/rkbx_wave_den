@@ -133,3 +133,28 @@ class ReadOnlyLibraryTests(unittest.TestCase):
         self.assertEqual(self.db.resolve('Reimport', 'Example', 197.3).identifier, '4')
         self.assertEqual(self.db.resolve('Reimport', '  example ').identifier, '4')
 
+
+
+class BandGainTests(unittest.TestCase):
+    def folder_with(self, gains):
+        import struct
+        folder = tempfile.TemporaryDirectory()
+        tag = b'PWVC' + struct.pack('>II', 14, 20) + b'\0\0' + struct.pack('>HHH', *gains) if gains else b''
+        (Path(folder.name) / 'ANLZ0000.2EX').write_bytes(b'PMAI' + struct.pack('>II', 28, 28 + len(tag)) + bytes(16) + tag)
+        return folder
+
+    def test_each_band_is_put_back_on_rekordbox_scale(self):
+        from rb_waveform_core.ANLZ import band_gains, UNSCALED_BAND_GAINS
+        with self.folder_with((80, 100, 125)) as folder:
+            self.assertEqual(band_gains(folder), (1.25, 1.0, 0.8))   # the analyser's gain divided back out
+        with self.folder_with((100, 100, 100)) as folder:
+            self.assertEqual(band_gains(folder), UNSCALED_BAND_GAINS)
+        with self.folder_with(None) as folder:
+            self.assertEqual(band_gains(folder), (1.0, 1.0, 1.0))
+
+    def test_gain_applies_before_the_clip(self):
+        import numpy as np
+        from rb_waveform_core.analysis import analysis_from_rb_waveform
+        a = analysis_from_rb_waveform(np.array([[120, 50, 100]]), 1, gains=(.5, 1, 1))
+        self.assertAlmostEqual(float(a.low[0]), .6)  # 120 would have clipped to 1.0 first
+        self.assertEqual(float(a.high[0]), 1.0)

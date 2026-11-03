@@ -301,19 +301,24 @@ def _raw_beat_grid(path) -> Optional[list[BeatGridEntry]]:
             for beat, tempo, ms in (struct.unpack_from('>HHI', body, 8 * i) for i in range(count))] or None
 
 
-# Files whose PWVC is 100/100/100 store hotter 3-band heights than the rest (the high band ~5x),
-# measured against each file's own PWV5 colour waveform across a 4,300-track library. These
-# per-band factors bring them to the scale rekordbox draws every other file at.
-UNSCALED_BAND_GAINS = (0.85, 0.76, 0.19)
+# PWVC holds the gain (percent) rekordbox's analyser gave each band of PWV7; dividing it back out
+# gives every track one scale, as rekordbox draws them. Files with 100/100/100 carry no gain and store
+# hotter heights: measured against each file's own PWV5 waveform over a 4,300-track library, these
+# factors bring them to that same scale.
+UNSCALED_BAND_GAINS = (0.99, 0.69, 0.16)
 
 
 def band_gains(folder: Path | str) -> tuple:
-    """Per-band factors for this folder's 3-band waveform: (1, 1, 1) unless it is unscaled."""
+    """Per-band factors that put this folder's 3-band waveform on rekordbox's common scale."""
     import struct
     for path in sorted(Path(folder).glob('*.2EX')):
         tag = _raw_tag(path, b'PWVC')
-        if tag and len(tag[1]) >= 6 and struct.unpack_from('>HHH', tag[1], len(tag[1]) - 6) == (100, 100, 100):
-            return UNSCALED_BAND_GAINS
+        if tag and len(tag[1]) >= 6:
+            gains = struct.unpack_from('>HHH', tag[1], len(tag[1]) - 6)
+            if gains == (100, 100, 100):
+                return UNSCALED_BAND_GAINS
+            if all(gains):
+                return tuple(100 / g for g in gains)
     return (1.0, 1.0, 1.0)
 
 

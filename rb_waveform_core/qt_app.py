@@ -128,9 +128,12 @@ class Session(QObject):
             self.set_status('DEMO · synthetic analysis')
         else:
             self.connect_source()
-            from .midi_loops import MidiLoopListener
-            self.midi = MidiLoopListener()
-            self.midi.start()
+            if sys.platform == 'darwin':
+                # Only for SHIFT+BROWSE zoom. CoreMIDI shares a controller between apps; Windows MIDI
+                # gives a port to one app, and taking the FLX10 from Rekordbox would stop its decks.
+                from .midi_loops import MidiLoopListener
+                self.midi = MidiLoopListener()
+                self.midi.start()
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.timer.timeout.connect(self.tick)
@@ -260,8 +263,11 @@ class Session(QObject):
                 from .rb_memory_reader import RekordboxMemoryReader
                 self.reader = RekordboxMemoryReader(deck_count=4)
             elif sys.platform == 'darwin':
-                from .mac_bridge import RekordboxBridgeReader
+                from .mac_bridge import RekordboxBridgeReader, launch, rekordbox_pid
                 self.reader = RekordboxBridgeReader(deck_count=4)
+                # Rekordbox is the engine behind Wave: start it, out of sight, when it isn't running.
+                if self.view.get('start_rekordbox', True) and not rekordbox_pid():
+                    launch(hidden=self.view.get('hide_rekordbox', True))
             else:
                 raise RuntimeError('Native Rekordbox connection requires Windows or macOS')
             self.reader.start()

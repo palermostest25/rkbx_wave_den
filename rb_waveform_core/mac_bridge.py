@@ -194,15 +194,21 @@ def install(source=None):
     return config
 
 
-def launch():
-    """Start Rekordbox with the bridge. Never touches a Rekordbox that is already running."""
+def launch(hidden=False):
+    """Start Rekordbox with the bridge, hidden behind Wave if asked. Never touches a Rekordbox
+    that is already running."""
     if rekordbox_pid():
         raise RuntimeError('Quit Rekordbox first; Wave then starts it with the bridge')
     if not APP.is_dir():
         raise RuntimeError(f'Rekordbox was not found at {APP}')
     config = install()
-    subprocess.run(['/usr/bin/open', '-a', str(APP), '--env', f'OPENSSL_CONF={config}',
-                    '--env', 'RKBX_WAVE_BRIDGE=1'], check=True, timeout=15)
+    subprocess.run(['/usr/bin/open', *(('-g', '-j') if hidden else ()), '-a', str(APP),
+                    '--env', f'OPENSSL_CONF={config}', '--env', 'RKBX_WAVE_BRIDGE=1'], check=True, timeout=15)
+
+
+def show():
+    """Bring a hidden Rekordbox to the front, for its own screens and preferences."""
+    subprocess.run(['/usr/bin/open', '-a', str(APP)], check=True, timeout=15)
 
 
 def live(snapshot, pid, now=None):

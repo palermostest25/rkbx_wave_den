@@ -88,12 +88,9 @@ class DeckController:
 
         self.resolved_audio_path = resolve_audio_path(info.song_path, folder, self.library_root)
 
-        self.analysis = analysis_from_rb_waveform(self.cached_waveform, self.cached_duration, style=info.waveform_style)
-        if info.waveform_style == "three_band":
-            gains = band_gains(folder)
-            if gains != (1.0, 1.0, 1.0):
-                self.analysis = replace(self.analysis, low=self.analysis.low * gains[0],
-                                        mid=self.analysis.mid * gains[1], high=self.analysis.high * gains[2])
+        self.analysis = analysis_from_rb_waveform(
+            self.cached_waveform, self.cached_duration, style=info.waveform_style,
+            gains=band_gains(folder) if info.waveform_style == "three_band" else (1.0, 1.0, 1.0))
 
         self.beat_grid_full = extract_beat_grid(folder)
         self.beat_grid_downbeats = _downbeats_only(self.beat_grid_full)
