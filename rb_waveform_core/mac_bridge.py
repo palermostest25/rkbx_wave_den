@@ -24,20 +24,24 @@ from .rkbx_link_listener import DeckState
 
 APP = Path('/Applications/rekordbox 7/rekordbox.app')
 EXECUTABLE = APP/'Contents'/'MacOS'/'rekordbox'
-MAGIC, VERSION = b'RKWBRDG1', 3
+MAGIC, VERSION = b'RKWBRDG1', 4
 HEADER = struct.Struct('<8sIIIIIiQQ128s')
-DECK = struct.Struct('<IidfffIqqiI1024s')
-COMMAND = struct.Struct('<IIIIQII')       # all but the trailing check
+DECK = struct.Struct('<IidfffIqqii1024s')
+COMMAND = struct.Struct('<IIIIQq')        # all but the trailing check
 REPLY = struct.Struct('<Ii120s')
+DEVICE = struct.Struct('<q248s')
 DECKS_AT = HEADER.size
 COMMAND_AT = DECKS_AT + 4*DECK.size
 REPLY_AT = COMMAND_AT + COMMAND.size + 8
-SIZE = REPLY_AT + REPLY.size
+DEVICES_AT = REPLY_AT + REPLY.size
+SIZE = DEVICES_AT + 4*DEVICE.size
 STARTING, LIVE, UNSUPPORTED, FAILED = range(4)
 LOADED, PLAYING, LOOPING, MASTER_TEMPO, SYNC, SLIP, KEY_SYNC = 1, 2, 4, 8, 16, 32, 64
-LOAD = 1
+LOAD, MASTER_TEMPO_SET, LOAD_DEVICE = 1, 2, 3
+# Rekordbox's tempo range setting, by the number it keeps for it.
+TEMPO_RANGES = {0: '±6', 1: '±10', 2: '±16', 3: 'WIDE'}
 REQUESTED = 1
-assert (HEADER.size, DECK.size, SIZE) == (176, 1080, 4664)
+assert (HEADER.size, DECK.size, SIZE) == (176, 1080, 5688)
 
 
 def bridge_dir():
@@ -71,6 +75,7 @@ class BridgeDeck:
     slip: bool = False
     key_sync: bool = False
     key_shift: int = 0        # semitones
+    tempo_range: int = -1     # Rekordbox's setting number; TEMPO_RANGES names it
 
 
 @dataclass(frozen=True)
@@ -81,6 +86,7 @@ class Snapshot:
     ticks: int
     uptime_ns: int
     decks: tuple
+    devices: tuple = ()       # (handle, root path) of each mounted stick
 
 
 def parse(buffer):
@@ -99,16 +105,18 @@ def parse(buffer):
             continue
         decks = []
         for index in range(min(count, 4)):
-            flags, total, position, bpm, original, _, _, loop_in, loop_out, shift, _, path = \
+            flags, total, position, bpm, original, _, _, loop_in, loop_out, shift, tempo_range, path = \
                 DECK.unpack_from(buffer, DECKS_AT + index*DECK.size)
             loaded = bool(flags & LOADED)
             decks.append(BridgeDeck(loaded, bool(flags & PLAYING), position/1000, total/1000, bpm/100, original/100,
                 (loop_in/1000, loop_out/1000) if flags & LOOPING else None,
                 path.split(b'\0', 1)[0].decode('utf-8', 'replace') if loaded else '',
                 loaded and master == index, bool(flags & MASTER_TEMPO), bool(flags & SYNC), bool(flags & SLIP),
-                bool(flags & KEY_SYNC), shift if loaded else 0))
+                bool(flags & KEY_SYNC), shift if loaded else 0, tempo_range if loaded else -1))
+        devices = tuple((handle, root.split(b'\0', 1)[0].decode('utf-8', 'replace'))
+                        for handle, root in (DEVICE.unpack_from(buffer, DEVICES_AT + i*DEVICE.size) for i in range(4)) if handle)
         if HEADER.unpack_from(buffer, 0)[2] == seq:
-            return Snapshot(pid, status, note.split(b'\0', 1)[0].decode('utf-8', 'replace'), ticks, beat, tuple(decks))
+            return Snapshot(pid, status, note.split(b'\0', 1)[0].decode('utf-8', 'replace'), ticks, beat, tuple(decks), devices)
     return None
 
 
@@ -135,17 +143,25 @@ class Bridge:
     def snapshot(self):
         return parse(self.map)
 
-    def request_load(self, deck, content_id, timeout=2.5):
-        """Ask Rekordbox to load collection track ``content_id`` on 0-based ``deck``.
-        Returns (accepted, message). Acceptance means Rekordbox took the request; the deck
-        state confirms the load."""
+    def request_load(self, deck, content_id, device=0, timeout=2.5):
+        """Ask Rekordbox to load track ``content_id`` on 0-based ``deck``: from the collection, or
+        from the mounted stick with handle ``device``. Returns (accepted, message). Acceptance means
+        Rekordbox took the request; the deck state confirms the load."""
         content_id = int(content_id)
-        if not 0 <= content_id <= 0xffffffff or not 0 <= deck < 4:
-            return False, 'Not a Rekordbox collection track'
+        if not 0 <= content_id <= 0xffffffff:
+            return False, 'Not a Rekordbox track'
+        return self.request(LOAD_DEVICE if device else LOAD, deck, content_id, device, timeout)
+
+    def set_master_tempo(self, deck, on, timeout=2.5):
+        return self.request(MASTER_TEMPO_SET, deck, int(bool(on)), 0, timeout)
+
+    def request(self, kind, deck, value, device=0, timeout=2.5):
+        if not 0 <= deck < 4:
+            return False, 'No such deck'
         with self.lock:
             seq = (struct.unpack_from('<I', self.map, COMMAND_AT)[0] + 1) & 0xffffffff or 1
-            body = COMMAND.pack(seq, LOAD, deck, content_id, uptime_ns(), 0, 0)
-            self.map[COMMAND_AT:COMMAND_AT + COMMAND.size + 8] = body + struct.pack('<Q', fnv(body[:28]))
+            body = COMMAND.pack(seq, kind, deck, value, uptime_ns(), device)
+            self.map[COMMAND_AT:COMMAND_AT + COMMAND.size + 8] = body + struct.pack('<Q', fnv(body))
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 answered, result, message = REPLY.unpack_from(self.map, REPLY_AT)
@@ -231,6 +247,7 @@ class RekordboxBridgeReader:
         self.bridge = None
         self.deck_paths = {}  # deck -> audio file Rekordbox's engine has loaded, while bridged
         self.deck_status = {}  # deck -> BridgeDeck: master, sync, key lock... while bridged
+        self.devices = ()      # (handle, root) of the sticks Rekordbox has mounted
         self._fallback_factory = fallback
         self._fallback = None
         self._queue = Queue()
@@ -258,11 +275,24 @@ class RekordboxBridgeReader:
             pass
         return self._fallback.get_event(timeout=0) if self._fallback else None
 
-    def load(self, deck, content_id):
+    def load(self, deck, content_id, device_root=None):
+        """Load a collection track, or with ``device_root`` (the stick's mount point) a track on that stick."""
         bridge = self.bridge
         if not (bridge and self.bridged):
             return False, self.RELAUNCH
-        return bridge.request_load(deck, content_id)
+        handle = 0
+        if device_root:
+            wanted = Path(device_root).as_posix().rstrip('/').casefold()
+            handle = next((h for h, root in self.devices if Path(root).as_posix().rstrip('/').casefold() == wanted), 0)
+            if not handle:
+                return False, 'Rekordbox has not mounted that USB stick yet'
+        return bridge.request_load(deck, content_id, handle)
+
+    def set_master_tempo(self, deck, on):
+        bridge = self.bridge
+        if not (bridge and self.bridged):
+            return False, self.RELAUNCH
+        return bridge.set_master_tempo(deck, on)
 
     def _start_fallback(self):
         if self._fallback is None:
@@ -346,6 +376,7 @@ class RekordboxBridgeReader:
                         continue
                     last_tick = snapshot.ticks
                     self.deck_status = dict(enumerate(snapshot.decks))
+                    self.devices = snapshot.devices
                     # Rekordbox's tick, not this read, is when the values were true.
                     when = time.time() - max(0, uptime_ns() - snapshot.uptime_ns)/1e9
                     for idx, deck in enumerate(snapshot.decks[:self.deck_count]):

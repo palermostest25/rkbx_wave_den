@@ -520,7 +520,7 @@ class LoadBar(QFrame):
 
 
 class BrowserPage(QWidget):
-    loadRequested = Signal(int, object)  # deck index, CatalogTrack
+    loadRequested = Signal(int, object, str)  # deck index, CatalogTrack, its source ('' for the collection)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -886,13 +886,10 @@ class BrowserPage(QWidget):
         track = self.selected_track()
         if track is None:
             self.message.setText('Tap a track first.')
-        elif self.source_path:
-            self.message.setText('Loading straight from a USB stick is not supported yet: '
-                                 'load it with the controller, or pick it from the Collection.')
         elif self.locked.get(idx):
             self.message.setText(self.locked[idx])
         else:
-            self.loadRequested.emit(idx, track)
+            self.loadRequested.emit(idx, track, self.source_path)
 
     def set_decks(self, order, locked, unavailable='', loaded=None):
         """LOAD buttons in physical deck order; ``locked`` maps a deck to why it can't load;

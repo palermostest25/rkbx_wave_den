@@ -17,7 +17,7 @@ def state(seq=2, version=mb.VERSION, status=mb.LIVE, master=1, decks=()):
     mb.HEADER.pack_into(buffer, 0, mb.MAGIC, version, seq, 4242, status, len(decks), master, 7, 123, b'note')
     for index, (flags, position, loop, path) in enumerate(decks):
         mb.DECK.pack_into(buffer, mb.DECKS_AT + index * mb.DECK.size, flags, 300_000, position, 12800.0, 12500.0,
-                          2.4, 1, *(loop or (-1, -1)), 2, 0, path.encode())
+                          2.4, 1, *(loop or (-1, -1)), 2, 0, path.encode())  # key shift 2, tempo range 0
     return buffer
 
 
@@ -33,6 +33,13 @@ class BridgeLayoutTests(unittest.TestCase):
         self.assertTrue(first.playing and first.sync and not first.master)
         self.assertTrue(second.master and second.master_tempo and second.loop is None)
         self.assertEqual((first.key_shift, first.path), (2, '/a.m4a'))
+
+    def test_mounted_sticks_and_tempo_range_are_read(self):
+        buffer = state(decks=[(mb.LOADED, 0.0, None, '/a.m4a')])
+        mb.DEVICE.pack_into(buffer, mb.DEVICES_AT + mb.DEVICE.size, 77, b'/Volumes/GIG')
+        snap = mb.parse(buffer)
+        self.assertEqual(snap.devices, ((77, '/Volumes/GIG'),))
+        self.assertEqual(snap.decks[0].tempo_range, 0)  # state() packs 0: rekordbox's +-6 slot
 
     def test_torn_read_is_retried_not_misread(self):
         self.assertIsNone(mb.parse(state(seq=3)))
@@ -60,8 +67,8 @@ class BridgeCommandTests(unittest.TestCase):
             def rekordbox():  # answer the way the bridge does, after checking the checksum
                 for _ in range(200):
                     command = bytes(bridge.map[mb.COMMAND_AT:mb.COMMAND_AT + 40])
-                    seq, kind, deck, content, issued, _, _ = mb.COMMAND.unpack_from(command)
-                    if seq and struct.unpack_from('<Q', command, 32)[0] == mb.fnv(command[:28]):
+                    seq, kind, deck, content, issued, device = mb.COMMAND.unpack_from(command)
+                    if seq and struct.unpack_from('<Q', command, 32)[0] == mb.fnv(command[:32]):
                         mb.REPLY.pack_into(bridge.map, mb.REPLY_AT, seq, mb.REQUESTED, f'deck {deck} {content}'.encode())
                         return
                     time.sleep(.005)
@@ -104,7 +111,7 @@ class LoadFlowTests(unittest.TestCase):
         from rb_waveform_core.qt_app import Session
         session = Session(demo=True, config_path=Path(directory) / 's.json')
         session.reader = SimpleNamespace(bridged=True, RELAUNCH='relaunch', deck_paths={},
-                                         load=lambda deck, ident: answer, stop=lambda: None)
+                                         load=lambda deck, ident, root=None: answer, stop=lambda: None)
         messages = []
         session.loadStatus.connect(messages.append)
         return session, messages
@@ -128,6 +135,20 @@ class LoadFlowTests(unittest.TestCase):
             session.reader.deck_paths = {1: '/music/still riding.m4a'}  # the engine, case aside
             self.wait(session, messages, 'Loaded')
             self.assertIn('Loaded Still Riding on deck 2', messages)
+            session.close()
+
+    def test_usb_track_is_confirmed_by_its_mounted_path(self):
+        from rb_waveform_core.catalog import CatalogTrack
+        with tempfile.TemporaryDirectory() as directory:
+            session, messages = self.session(directory)
+            asked = []
+            session.reader.load = lambda deck, ident, root=None: asked.append((deck, ident, root)) or (True, 'ok')
+            track = CatalogTrack('7', 'Stick Song', 'A', 128, '8A', 200, '/Contents/a/b.mp3')
+            self.assertTrue(session.load_track(2, track, '/Volumes/GIG/PIONEER/rekordbox/exportLibrary.db'))
+            session.reader.deck_paths = {2: '/Volumes/GIG/Contents/a/b.mp3'}
+            self.wait(session, messages, 'Loaded')
+            self.assertEqual(asked, [(2, 7, '/Volumes/GIG')])
+            self.assertIn('Loaded Stick Song on deck 3', messages)
             session.close()
 
     def test_playing_deck_and_refusals_never_reach_rekordbox(self):

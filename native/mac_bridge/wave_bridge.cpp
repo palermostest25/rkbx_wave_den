@@ -40,6 +40,7 @@ constexpr uint64_t kDatabaseHolder = 0x1056ceba8ULL; // db::DatabaseIF::singleto
 constexpr size_t kTrackSize = 0x4e0;                 // sizeof(db::RowDataTrack), from its operator new sites
 constexpr uint64_t kTrackBasicInfoSlot = 0xc8;       // vtable slot WikiBrowse::loadTrack calls
 constexpr int kCollection = 1;                       // db::_browse_type the browser uses for the collection
+constexpr int kDevice = 2;                           // ... and for a device, as its drag-and-drop loader passes it
 constexpr uint64_t kMainComponent = 0x10546d800ULL;  // MainComponent::getInstance's static
 constexpr uint64_t kUiManager = 0x568;               // MainComponent -> djplay::UiManager*
 constexpr uint64_t kLoadMessageVtable = 0x10517e590ULL;  // djplay::DjplayCommonMessage address point
@@ -50,7 +51,7 @@ enum : int { NUM_PLAYERS, IS_LOADED, IS_PLAYING, POSITION_MS, TOTAL_MS, FILE_PAT
              RUNNING_LOOP, IS_LOOPING, STRING_DTOR, ENGINE_HOLDER_GET, IS_LOADING, TRACK_CTOR,
              TRACK_DTOR, GET_ROW_DATA_TRACK, DATABASE_HOLDER_GET, TRACK_BASIC_INFO, MAIN_COMPONENT, UI_PLAYER,
              POST_MESSAGE, MESSAGE_CTOR, BROWSER_LOAD, WIKI_LOAD, MASTER_TEMPO, GET_MASTER, IS_SYNC,
-             KEY_SHIFT, IS_SLIP, KEY_SYNCING, CODE_COUNT };
+             KEY_SHIFT, IS_SLIP, KEY_SYNCING, SET_MASTER_TEMPO, TEMPO_SELECT, ALL_DEVICES, DEVICE_ROOT, CODE_COUNT };
 // FNV-1a of each function's first bytes. Entries never called pin layouts the bridge relies on:
 // the *_HOLDER_GET ones the holder's instance at +0x40, BROWSER_LOAD and WIKI_LOAD (hashed whole)
 // the load message the bridge posts as Rekordbox's own browser does.
@@ -85,6 +86,10 @@ constexpr Code kCode[CODE_COUNT] = {
     {0x100913b38, 0x20, 0x82c7eb1437046ef1ULL},  // DjEngineIF::getShiftedPlayKeySemitone
     {0x1009173ac, 0x20, 0x383b8b5bba4f4062ULL},  // DjEngineIF::isSlipMode
     {0x100914818, 0x20, 0x265dbf9aa155a2e2ULL},  // DjEngineIF::isKeySyncing
+    {0x1009137c8, 0x20, 0x912087053766f180ULL},  // DjEngineIF::setMasterTempoMode(channel, bool)
+    {0x101ac111c, 0x20, 0x7afac00a87d061adULL},  // djplay::UiPlayer::getTempoSelectStatus
+    {0x1020d5b18, 0x20, 0x30ca9940e88081c1ULL},  // db::DatabaseIF::getAllDeviceHandle(Array<long>&)
+    {0x1020d5b04, 0x20, 0xadbcf040411634e8ULL},  // db::DatabaseIF::getDeviceRoot(long)
 };
 
 struct JString {  // juce::String: one pointer to its UTF-8 text; non-trivial, so returned via x8
@@ -109,6 +114,11 @@ using BasicInfo = void *(*)(void *track);
 using UiPlayer = void *(*)(const void *ui_manager, int player);
 using MessageCtor = void (*)(void *message, int, int, int, void *);
 using PostMessage = void (*)(void *receiver, void *message);
+struct LongArray { int64_t *data; int32_t allocated, used; };  // juce::Array<long>; its storage is malloc'd
+using SetDeckFlag = void (*)(const void *engine, int channel, bool);
+using PlayerInt = int (*)(const void *ui_player);
+using AllDevices = void (*)(void *database, LongArray *);
+using DeviceRoot = JString (*)(void *database, long handle);
 
 struct Api {
     uintptr_t slide = 0;
@@ -128,6 +138,10 @@ struct Api {
     DeckBool master_tempo, is_sync, is_slip, key_syncing;
     DeckInt key_shift;
     EngineInt master;
+    SetDeckFlag set_master_tempo;
+    PlayerInt tempo_select;
+    AllDevices all_devices;
+    DeviceRoot device_root;
     MessageCtor message_ctor;
     PostMessage post_message;
 } api;
@@ -238,6 +252,10 @@ const char *verify_build() {
     api.key_shift = at<DeckInt>(KEY_SHIFT);
     api.is_slip = at<DeckBool>(IS_SLIP);
     api.key_syncing = at<DeckBool>(KEY_SYNCING);
+    api.set_master_tempo = at<SetDeckFlag>(SET_MASTER_TEMPO);
+    api.tempo_select = at<PlayerInt>(TEMPO_SELECT);
+    api.all_devices = at<AllDevices>(ALL_DEVICES);
+    api.device_root = at<DeviceRoot>(DEVICE_ROOT);
     api.message_ctor = at<MessageCtor>(MESSAGE_CTOR);
     api.post_message = at<PostMessage>(POST_MESSAGE);
     if (*reinterpret_cast<const uint64_t *>(kLoadMessageVtable + api.slide) != kLoadMessageDtor + api.slide)
@@ -253,9 +271,9 @@ const void *instance(uint64_t holder_address) {
 const void *engine() { return instance(kEngineHolder); }
 
 uint64_t command_check(const BridgeCommand &c) {
-    uint8_t bytes[28];
+    uint8_t bytes[32];
     memcpy(bytes, &c.seq, 4); memcpy(bytes + 4, &c.kind, 4); memcpy(bytes + 8, &c.deck, 4);
-    memcpy(bytes + 12, &c.content_id, 4); memcpy(bytes + 16, &c.issued_ns, 8); memcpy(bytes + 24, &c.reserved, 4);
+    memcpy(bytes + 12, &c.content_id, 4); memcpy(bytes + 16, &c.issued_ns, 8); memcpy(bytes + 24, &c.device, 8);
     return fnv(bytes, sizeof bytes);
 }
 
@@ -282,10 +300,35 @@ void *ui_player(int deck) {
     return manager ? api.ui_player(manager, deck) : nullptr;
 }
 
-// Loads a collection track as Rekordbox's browser does: fetch the row from its database, then
-// post the deck's ordinary load message. Never onto a playing or loading deck.
+// Mounted devices, refreshed every couple of seconds: Wave picks a stick's handle by its root.
+void read_devices() {
+    void *database = const_cast<void *>(instance(kDatabaseHolder));
+    BridgeDevice found[kBridgeDevices] = {};
+    if (database) {
+        LongArray handles = {};
+        api.all_devices(database, &handles);
+        for (int i = 0; i < handles.used && i < int(kBridgeDevices); ++i) {
+            found[i].handle = handles.data[i];
+            JString root = api.device_root(database, static_cast<long>(handles.data[i]));
+            snprintf(found[i].root, sizeof found[i].root, "%s", root.text ? root.text : "");
+        }
+        free(handles.data);
+    }
+    memcpy(shared->devices, found, sizeof found);
+}
+
+bool known_device(int64_t handle) {
+    for (const BridgeDevice &device : shared->devices)
+        if (handle && device.handle == handle) return true;
+    return false;
+}
+
+// Loads a track as Rekordbox's browser does: fetch the row from the collection or a mounted
+// device, then post the deck's ordinary load message. Never onto a playing or loading deck.
 int load(const void *dj, int players, const BridgeCommand &c, char *message, size_t size) {
     const int deck = static_cast<int>(c.deck);
+    const bool device = c.kind == kCommandLoadDevice;
+    if (device && !known_device(c.device)) { snprintf(message, size, "That USB stick is no longer mounted"); return kReplyNoTrack; }
     if (deck < 0 || deck >= players) { snprintf(message, size, "Deck %d does not exist", deck + 1); return kReplyBadDeck; }
     if (api.is_playing(dj, deck)) { snprintf(message, size, "Deck %d is playing", deck + 1); return kReplyDeckPlaying; }
     if (api.is_loading(dj, deck)) { snprintf(message, size, "Deck %d is still loading", deck + 1); return kReplyDeckBusy; }
@@ -300,8 +343,10 @@ int load(const void *dj, int players, const BridgeCommand &c, char *message, siz
     if (reinterpret_cast<uint64_t>(basic_info) != kCode[TRACK_BASIC_INFO].address + api.slide) {
         snprintf(message, size, "Rekordbox's track type differs from the verified build");
         result = kReplyUnsupported;
-    } else if (!api.get_row_data_track(database, c.content_id, track, kCollection, 0)) {
-        snprintf(message, size, "Track %u is not in Rekordbox's collection", c.content_id);
+    } else if (!api.get_row_data_track(database, c.content_id, track, device ? kDevice : kCollection,
+                                       device ? static_cast<long>(c.device) : 0)) {
+        snprintf(message, size, device ? "Track %u is not on that USB stick" : "Track %u is not in Rekordbox's collection",
+                 c.content_id);
         result = kReplyNoTrack;
     } else if (void *info = basic_info(track)) {
         post_load(player, info);
@@ -327,8 +372,16 @@ void run_command(const void *dj, int players) {
     } else if (!dj || players <= 0) {
         snprintf(message, sizeof message, "Rekordbox is still starting");
         result = kReplyNotReady;
-    } else if (c.kind == kCommandLoad) {
+    } else if (c.kind == kCommandLoad || c.kind == kCommandLoadDevice) {
         result = load(dj, players, c, message, sizeof message);
+    } else if (c.kind == kCommandMasterTempo && int(c.deck) < players && api.is_loaded(dj, int(c.deck))) {
+        // The engine's own setter: Rekordbox's MT button and the controller's LED follow its notification.
+        api.set_master_tempo(dj, int(c.deck), c.content_id != 0);
+        snprintf(message, sizeof message, "Master tempo %s on deck %u", c.content_id ? "on" : "off", c.deck + 1);
+        result = kReplyRequested;
+    } else if (c.kind == kCommandMasterTempo) {
+        snprintf(message, sizeof message, "Deck %u has no track", c.deck + 1);
+        result = kReplyBadDeck;
     } else {
         snprintf(message, sizeof message, "Unknown request");
         result = kReplyBadRequest;
@@ -351,6 +404,7 @@ void tick() {
     shared->uptime_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     shared->status = players > 0 ? kStatusLive : kStatusStarting;
     shared->master = players > 0 ? api.master(dj) : -1;
+    if (ticks % 200 == 1) read_devices();
     shared->deck_count = static_cast<uint32_t>(players < 0 ? 0 : players > int(kBridgeDecks) ? int(kBridgeDecks) : players);
     for (uint32_t ch = 0; ch < shared->deck_count; ++ch) {
         BridgeDeck &deck = shared->decks[ch];
@@ -365,6 +419,8 @@ void tick() {
             if (api.is_slip(dj, c)) flags |= kDeckSlip;
             if (api.key_syncing(dj, c)) flags |= kDeckKeySync;
             deck.key_shift = api.key_shift(dj, c);
+            const void *player = ui_player(c);
+            deck.tempo_range = player ? api.tempo_select(player) : -1;
             deck.position_ms = api.position_ms(dj, c);
             deck.total_ms = api.total_ms(dj, c);
             deck.bpm = api.bpm(dj, c, true);

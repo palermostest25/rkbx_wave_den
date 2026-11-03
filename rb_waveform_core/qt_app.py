@@ -155,22 +155,34 @@ class Session(QObject):
     def deck_playing(self, idx):
         return bool(self.timelines[idx].playing)
 
-    def load_track(self, idx, track):
-        """Ask Rekordbox to load a collection track; loadStatus reports the engine's answer."""
+    def load_track(self, idx, track, source=''):
+        """Ask Rekordbox to load a track from the collection, or from the USB export at ``source``;
+        loadStatus reports the engine's answer."""
         why = self.load_unavailable()
         if not why and self.loading:
             why = f'Still loading {self.loading[1].title}'
         if not why and self.deck_playing(idx):
             why = f'Deck {idx + 1} is playing: stop it before loading over it'
         if not why and not str(track.identifier).isdigit():
-            why = 'Only Rekordbox collection tracks can be loaded from here'
+            why = 'Only Rekordbox tracks can be loaded from here'
         if why:
             self.loadStatus.emit(why)
             return False
-        request = self.loader.submit(self.reader.load, idx, int(track.identifier))
-        self.loading = (idx, track, request, time.monotonic() + 8)
+        # A stick's export stores paths from its own root; the engine reports the mounted path.
+        root = Path(source).parents[2] if source else None
+        expected = str(root / track.path.lstrip('/')) if root else track.path
+        request = self.loader.submit(self.reader.load, idx, int(track.identifier), str(root) if root else None)
+        self.loading = (idx, replace(track, path=expected), request, time.monotonic() + 8)
         self.loadStatus.emit(f'Loading {track.title} on deck {idx + 1}…')
         return True
+
+    def toggle_master_tempo(self, idx):
+        """Key lock on or off for a deck, by Rekordbox's own engine; the deck state shows the result."""
+        status = getattr(self.reader, 'deck_status', {}).get(idx)
+        if status is None or not hasattr(self.reader, 'set_master_tempo'):
+            self.set_status(self.load_unavailable() or 'Master tempo needs the Rekordbox bridge')
+            return
+        self.loader.submit(self.reader.set_master_tempo, idx, not status.master_tempo)
 
     def poll_loading(self, now):
         if not self.loading:
@@ -581,6 +593,7 @@ class MainWindow(QMainWindow):
         from .qt_browser import BrowserPage
         self.browser_page = BrowserPage()
         self.browser_page.loadRequested.connect(self.session.load_track)
+        self.canvas.masterTempoToggled.connect(self.session.toggle_master_tempo)
         self.session.loadStatus.connect(self.browser_page.show_load_status)
         self.pages.addWidget(self.browser_page)
         self.deck_watch = QTimer(self)

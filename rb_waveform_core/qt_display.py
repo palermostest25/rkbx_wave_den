@@ -13,6 +13,7 @@ from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QApplication, QWidget
 
 from .analysis import WaveformAnalysis
+from .mac_bridge import TEMPO_RANGES
 from .render import render_waveform_image
 
 
@@ -126,6 +127,7 @@ def flag_positions(anchors, width, maximum):
 
 class WaveformCanvas(QWidget):
     settingsRequested = Signal()
+    masterTempoToggled = Signal(int)  # deck whose MT was tapped
     zoomBy = Signal(float)  # multiply the visible beats
 
     def __init__(self, session, parent=None):
@@ -138,6 +140,13 @@ class WaveformCanvas(QWidget):
         self.setMouseTracking(True)
         self.setAccessibleName('Stacked deck waveforms')
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def mousePressEvent(self, event):
+        for idx, box in self.info.taps.items():
+            if box.adjusted(-8, -8, 8, 8).contains(event.position()):  # a fingertip, not a cursor
+                self.masterTempoToggled.emit(idx)
+                return
+        super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event):
         self.settingsRequested.emit()
@@ -381,8 +390,10 @@ class DeckInfoBar:
         self.session = session
         self.overviews = OrderedDict()  # id(analysis) -> (analysis, colours, image)
         self.artwork = OrderedDict()    # path -> image (None when unreadable)
+        self.taps = {}                  # deck -> its MT chip, where a tap toggles key lock
 
     def draw(self, p, bounds, order):
+        self.taps = {}
         p.fillRect(bounds, QColor('#0b0c0e'))
         p.setPen(QColor('#2a2e33'))
         p.drawLine(bounds.topLeft(), bounds.topRight())
@@ -427,6 +438,25 @@ class DeckInfoBar:
         p.setPen(QColor(colour))
         shown = p.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, max(1, int(rect.width())))
         p.drawText(rect, align | Qt.AlignmentFlag.AlignVCenter, shown)
+
+    def marquee(self, p, rect, text, size, colour, bold=False):
+        """Text that fits sits still; longer text scrolls through, pausing at its start, as the AZ does."""
+        p.setFont(self.font(size, bold))
+        p.setPen(QColor(colour))
+        width = p.fontMetrics().horizontalAdvance(text)
+        if width <= rect.width():
+            p.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+            return
+        gap = size * 3
+        span = width + gap
+        pause, speed = 2.0, 40.0  # seconds held at the start, then pixels a second
+        t = time.monotonic() % (pause + span / speed)
+        offset = max(0.0, t - pause) * speed
+        p.save()
+        p.setClipRect(rect)
+        for x in (rect.left() - offset, rect.left() - offset + span):
+            p.drawText(QRectF(x, rect.top(), width + 2, rect.height()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+        p.restore()
 
     def chip(self, p, x, y, h, text, fill, ink, align_right=False):
         p.setFont(self.font(h * .62, True))
@@ -479,12 +509,15 @@ class DeckInfoBar:
                 for label, on, fill, ink in (('MT', status.master_tempo, '#d63a3a', 'white'),
                                              ('SYNC', status.sync, DECK_BLUE, 'white'),
                                              ('MASTER', status.master, LOOP_ORANGE, 'black')):
-                    right = self.chip(p, right, top + (line - chip_h) / 2, chip_h, label,
-                                      fill if on else '#1c1f23', ink if on else '#4f565e', align_right=True).left() - gap * .6
+                    box = self.chip(p, right, top + (line - chip_h) / 2, chip_h, label,
+                                    fill if on else '#1c1f23', ink if on else '#4f565e', align_right=True)
+                    if label == 'MT':
+                        self.taps[idx] = box
+                    right = box.left() - gap * .6
                 text_w = right - gap - text_x
-            self.text(p, QRectF(text_x, top, text_w, line), meta.get('title') or deck.song_name or 'Unknown',
-                      line * .72, '#f1f3f5', bold=True)
-            self.text(p, QRectF(text_x, top + line, text_w, line), meta.get('artist') or '', line * .6, '#9aa3ad')
+            self.marquee(p, QRectF(text_x, top, text_w, line), meta.get('title') or deck.song_name or 'Unknown',
+                         line * .72, '#f1f3f5', bold=True)
+            self.marquee(p, QRectF(text_x, top + line, inner.right() - text_x, line), meta.get('artist') or '', line * .6, '#9aa3ad')
         row = top + 2 * line + gap
         # Artwork (or an empty sleeve) with the play state on it.
         art = QRectF(inner.left(), row, big, big)
@@ -546,8 +579,14 @@ class DeckInfoBar:
                               '#1f3a2a', '#7ee2a8').right() + gap
             if original and current:
                 pct = (current / original - 1) * 100
-                self.text(p, QRectF(x, details, info * 4, info), f'{pct:+.2f}%', info * .62,
+                p.setFont(self.font(info * .62))
+                pct_text = f'{pct:+.2f}%'
+                self.text(p, QRectF(x, details, info * 4, info), pct_text, info * .62,
                           '#f1f3f5' if abs(pct) >= .005 else '#7d858e')
+                x += p.fontMetrics().horizontalAdvance(pct_text) + gap
+            tempo_range = TEMPO_RANGES.get(getattr(getattr(s.reader, 'deck_status', {}).get(idx), 'tempo_range', -1))
+            if tempo_range:
+                x = self.chip(p, x, y, chip_h, tempo_range, '#22262c', '#c9ced4').right() + gap
             right = inner.right()
             loop = timeline.active_loop()
             if loop and original:

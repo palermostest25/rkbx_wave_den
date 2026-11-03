@@ -9,14 +9,15 @@
 #endif
 
 constexpr char kBridgeMagic[8] = {'R', 'K', 'W', 'B', 'R', 'D', 'G', '1'};
-constexpr uint32_t kBridgeVersion = 3;
+constexpr uint32_t kBridgeVersion = 4;
 constexpr const char *kBridgeStateFile = "state.bin";
 constexpr uint32_t kBridgeDecks = 4;
+constexpr uint32_t kBridgeDevices = 4;
 
 enum : uint32_t { kStatusStarting = 0, kStatusLive = 1, kStatusUnsupported = 2, kStatusFailed = 3 };
 enum : uint32_t { kDeckLoaded = 1, kDeckPlaying = 2, kDeckLooping = 4, kDeckMasterTempo = 8, kDeckSync = 16,
                   kDeckSlip = 32, kDeckKeySync = 64 };
-enum : uint32_t { kCommandLoad = 1 };
+enum : uint32_t { kCommandLoad = 1, kCommandMasterTempo = 2, kCommandLoadDevice = 3 };
 enum : int32_t { kReplyRequested = 1, kReplyBadRequest = -1, kReplyExpired = -2, kReplyBadDeck = -3,
                  kReplyDeckPlaying = -4, kReplyDeckBusy = -5, kReplyNoTrack = -6, kReplyNotReady = -7,
                  kReplyUnsupported = -8 };
@@ -32,19 +33,23 @@ struct BridgeDeck {            // 1080 bytes
     int64_t loop_in;           // -1 when no loop is running
     int64_t loop_out;
     int32_t key_shift;         // semitones
-    uint32_t reserved;
+    int32_t tempo_range;       // the deck's tempo range setting as Rekordbox numbers it, -1 unknown
     char path[1024];
 };
 
-struct BridgeCommand {         // written by Wave; seq last. check = FNV-1a of the 28 bytes before it
+struct BridgeCommand {         // written by Wave; check = FNV-1a of the 32 bytes before it
     uint32_t seq;
     uint32_t kind;
     uint32_t deck;             // 0-based channel
-    uint32_t content_id;       // djmdContent.ID
+    uint32_t content_id;       // track id (djmdContent.ID, or the stick's content_id); for kCommandMasterTempo 0/1
     uint64_t issued_ns;        // CLOCK_UPTIME_RAW; older than 2 s is refused
-    uint32_t reserved;
-    uint32_t pad;
+    int64_t device;            // a handle from BridgeState::devices, for kCommandLoadDevice
     uint64_t check;
+};
+
+struct BridgeDevice {          // a mounted rekordbox device (USB stick) as Rekordbox knows it
+    int64_t handle;            // 0: none
+    char root[248];
 };
 
 struct BridgeReply {           // written by the bridge; seq = the command it answers
@@ -67,9 +72,11 @@ struct BridgeState {           // seqlock: odd while the bridge writes
     BridgeDeck decks[kBridgeDecks];
     BridgeCommand command;
     BridgeReply reply;
+    BridgeDevice devices[kBridgeDevices];
 };
 
 static_assert(sizeof(BridgeDeck) == 1080, "layout");
 static_assert(sizeof(BridgeCommand) == 40, "layout");
 static_assert(sizeof(BridgeReply) == 128, "layout");
-static_assert(sizeof(BridgeState) == 176 + 4 * 1080 + 40 + 128, "layout");
+static_assert(sizeof(BridgeDevice) == 256, "layout");
+static_assert(sizeof(BridgeState) == 176 + 4 * 1080 + 40 + 128 + 4 * 256, "layout");
