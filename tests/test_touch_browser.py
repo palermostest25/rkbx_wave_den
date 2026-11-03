@@ -134,3 +134,28 @@ class TouchAndStateTests(unittest.TestCase):
             self.assertIs(window.pages.currentWidget(),page)
             window.escape(); self.assertIs(window.pages.currentWidget(),window.canvas)
             window.close(); self.app.processEvents()
+
+
+class DeviceCatalogTests(unittest.TestCase):
+    def test_usb_uses_its_own_key_and_reads_bpm_key_and_millisecond_duration(self):
+        from sqlcipher3 import dbapi2
+        from pyrekordbox.onelibrary.database import BLOB
+        from pyrekordbox.utils import deobfuscate
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'exportLibrary.db'
+            connection=dbapi2.connect(str(path))
+            key=deobfuscate(BLOB)
+            connection.execute("PRAGMA key='"+key.replace("'","''")+"'")
+            connection.executescript('''
+              CREATE TABLE artist(artist_id INTEGER,name TEXT);
+              CREATE TABLE "key"(key_id INTEGER,name TEXT);
+              CREATE TABLE content(content_id INTEGER,title TEXT,artist_id_artist INTEGER,bpmx100 INTEGER,
+                length INTEGER,path TEXT,key_id INTEGER);
+              INSERT INTO artist VALUES(1,'USB Artist');
+              INSERT INTO "key" VALUES(1,'8A');
+              INSERT INTO content VALUES(1,'USB Song',1,12825,180500,'/Contents/track.wav',1);
+            ''')
+            connection.commit(); connection.close()
+            total,rows=catalog.browse(str(path),sort='BPM')
+            self.assertEqual(total,1)
+            self.assertEqual((rows[0].bpm,rows[0].key,rows[0].duration),(128.25,'8A',180.5))

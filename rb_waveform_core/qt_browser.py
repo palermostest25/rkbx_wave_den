@@ -254,6 +254,8 @@ class BrowserPage(QWidget):
 
     def shutdown(self):
         self.closed = True
+        # Release Qt's shared gesture target before its viewport is destroyed.
+        QScroller.ungrabGesture(self.table.viewport())
         self.debounce.stop()
         self.poll.stop()
         self.source_poll.stop()

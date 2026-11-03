@@ -110,6 +110,13 @@ class ReadOnlyLibrary:
 
 class DeviceLibrary(ReadOnlyLibrary):
     """A rekordbox USB export (OneLibrary exportLibrary.db): tracks played straight off a stick."""
+    def __init__(self, path=None, *, key=None):
+        if key is None:
+            from pyrekordbox.onelibrary.database import BLOB
+            from pyrekordbox.utils import deobfuscate
+            key = deobfuscate(BLOB)
+        super().__init__(path, key=key)
+
     QUERY = '''
         SELECT c.content_id,c.title,coalesce(a.name,''),c.length/1000.0,c.bpmx100,c.path,
                c.analysisDataFilePath,(SELECT count(*) FROM cue q WHERE q.content_id=c.content_id),0,''

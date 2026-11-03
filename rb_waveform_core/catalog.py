@@ -28,10 +28,15 @@ def browse(source='', search='', sort='Title', descending=False, offset=0, limit
     library = DeviceLibrary(Path(source)) if source else ReadOnlyLibrary()
     try:
         if source:
-            # Older exports omit key metadata; the rest of the collection remains usable.
-            fields = "c.content_id,c.title,coalesce(a.name,''),coalesce(c.bpmx100,0)/100.0,'',coalesce(c.length,0)/1000.0,c.path"
+            columns = {r[1] for r in library.connection.execute('PRAGMA table_info(content)')}
+            key_columns = {r[1] for r in library.connection.execute('PRAGMA table_info("key")')}
+            has_key = 'key_id' in columns and {'key_id', 'name'} <= key_columns
+            key = 'k.name' if has_key else "''"
+            fields = f"c.content_id,c.title,coalesce(a.name,''),coalesce(c.bpmx100,0)/100.0,coalesce({key},''),coalesce(c.length,0)/1000.0,c.path"
             tables = 'content c LEFT JOIN artist a ON a.artist_id=c.artist_id_artist'
-            title, artist, tempo, key, duration, identity = 'c.title', 'a.name', 'c.bpmx100', "''", 'c.length', 'c.content_id'
+            if has_key:
+                tables += ' LEFT JOIN "key" k ON k.key_id=c.key_id'
+            title, artist, tempo, duration, identity = 'c.title', 'a.name', 'c.bpmx100', 'c.length', 'c.content_id'
             condition = '1=1'
         else:
             fields = "c.ID,c.Title,coalesce(a.Name,''),coalesce(c.BPM,0)/100.0,coalesce(k.ScaleName,''),coalesce(c.Length,0),c.FolderPath"
