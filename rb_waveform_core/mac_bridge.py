@@ -38,8 +38,8 @@ SIZE = DEVICES_AT + 4*DEVICE.size
 STARTING, LIVE, UNSUPPORTED, FAILED = range(4)
 LOADED, PLAYING, LOOPING, MASTER_TEMPO, SYNC, SLIP, KEY_SYNC = 1, 2, 4, 8, 16, 32, 64
 LOAD, MASTER_TEMPO_SET, LOAD_DEVICE = 1, 2, 3
-# Rekordbox's tempo range setting, by the number it keeps for it.
-TEMPO_RANGES = {0: '±6', 1: '±10', 2: '±16', 3: 'WIDE'}
+# Rekordbox keeps the tempo range as its percentage; 100 is WIDE. Checked against its own deck labels.
+TEMPO_RANGES = {6: '±6', 10: '±10', 16: '±16', 100: 'WIDE'}
 REQUESTED = 1
 assert (HEADER.size, DECK.size, SIZE) == (176, 1080, 5688)
 

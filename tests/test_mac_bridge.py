@@ -39,7 +39,9 @@ class BridgeLayoutTests(unittest.TestCase):
         mb.DEVICE.pack_into(buffer, mb.DEVICES_AT + mb.DEVICE.size, 77, b'/Volumes/GIG')
         snap = mb.parse(buffer)
         self.assertEqual(snap.devices, ((77, '/Volumes/GIG'),))
-        self.assertEqual(snap.decks[0].tempo_range, 0)  # state() packs 0: rekordbox's +-6 slot
+        self.assertEqual(snap.decks[0].tempo_range, 0)  # state() packs 0, which names no range
+        self.assertNotIn(0, mb.TEMPO_RANGES)
+        self.assertEqual((mb.TEMPO_RANGES[10], mb.TEMPO_RANGES[100]), ('±10', 'WIDE'))
 
     def test_torn_read_is_retried_not_misread(self):
         self.assertIsNone(mb.parse(state(seq=3)))
