@@ -56,6 +56,11 @@ def snap_to_beat(seconds, grid, tolerance=.08):
     return nearest if nearest is not None and abs(nearest - seconds) <= tolerance else seconds
 
 
+def track_loaded(before, after):
+    """True when a deck Wave already knew got a new track; a deck first seen, or emptied, is not a load."""
+    return any(path and idx in before and before[idx] != path for idx, path in after.items())
+
+
 class DisplayLinkRepaint(QObject):
     """Cocoa delivers window update requests on the display link: requesting the next
     one from each keeps exactly one repaint per refresh, which a timer only approximates."""
@@ -593,8 +598,12 @@ class MainWindow(QMainWindow):
         self.canvas.masterTempoToggled.connect(self.session.toggle_master_tempo)
         self.session.loadStatus.connect(self.browser_page.show_load_status)
         self.pages.addWidget(self.browser_page)
+        self.deck_paths = {}
         self.deck_watch = QTimer(self)
         self.deck_watch.timeout.connect(self.sync_load_targets)
+        self.starting_since = None
+        self.rekordbox_shown = False
+        self.deck_watch.timeout.connect(self.watch_rekordbox_start)
         self.deck_watch.start(250)
         # Follows Rekordbox's own browser as the controller's knob moves it, as the AZ's screen does.
         self.mirrored = None
@@ -681,11 +690,39 @@ class MainWindow(QMainWindow):
     def sync_load_targets(self):
         reader = self.session.reader
         self.connect_button.setVisible(bool(reader and hasattr(reader, 'load') and not reader.bridged))
+        paths, before = getattr(reader, 'deck_paths', {}), self.deck_paths
+        self.deck_paths = paths
+        if self.pages.currentWidget() is self.browser_page and track_loaded(before, paths):
+            self.mirror_opened = False
+            self.toggle_browser()  # a track landed on a deck, from the screen or the controller: back to the waveforms
+            return
         if self.pages.currentWidget() is self.browser_page:
             locked = {i: f'Deck {i + 1} is playing: stop it before loading over it' if self.session.deck_playing(i) else ''
                       for i in range(4)}
             self.browser_page.set_decks(self.session.order(), locked, self.session.load_unavailable(),
                                         getattr(reader, 'deck_paths', {}))
+
+    def watch_rekordbox_start(self, now=None):
+        """Rekordbox started behind Wave can stop at its own startup questions (library sync, My Tag and
+        so on) and builds no decks until they are answered: bring it forward so they can be, then come back."""
+        status = getattr(self.session.reader, 'status', '') or ''
+        now = time.monotonic() if now is None else now
+        if not status.startswith('Rekordbox is starting'):
+            self.starting_since = None
+            if self.rekordbox_shown and status == 'REKORDBOX · direct':
+                self.rekordbox_shown = False
+                self.raise_()
+                self.activateWindow()
+            return
+        self.starting_since = self.starting_since or now
+        if not self.rekordbox_shown and now - self.starting_since > 8:
+            self.rekordbox_shown = True
+            from .mac_bridge import show
+            try:
+                show()
+            except Exception:
+                return  # Rekordbox went away; the status says what to do
+            self.update_status('Rekordbox is waiting: answer its questions, then Wave connects')
 
     def show_rekordbox(self):
         from .mac_bridge import show

@@ -53,6 +53,33 @@ class QtAppTests(unittest.TestCase):
         self.window.canvas.draw_deck(painter, 0, QRectF(0, 0, 1280, 180))
         self.assertEqual(painter.drawText.call_args.args[-1], message)
 
+    def test_browser_closes_once_a_track_lands_on_a_deck(self):
+        reader = Mock(bridged=True, deck_paths={0: '/a.mp3', 1: ''})
+        self.session.reader = reader
+        self.window.sync_load_targets()
+        self.window.toggle_browser()
+        self.window.sync_load_targets()
+        reader.deck_paths = {0: '/a.mp3', 1: ''}  # unchanged: stays open
+        self.window.sync_load_targets()
+        self.assertIs(self.window.pages.currentWidget(), self.window.browser_page)
+        reader.deck_paths = {0: '/a.mp3', 1: '/b.mp3'}  # loaded on deck 2, from Wave or the controller
+        self.window.sync_load_targets()
+        self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
+
+    def test_rekordbox_stuck_starting_is_brought_forward_once_then_wave_returns(self):
+        self.session.reader = Mock(status='Rekordbox is starting')
+        with patch('rb_waveform_core.mac_bridge.show') as show, patch.object(self.window, 'activateWindow') as back:
+            self.window.watch_rekordbox_start(100)
+            self.window.watch_rekordbox_start(105)
+            show.assert_not_called()  # an ordinary start
+            self.window.watch_rekordbox_start(109)
+            self.window.watch_rekordbox_start(120)
+            show.assert_called_once()  # waiting on its own questions
+            self.assertIn('answer its questions', self.window.status.toolTip())
+            self.session.reader.status = 'REKORDBOX · direct'
+            self.window.watch_rekordbox_start(121)
+            back.assert_called_once()
+
     def test_two_and_four_decks_reuse_the_same_window(self):
         handle = self.window.winId()
         self.window.set_count(2)
