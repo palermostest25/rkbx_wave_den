@@ -84,6 +84,10 @@ class QtAppTests(unittest.TestCase):
             self.window.follow_rekordbox_browser()
             mirror.assert_called_once()
 
+    def test_the_version_is_in_the_title(self):
+        from rb_waveform_core import __version__
+        self.assertEqual(self.window.windowTitle(), f'Rekordbox Wave {__version__}')
+
     def test_check_for_updates_answers_even_when_up_to_date(self):
         with patch('rb_waveform_core.updater.check', return_value=None), \
                 patch('rb_waveform_core.qt_app.QMessageBox.information') as told:

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
     QDoubleSpinBox, QSpinBox, QSlider, QScrollArea, QStackedWidget,
     QFileDialog, QColorDialog, QFrame, QMessageBox, QListWidget)
 
+from . import __version__
 from .config import WaveformColorConfig, WaveformRenderConfig, config_to_dict, dict_to_config
 from .cues import CueMarker, _marker_color, live_cues
 from .deck_controller import DeckController
@@ -527,7 +528,7 @@ class MainWindow(QMainWindow):
     def __init__(self, session):
         super().__init__()
         self.session = session
-        self.setWindowTitle('Rekordbox Wave')
+        self.setWindowTitle(f'Rekordbox Wave {__version__}')
         self.setMinimumSize(640, 400)
         self.resize(1280, 800)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(self.session.view["always_on_top"]))
@@ -808,7 +809,6 @@ class MainWindow(QMainWindow):
                 self.update_button.setText(f'UPDATE {result.version}')
                 self.update_button.setToolTip(f'Rekordbox Wave {result.version} is on GitHub')
             if kind == 'asked':
-                from . import __version__
                 QMessageBox.information(self, 'Check for updates', f'Rekordbox Wave {result.version} is ready: press UPDATE at the top.'
                                         if result else f'Rekordbox Wave {__version__} is the latest version.')
         else:
@@ -1069,6 +1069,7 @@ class MainWindow(QMainWindow):
         self.connection_detail.setWordWrap(True)
         self.connection_detail.setObjectName('help')
         form.addRow('Connection status', self.connection_detail)
+        form.addRow('Wave version', QLabel(__version__))
         if sys.platform in ('darwin', 'win32'):
             state_help = QLabel('Wave reads decks, loops and tempo straight from Rekordbox, which it starts with its bridge. '
                                 'Rekordbox stays the audio engine and keeps the FLX10.')
