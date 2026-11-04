@@ -2,6 +2,8 @@
 
 """Rekordbox-style waveform core (production)."""
 
+__version__ = '2.3.3'  # pyproject.toml reads this; a release tag v<this> builds it
+
 from .config import WaveformColorConfig, WaveformRenderConfig, RenderMode
 from .analysis import WaveformAnalysis
 from .ANLZ import AnlzAnalysisResult, analyze_anlz_folder

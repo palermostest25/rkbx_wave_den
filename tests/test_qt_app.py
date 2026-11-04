@@ -66,6 +66,22 @@ class QtAppTests(unittest.TestCase):
         self.window.sync_load_targets()
         self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
 
+    def test_only_the_knob_moving_pulls_the_browser_to_rekordboxs_list(self):
+        from rb_waveform_core.mac_bridge import Browser
+        state = dict(rows=10, cursor=2, first=0, focus='list', tree_path='Collection', tracks=((1, '/a'),))
+        reader = Mock(bridged=True, devices=(), browser=Browser(**state))
+        self.session.reader = reader
+        self.window.follow_rekordbox_browser()
+        self.window.toggle_browser()
+        self.window.browser_page.view = ('device', '/Volumes/STICK')  # the user picked their stick
+        with patch.object(self.window.browser_page, 'mirror') as mirror:
+            reader.browser = Browser(**{**state, 'rows': 12, 'tracks': ((1, '/a'), (2, '/b'))})  # Rekordbox refreshed
+            self.window.follow_rekordbox_browser()
+            mirror.assert_not_called()
+            reader.browser = Browser(**{**state, 'rows': 12, 'cursor': 3})  # the knob turned
+            self.window.follow_rekordbox_browser()
+            mirror.assert_called_once()
+
     def test_rekordbox_stuck_starting_is_brought_forward_once_then_wave_returns(self):
         self.session.reader = Mock(status='Rekordbox is starting')
         with patch('rb_waveform_core.mac_bridge.show') as show, patch.object(self.window, 'activateWindow') as back:
@@ -79,6 +95,11 @@ class QtAppTests(unittest.TestCase):
             self.session.reader.status = 'REKORDBOX · direct'
             self.window.watch_rekordbox_start(121)
             back.assert_called_once()
+            self.session.reader.status = 'REKORDBOX · busy'  # stuck later: a question on load, a drive that hangs
+            self.window.watch_rekordbox_start(200)
+            self.window.watch_rekordbox_start(209)
+            self.assertEqual(show.call_count, 2)
+            self.assertIn('check your music drive', self.window.status.toolTip())
 
     def test_two_and_four_decks_reuse_the_same_window(self):
         handle = self.window.winId()

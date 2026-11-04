@@ -158,6 +158,8 @@ def parse(buffer):
 
 
 OLDER = 'Rekordbox has an older Wave bridge loaded: press CONNECT to restart it'
+STARTING_TEXT = 'Rekordbox is starting'
+BUSY = 'REKORDBOX · busy'
 
 
 class OlderBridge(OSError):
@@ -455,7 +457,7 @@ class RekordboxBridgeReader:
                             and not live(snapshot, pid)):
                         # Rekordbox's main thread is busy (a heavy load, a dialog): its bridge is still
                         # there and resumes with it, so hold every deck as it is rather than start over.
-                        self.status = 'REKORDBOX · busy'
+                        self.status = BUSY
                         self._stop_event.wait(.05)
                         continue
                     if not live(snapshot, pid):
@@ -471,10 +473,11 @@ class RekordboxBridgeReader:
                         if pid and snapshot and snapshot.pid == pid and snapshot.status in (UNSUPPORTED, FAILED):
                             reason = snapshot.note
                         elif pid and snapshot and snapshot.pid == pid:
-                            reason = 'Rekordbox is starting'
+                            # Its bridge was live and stopped: Rekordbox is stuck (a dialog, a drive), not starting.
+                            reason = BUSY if snapshot.status == LIVE else STARTING_TEXT
                         else:
                             reason = self.RELAUNCH
-                        if pid and reason != 'Rekordbox is starting':
+                        if pid and reason not in (STARTING_TEXT, BUSY):
                             self._start_fallback()
                             self.connected = self._fallback.connected
                             self.status = f'{self._fallback.status} · {reason}'

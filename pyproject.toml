@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rkbx_wave"
-version = "2.3.2"
+dynamic = ["version"]
 description = "A full-screen, touch-friendly XDJ-AZ-style deck screen and browser for Rekordbox"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -47,6 +47,9 @@ rkbx_wave = "rkbx_wave:main"
 [tool.setuptools]
 py-modules = ["rkbx_wave"]
 packages = ["rb_waveform_core"]
+
+[tool.setuptools.dynamic]
+version = {attr = "rb_waveform_core.__version__"}
 
 [tool.setuptools.package-data]
 # Ship the version-keyed memory offsets and the default config with the wheel.
