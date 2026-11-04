@@ -714,7 +714,7 @@ class MainWindow(QMainWindow):
 
     def sync_load_targets(self):
         reader = self.session.reader
-        self.connect_button.setVisible(bool(reader and hasattr(reader, 'load') and not reader.bridged))
+        self.connect_button.setVisible(bool(reader and hasattr(reader, 'load') and (not reader.bridged or getattr(reader, 'stale', False))))
         paths, before = getattr(reader, 'deck_paths', {}), self.deck_paths
         self.deck_paths = paths
         if self.pages.currentWidget() is self.browser_page and track_loaded(before, paths):
@@ -735,7 +735,7 @@ class MainWindow(QMainWindow):
         now = time.monotonic() if now is None else now
         if status not in (STARTING_TEXT, BUSY):
             self.starting_since = None
-            if self.rekordbox_shown and status == 'REKORDBOX · direct':
+            if self.rekordbox_shown and status.startswith('REKORDBOX · direct'):
                 self.rekordbox_shown = False
                 self.raise_()
                 self.activateWindow()
@@ -825,8 +825,10 @@ class MainWindow(QMainWindow):
 
     def connect_rekordbox(self):
         from .mac_bridge import rekordbox_pid, restart
+        why = ('Restart Rekordbox to finish updating Wave? It still runs the bridge from the Wave you updated from.'
+               if getattr(self.session.reader, 'stale', False) else 'Restart Rekordbox so Wave can connect to it?')
         if rekordbox_pid() and QMessageBox.question(
-                self, 'Connect Rekordbox', 'Restart Rekordbox so Wave can connect to it?\n\n'
+                self, 'Connect Rekordbox', f'{why}\n\n'
                 'Playback stops while it restarts. Rekordbox asks first if a deck is playing.') != QMessageBox.StandardButton.Yes:
             return
         self.update_status('Restarting Rekordbox with Wave…' if rekordbox_pid() else 'Starting Rekordbox with Wave…')
