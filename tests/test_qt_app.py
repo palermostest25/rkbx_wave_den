@@ -77,10 +77,21 @@ class QtAppTests(unittest.TestCase):
         with patch.object(self.window.browser_page, 'mirror') as mirror:
             reader.browser = Browser(**{**state, 'rows': 12, 'tracks': ((1, '/a'), (2, '/b'))})  # Rekordbox refreshed
             self.window.follow_rekordbox_browser()
+            reader.browser = Browser(**{**state, 'rows': 12, 'focus': ''})  # Windows: Wave was touched, Rekordbox lost focus
+            self.window.follow_rekordbox_browser()
             mirror.assert_not_called()
             reader.browser = Browser(**{**state, 'rows': 12, 'cursor': 3})  # the knob turned
             self.window.follow_rekordbox_browser()
             mirror.assert_called_once()
+
+    def test_check_for_updates_answers_even_when_up_to_date(self):
+        with patch('rb_waveform_core.updater.check', return_value=None), \
+                patch('rb_waveform_core.qt_app.QMessageBox.information') as told:
+            self.window.check_for_update(asked=True)  # demo sessions skip only the automatic check
+            self.window.update_job[1].result()
+            self.window.poll_update()
+        self.assertIn('is the latest version', told.call_args.args[2])
+        self.assertFalse(self.window.update_button.isVisible())
 
     def test_rekordbox_stuck_starting_is_brought_forward_once_then_wave_returns(self):
         self.session.reader = Mock(status='Rekordbox is starting')

@@ -32,7 +32,8 @@ constexpr uint64_t kDatabase = 0x14612dfd0ULL;             // SingletonHolder<Da
 constexpr size_t kTrackSize = 0x4e0;                       // sizeof(db::RowDataTrack)
 constexpr uint64_t kTrackItem = 0x38;                      // its item interface: getBasicInfo is slot 0x8
 constexpr uint64_t kLoadMessageVtable = 0x143879948ULL;    // djplay::DjplayCommonMessage
-constexpr int kCollection = 1;
+constexpr int kCollection = 1;                       // db::_browse_type for the collection
+constexpr int kDevice = 2;                           // ... and for a device, as on macOS (the same enum)
 constexpr uint64_t kBrowseView = 0x145f38738ULL;           // browse::BrowseBasicView's instance (initBrowseComponent)
 
 struct Code { uint64_t address, size, hash; };
@@ -41,7 +42,8 @@ enum : int { NUM_PLAYERS, IS_LOADED, IS_LOADING, IS_PLAYING, POSITION_MS, TOTAL_
              KEY_SYNCING, PLAYER_CONTROL, ENGINE_GET, STRING_DTOR, OPERATOR_NEW, MAIN_COMPONENT, UI_PLAYER,
              TEMPO_SELECT, MESSAGE_CTOR, POST_MESSAGE, LOAD_TEMPLATE, DATABASE_GET, GET_ROW_DATA_TRACK,
              TRACK_CTOR, TRACK_DTOR, TRACK_BASIC_INFO, BROWSE_INSTANCE, BROWSE_MANAGERS, LIST_CONTAINER,
-             CONTAINER_LIST, TREE_VIEWER, ROW_TRACK, SELECTED_ROWS, LIST_BOX, HAS_FOCUS, CODE_COUNT };
+             CONTAINER_LIST, TREE_VIEWER, ROW_TRACK, SELECTED_ROWS, LIST_BOX, HAS_FOCUS, DEVICE_ROOT,
+             ALL_DEVICES, CRT_FREE, CODE_COUNT };
 // FNV-1a of each function's first bytes; entries never called pin what the bridge reads directly:
 // PLAYER_CONTROL the graph's players (+0x430/+0x43c), ENGINE_GET and DATABASE_GET the singletons,
 // MAIN_COMPONENT its static, LOAD_TEMPLATE (whole) the load message and UiManager offset.
@@ -89,6 +91,10 @@ constexpr Code kCode[CODE_COUNT] = {
     {0x14161cc70, 0x21, 0xbdb8e61ee08df6d4ULL},  // CustomListBox::getSelectedRows: selection (+0x138)
     {0x1414ae26d, 0xc, 0x1da696860474cf7dULL},   // a ListViewer method: its list box (+0x220)
     {0x142c0c3d0, 0x29, 0x550b123365a23717ULL},  // juce::Component::hasKeyboardFocus
+    // Mounted devices (USB sticks): the DatabaseIF wrappers beside the macOS ones, in the same order.
+    {0x141f316a0, 0x30, 0x0010aaa567934b28ULL},  // db::DatabaseIF::getDeviceRoot(long), String by hidden pointer
+    {0x141f316e0, 0xd, 0x07e17db09ecbcf74ULL},   // db::DatabaseIF::getAllDeviceHandle(Array<long>&): 32-bit handles
+    {0x14299f450, 0x5, 0x3b02d066bf27fab5ULL},   // free, as that Array releases its storage with it
 };
 
 struct JString { const char *text; };  // juce::String: one pointer to its UTF-8 text
@@ -113,6 +119,10 @@ using PostMessage = void (*)(void *receiver, void *message);
 using GetRowDataTrack = bool (*)(void *database, uint32_t id, void *track, int browse_type, int device);
 using TrackFn = void *(*)(void *track);
 using HasFocus = bool (*)(const void *component, bool children);
+struct IntArray { int32_t *data; int32_t allocated, used; };  // juce::Array<long>: `long` is 32-bit on Windows
+using AllDevices = void (*)(void *database, IntArray *);
+using DeviceRoot = JString *(*)(void *database, JString *out, int32_t handle);
+using CrtFree = void (*)(void *);
 using BasicInfo = void *(*)(void *item);
 
 struct Api {
@@ -136,6 +146,9 @@ struct Api {
     GetRowDataTrack get_row_data_track;
     TrackFn track_ctor, track_dtor;
     HasFocus has_focus;
+    AllDevices all_devices;
+    DeviceRoot device_root;
+    CrtFree crt_free;
 } api;
 
 BridgeState *shared = nullptr;
@@ -265,7 +278,35 @@ const char *verify_build() {
     api.track_ctor = at<TrackFn>(TRACK_CTOR);
     api.track_dtor = at<TrackFn>(TRACK_DTOR);
     api.has_focus = at<HasFocus>(HAS_FOCUS);
+    api.all_devices = at<AllDevices>(ALL_DEVICES);
+    api.device_root = at<DeviceRoot>(DEVICE_ROOT);
+    api.crt_free = at<CrtFree>(CRT_FREE);
     return nullptr;
+}
+
+// Mounted devices, refreshed every couple of seconds: Wave picks a stick's handle by its root.
+void read_devices() {
+    void *database = const_cast<void *>(global(kDatabase));
+    BridgeDevice found[kBridgeDevices] = {};
+    if (database) {
+        IntArray handles = {};  // empty: Rekordbox allocates it, on its own heap
+        api.all_devices(database, &handles);
+        for (int i = 0; i < handles.used && i < int(kBridgeDevices); ++i) {
+            found[i].handle = handles.data[i];
+            JString root = {nullptr};
+            api.device_root(database, &root, handles.data[i]);
+            snprintf(found[i].root, sizeof found[i].root, "%s", root.text ? root.text : "");
+            api.string_dtor(&root);
+        }
+        if (handles.data) api.crt_free(handles.data);
+    }
+    memcpy(shared->devices, found, sizeof found);
+}
+
+bool known_device(int64_t handle) {
+    for (const BridgeDevice &device : shared->devices)
+        if (handle && device.handle == handle) return true;
+    return false;
 }
 
 void *ui_player(int deck) {
@@ -338,7 +379,8 @@ void post_load(void *player, void *basic_info) {
 
 int load(const void *dj, int players, const BridgeCommand &c, char *message, size_t size) {
     const int deck = static_cast<int>(c.deck);
-    if (c.kind == kCommandLoadDevice) { snprintf(message, size, "Loading from a USB stick is not available on Windows yet"); return kReplyUnsupported; }
+    const bool device = c.kind == kCommandLoadDevice;
+    if (device && !known_device(c.device)) { snprintf(message, size, "That USB stick is no longer mounted"); return kReplyNoTrack; }
     if (deck < 0 || deck >= players) { snprintf(message, size, "Deck %d does not exist", deck + 1); return kReplyBadDeck; }
     if (api.is_playing(dj, deck)) { snprintf(message, size, "Deck %d is playing", deck + 1); return kReplyDeckPlaying; }
     if (api.is_loading(dj, deck)) { snprintf(message, size, "Deck %d is still loading", deck + 1); return kReplyDeckBusy; }
@@ -354,8 +396,10 @@ int load(const void *dj, int players, const BridgeCommand &c, char *message, siz
     if (reinterpret_cast<uint64_t>(basic_info) != kCode[TRACK_BASIC_INFO].address - kBase + api.slide) {
         snprintf(message, size, "Rekordbox's track type differs from the verified build");
         result = kReplyUnsupported;
-    } else if (!api.get_row_data_track(database, c.content_id, track, kCollection, 0)) {
-        snprintf(message, size, "Track %u is not in Rekordbox's collection", c.content_id);
+    } else if (!api.get_row_data_track(database, c.content_id, track, device ? kDevice : kCollection,
+                                       device ? static_cast<int>(c.device) : 0)) {
+        snprintf(message, size, device ? "Track %u is not on that USB stick" : "Track %u is not in Rekordbox's collection",
+                 c.content_id);
         result = kReplyNoTrack;
     } else if (void *info = basic_info(item)) {
         post_load(player, info);
@@ -462,6 +506,7 @@ void tick() {
         deck.flags = flags;
     }
     if (ticks % 5 == 0) read_browser();
+    if (ticks % 200 == 1) read_devices();
     seq_end();
     run_command(dj, players);
 }

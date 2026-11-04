@@ -235,3 +235,19 @@ class BrowserMirrorTests(unittest.TestCase):
         self.assertTrue(page.go_back())                              # BACK leaves the mirror for Wave's own lists
         self.assertNotEqual(page.view, ('rekordbox',))
         page.shutdown()
+
+
+class DeviceLoadTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Windows drive roots')
+    def test_a_stick_is_found_by_its_drive_however_rekordbox_writes_the_root(self):
+        for root in ('E:/', 'E:\\', 'e:'):
+            reader = mb.RekordboxBridgeReader()
+            reader.bridged, reader.devices = True, ((7, root),)
+            reader.bridge = SimpleNamespace(request_load=lambda deck, ident, handle: (True, handle))
+            self.assertEqual(reader.load(0, 5, 'E:\\'), (True, 7), root)
+
+    def test_an_unknown_stick_is_refused_before_rekordbox_is_asked(self):
+        reader = mb.RekordboxBridgeReader()
+        reader.bridged, reader.devices = True, ((7, '/Volumes/STICK'),)
+        reader.bridge = SimpleNamespace(request_load=lambda *a: self.fail('asked Rekordbox'))
+        self.assertEqual(reader.load(0, 5, '/Volumes/OTHER'), (False, 'Rekordbox has not mounted that USB stick yet'))

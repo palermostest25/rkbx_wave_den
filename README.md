@@ -59,7 +59,8 @@ Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
 From 2.3.3, Wave checks GitHub for a newer release when it starts and every few hours. When there is
 one, an **UPDATE** button appears at the top. Press it, with the decks stopped, and Wave downloads the
 release for your computer, checks it against GitHub's published SHA-256, swaps itself out and restarts.
-Rekordbox keeps running, and Wave reconnects to it. Turn the check off in **Settings → Connection**.
+Rekordbox keeps running, and Wave reconnects to it. To check right away, press **CHECK FOR UPDATES**
+in **Settings → Connection**, which is also where you can turn the automatic check off.
 Earlier versions need one manual download.
 
 ## First run
@@ -115,9 +116,8 @@ OS, Rekordbox version and the status text Wave shows.
 
 ## Current limits
 
-- **Windows:** the bridge is new in 2.3.0 and has not yet been tested on hardware. Try it at home before a gig.
-- **Windows:** tap-to-load from a USB stick isn't supported yet (the controller's LOAD works).
-  SHIFT + BROWSE zoom isn't available either, because Windows lets only one app use the controller.
+- **Windows:** the bridge is new in 2.3 and still being tested on hardware. Try it at home before a gig.
+- **Windows:** SHIFT + BROWSE zoom isn't available, because Windows lets only one app use the controller.
 - Wave shows Rekordbox; it doesn't replace it. Playback, effects and the mixer stay in Rekordbox.
 
 ## Build from source
