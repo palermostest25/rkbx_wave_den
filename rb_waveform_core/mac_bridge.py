@@ -159,6 +159,8 @@ def parse(buffer):
 
 OLDER = 'Rekordbox has an older Wave bridge loaded: press CONNECT to restart it'
 STARTING_TEXT = 'Rekordbox is starting'
+DIRECT = 'REKORDBOX · direct'
+STALE = 'REKORDBOX · direct · press CONNECT to restart Rekordbox and finish updating Wave'
 BUSY = 'REKORDBOX · busy'
 
 
@@ -237,15 +239,36 @@ def bundled_dylib():
     return base/'rb_waveform_core'/'data'/LIBRARY
 
 
+def bridge_name(source=None):
+    """The file name this Wave gives its bridge: one per build, by its hash."""
+    source = Path(source) if source else bundled_dylib()
+    return f'wave-bridge-{hashlib.sha256(source.read_bytes()).hexdigest()[:16]}{source.suffix}'
+
+
+def stale_bridge(pid, expected=None, maps=None):
+    """True when this Rekordbox runs a bridge from another Wave build (Wave was updated while
+    Rekordbox kept running): its new abilities arrive only once Rekordbox restarts with it."""
+    if not WINDOWS and maps is None:
+        return False  # shortcut: macOS can't list another process's modules via psutil; check there if needed
+    try:
+        expected = expected or bridge_name()
+        if maps is None:
+            import psutil
+            maps = [m.path for m in psutil.Process(pid).memory_maps(grouped=True)]
+    except Exception:
+        return False  # can't tell: assume current rather than nag
+    loaded = [Path(path.replace('\\', '/')).name for path in maps if 'wave-bridge-' in path]
+    return bool(loaded) and expected not in loaded
+
+
 def install(source=None):
     """Put the bridge and its OpenSSL config where Rekordbox may read them; returns the config.
     The library is named by its hash: a running Rekordbox maps it, so it is never overwritten."""
     source = Path(source) if source else bundled_dylib()
-    data = source.read_bytes()
     folder = bridge_dir()
     folder.mkdir(parents=True, exist_ok=True)
     os.chmod(folder, 0o700)
-    library = folder/f'wave-bridge-{hashlib.sha256(data).hexdigest()[:16]}{source.suffix}'
+    library = folder/bridge_name(source)
     if not library.exists():
         partial = library.with_suffix('.partial')
         shutil.copyfile(source, partial)
@@ -355,6 +378,7 @@ class RekordboxBridgeReader:
         self.interval = 1/poll_hz
         self.connected = False
         self.bridged = False
+        self.stale = False     # Rekordbox runs a bridge from an earlier Wave build
         self.status = 'Waiting for Rekordbox'
         self.bridge = None
         self.deck_paths = {}  # deck -> audio file Rekordbox's engine has loaded, while bridged
@@ -466,7 +490,7 @@ class RekordboxBridgeReader:
                                 paths.pop(idx, None)
                                 states[idx] = DeckState(idx)
                                 self._queue.put(states[idx].snapshot('anlz_path'))
-                        self.bridged = False
+                        self.bridged = self.stale = False
                         self.deck_paths = {}
                         self.deck_status = {}
                         self.browser = None
@@ -492,8 +516,9 @@ class RekordboxBridgeReader:
                         while not self._queue.empty():  # nothing the fallback said survives
                             self._queue.get_nowait()
                         self.bridged = True
+                        self.stale = stale_bridge(pid)
                     self.connected = True
-                    self.status = 'REKORDBOX · direct'
+                    self.status = STALE if self.stale else DIRECT
                     if snapshot.ticks == last_tick:
                         self._stop_event.wait(max(0, self.interval - (time.monotonic() - started)))
                         continue

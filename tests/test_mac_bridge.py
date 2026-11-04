@@ -251,3 +251,16 @@ class DeviceLoadTests(unittest.TestCase):
         reader.bridged, reader.devices = True, ((7, '/Volumes/STICK'),)
         reader.bridge = SimpleNamespace(request_load=lambda *a: self.fail('asked Rekordbox'))
         self.assertEqual(reader.load(0, 5, '/Volumes/OTHER'), (False, 'Rekordbox has not mounted that USB stick yet'))
+
+
+class StaleBridgeTests(unittest.TestCase):
+    NEW = 'wave-bridge-1111111111111111.dll'
+
+    def test_rekordbox_running_an_earlier_waves_bridge_is_stale(self):
+        maps = [r'C:\Windows\System32\kernel32.dll', r'C:\Users\dj\AppData\Local\rkbx_wave\bridge\wave-bridge-0000000000000000.dll']
+        self.assertTrue(mb.stale_bridge(1, self.NEW, maps))
+
+    def test_the_current_bridge_or_no_answer_is_not_stale(self):
+        self.assertFalse(mb.stale_bridge(1, self.NEW, [r'C:\x\rkbx_wave\bridge\\' + self.NEW]))
+        self.assertFalse(mb.stale_bridge(1, self.NEW, [r'C:\Windows\System32\kernel32.dll']))  # nothing to compare
+        self.assertFalse(mb.stale_bridge(1, self.NEW, None) if not mb.WINDOWS else False)    # macOS: not checked
