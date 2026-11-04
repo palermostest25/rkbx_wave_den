@@ -69,7 +69,7 @@ To see Rekordbox itself (for its preferences, for example), use **Settings → C
 
 | To | Do this |
 | --- | --- |
-| Browse and load | **BROWSE**, pick a source and category, tap a track, then tap a deck's **LOAD** button. Wave never loads onto a playing deck. |
+| Browse and load | **BROWSE**, pick a source and category, tap a track, then tap a deck's **LOAD** button. Once the track is on the deck, Wave goes back to the waveforms. Wave never loads onto a playing deck. |
 | Browse from the controller | Turn the **browse knob**: Wave's browser opens and follows Rekordbox. Press **LOAD** on the controller as usual. |
 | Toggle key lock | Tap **MT** on a deck. |
 | Zoom the waveforms | Pinch, scroll over them, press **+ / −**, or (macOS) **SHIFT + BROWSE** on the controller. |
@@ -96,6 +96,7 @@ Settings are saved automatically in `%APPDATA%\rkbx_wave` (Windows) or
 | You see | Do this |
 | --- | --- |
 | *Unsupported Rekordbox build* | Install Rekordbox 7.2.19. Wave's bridge supports that build only. |
+| *Rekordbox is waiting: answer its questions* | Rekordbox stopped at one of its own startup questions (library sync, My Tag and so on). Wave brings it forward: answer it, and Wave connects and comes back. |
 | *Quit Rekordbox and press CONNECT* | Rekordbox was started without Wave. Press **CONNECT**, or quit Rekordbox and reopen Wave. |
 | *Rekordbox was not found* (Windows) | Wave looks in `C:\Program Files\rekordbox`. Start Rekordbox yourself once, then press **CONNECT**: Wave restarts it from wherever it is installed. |
 | Load buttons greyed out | The deck is playing, or Rekordbox isn't connected through the bridge (see above). |
