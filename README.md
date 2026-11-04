@@ -115,9 +115,8 @@ OS, Rekordbox version and the status text Wave shows.
 
 ## Current limits
 
-- **Windows:** the bridge is new in 2.3.0 and has not yet been tested on hardware. Try it at home before a gig.
-- **Windows:** tap-to-load from a USB stick isn't supported yet (the controller's LOAD works).
-  SHIFT + BROWSE zoom isn't available either, because Windows lets only one app use the controller.
+- **Windows:** the bridge is new in 2.3 and still being tested on hardware. Try it at home before a gig.
+- **Windows:** SHIFT + BROWSE zoom isn't available, because Windows lets only one app use the controller.
 - Wave shows Rekordbox; it doesn't replace it. Playback, effects and the mixer stay in Rekordbox.
 
 ## Build from source

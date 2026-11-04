@@ -691,7 +691,9 @@ class MainWindow(QMainWindow):
             first_look = self.mirrored is None
             # Only Rekordbox's cursor moving is the knob; its list refreshing by itself (a stick mounting,
             # a playlist updating) must not pull Wave off what the user picked, so it only redraws a mirror.
-            moved = not first_look and key[:3] != self.mirrored[:3]
+            # Focus counts only when it lands somewhere: on Windows it reads as none whenever Wave is touched.
+            moved = not first_look and (key[0] != self.mirrored[0] or key[2] != self.mirrored[2]
+                                        or (key[1] and key[1] != self.mirrored[1]))
             self.mirrored = key
             if not moved and not first_look:
                 if self.pages.currentWidget() is self.browser_page and self.browser_page.view == ('rekordbox',):

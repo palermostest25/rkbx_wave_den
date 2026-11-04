@@ -77,6 +77,8 @@ class QtAppTests(unittest.TestCase):
         with patch.object(self.window.browser_page, 'mirror') as mirror:
             reader.browser = Browser(**{**state, 'rows': 12, 'tracks': ((1, '/a'), (2, '/b'))})  # Rekordbox refreshed
             self.window.follow_rekordbox_browser()
+            reader.browser = Browser(**{**state, 'rows': 12, 'focus': ''})  # Windows: Wave was touched, Rekordbox lost focus
+            self.window.follow_rekordbox_browser()
             mirror.assert_not_called()
             reader.browser = Browser(**{**state, 'rows': 12, 'cursor': 3})  # the knob turned
             self.window.follow_rekordbox_browser()
