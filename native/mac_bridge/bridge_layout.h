@@ -1,8 +1,7 @@
 // Shared-memory layout between the bridge (inside Rekordbox) and Wave.
 // rb_waveform_core/mac_bridge.py mirrors this byte for byte; change both together.
 #pragma once
-#include <atomic>
-#include <cstdint>
+#include <stdint.h>  // shared with the Windows bridge (MSVC)
 
 #ifndef WAVE_BRIDGE_VERSION
 #define WAVE_BRIDGE_VERSION "1"
@@ -79,7 +78,7 @@ struct BridgeBrowser {         // Rekordbox's own browser, as its controller mov
 struct BridgeState {           // seqlock: odd while the bridge writes
     char magic[8];
     uint32_t version;
-    std::atomic<uint32_t> seq;
+    uint32_t seq;              // atomically, with __atomic builtins
     uint32_t pid;
     uint32_t status;
     uint32_t deck_count;

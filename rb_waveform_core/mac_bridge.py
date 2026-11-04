@@ -1,9 +1,10 @@
-"""Rekordbox's own deck state, and track loading, through Wave's bridge inside Rekordbox (macOS).
+"""Rekordbox's own deck state, and track loading, through Wave's bridge inside Rekordbox (macOS, Windows).
 
 Rekordbox loads the bridge - an OpenSSL provider with no algorithms - when Wave starts it with
 OPENSSL_CONF pointing at Wave's config. The bridge reads Rekordbox's engine on Rekordbox's own
-main thread and shares it through a private file; native/mac_bridge/ holds its source and the
-layout mirrored here. When Rekordbox was started some other way, the Accessibility reader takes over.
+main thread and shares it through a private file; native/mac_bridge/ and native/win_bridge/ hold
+its source and the layout mirrored here. When Rekordbox was started some other way, the
+Accessibility reader (macOS) or the memory reader (Windows) takes over.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import hashlib
 import mmap
 import os
 from pathlib import Path
+import re
 from queue import Empty, Queue
 import shutil
 import struct
@@ -22,8 +24,10 @@ import time
 
 from .rkbx_link_listener import DeckState
 
+WINDOWS = sys.platform == 'win32'
 APP = Path('/Applications/rekordbox 7/rekordbox.app')
 EXECUTABLE = APP/'Contents'/'MacOS'/'rekordbox'
+LIBRARY = 'wave-bridge.dll' if WINDOWS else 'wave-bridge.dylib'
 MAGIC, VERSION = b'RKWBRDG1', 5
 HEADER = struct.Struct('<8sIIIIIiQQ128s')
 DECK = struct.Struct('<IidfffIqqii1024s')
@@ -48,11 +52,22 @@ assert (HEADER.size, DECK.size, BROWSER.size, ROW.size, SIZE) == (176, 1080, 544
 
 
 def bridge_dir():
+    if WINDOWS:
+        return Path(os.environ.get('LOCALAPPDATA') or Path.home()/'AppData'/'Local')/'rkbx_wave'/'bridge'
     return Path.home()/'Library'/'Application Support'/'rkbx_wave'/'bridge'
 
 
 def uptime_ns():
-    return time.clock_gettime_ns(time.CLOCK_UPTIME_RAW)
+    # The bridge's clock: QueryPerformanceCounter on Windows, as perf_counter_ns reads it there.
+    return time.perf_counter_ns() if WINDOWS else time.clock_gettime_ns(time.CLOCK_UPTIME_RAW)
+
+
+def windows_executable(root=None):
+    """The newest installed rekordbox: Program Files\\rekordbox\\rekordbox 7.x.y\\rekordbox.exe."""
+    root = Path(root or Path(os.environ.get('ProgramFiles', r'C:\Program Files'))/'rekordbox')
+    found = sorted(root.glob('rekordbox */rekordbox.exe'),
+                   key=lambda path: tuple(int(n) for n in re.findall(r'\d+', path.parent.name)))
+    return found[-1] if found else None
 
 
 def fnv(data):
@@ -156,11 +171,12 @@ class Bridge:
         self.file = open(self.path, 'r+b')
         try:
             stat = os.fstat(self.file.fileno())
-            if stat.st_uid != os.getuid() or stat.st_mode & 0o077:
+            # On Windows the file lives in the user's own LOCALAPPDATA, private by its folder's ACL.
+            if not WINDOWS and (stat.st_uid != os.getuid() or stat.st_mode & 0o077):
                 raise OSError('Wave bridge state file is not private')
-            # Mapping past a short file would fault on read: an earlier layout is reported instead.
+            # Mapping past a short file would fault on read (Windows: grow it): an earlier layout is reported instead.
             if stat.st_size < SIZE:
-                header = os.pread(self.file.fileno(), 12, 0)
+                header = self.file.read(12)
                 if len(header) == 12 and header[:8] == MAGIC and struct.unpack_from('<I', header, 8)[0] != VERSION:
                     raise OlderBridge(OLDER)
                 raise OSError('Wave bridge state file is not complete')
@@ -207,15 +223,16 @@ class Bridge:
 
 def rekordbox_pid():
     import psutil
-    for process in psutil.process_iter(['exe']):
-        if process.info.get('exe') == str(EXECUTABLE):
+    for process in psutil.process_iter(['exe', 'name']):
+        if WINDOWS and (process.info.get('name') or '').lower() == 'rekordbox.exe' or \
+                not WINDOWS and process.info.get('exe') == str(EXECUTABLE):
             return process.pid
     return None
 
 
 def bundled_dylib():
     base = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent.parent))
-    return base/'rb_waveform_core'/'data'/'wave-bridge.dylib'
+    return base/'rb_waveform_core'/'data'/LIBRARY
 
 
 def install(source=None):
@@ -226,7 +243,7 @@ def install(source=None):
     folder = bridge_dir()
     folder.mkdir(parents=True, exist_ok=True)
     os.chmod(folder, 0o700)
-    library = folder/f'wave-bridge-{hashlib.sha256(data).hexdigest()[:16]}.dylib'
+    library = folder/f'wave-bridge-{hashlib.sha256(data).hexdigest()[:16]}{source.suffix}'
     if not library.exists():
         partial = library.with_suffix('.partial')
         shutil.copyfile(source, partial)
@@ -236,7 +253,8 @@ def install(source=None):
     text = ('openssl_conf = wave_init\n[wave_init]\nproviders = wave_providers\n'
             '[wave_providers]\ndefault = default_provider\nwave_bridge = wave_bridge_provider\n'
             '[default_provider]\nactivate = 1\n'
-            f'[wave_bridge_provider]\nmodule = {library}\nactivate = 1\n')
+            # Forward slashes: OpenSSL reads a backslash as an escape.
+            f'[wave_bridge_provider]\nmodule = {library.as_posix()}\nactivate = 1\n')
     if not config.exists() or config.read_text() != text:
         partial = config.with_suffix('.partial')
         partial.write_text(text)
@@ -244,11 +262,28 @@ def install(source=None):
     return config
 
 
-def launch(hidden=False):
+def launch(hidden=False, executable=None):
     """Start Rekordbox with the bridge, hidden behind Wave if asked. Never touches a Rekordbox
     that is already running."""
     if rekordbox_pid():
         raise RuntimeError('Quit Rekordbox first; Wave then starts it with the bridge')
+    if WINDOWS:
+        executable = executable or windows_executable()
+        if not executable:
+            raise RuntimeError('Rekordbox was not found in Program Files\\rekordbox')
+        config = install()
+        import ctypes
+        # A packaged Wave points DLL lookup at its own files; Rekordbox must not inherit that.
+        ctypes.windll.kernel32.SetDllDirectoryW(None)
+        startup = subprocess.STARTUPINFO()
+        if hidden:
+            startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE: minimised, Wave keeps the screen
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('_PYI', '_MEIPASS'))}
+        subprocess.Popen([str(executable)], cwd=executable.parent, startupinfo=startup, close_fds=True,
+                         env={**env, 'OPENSSL_CONF': str(config), 'RKBX_WAVE_BRIDGE': '1'},
+                         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+        return
     if not APP.is_dir():
         raise RuntimeError(f'Rekordbox was not found at {APP}')
     config = install()
@@ -259,20 +294,47 @@ def launch(hidden=False):
 def restart(hidden=False):
     """Quit Rekordbox the way its own menu does - it asks first if a deck is playing - then start it
     with the bridge."""
-    if rekordbox_pid():
-        subprocess.run(['/usr/bin/osascript', '-e', 'tell application id "com.pioneerdj.rekordboxdj" to quit'],
-                       timeout=60, capture_output=True)
+    executable = None
+    if pid := rekordbox_pid():
+        if WINDOWS:  # start the same install again, wherever it lives
+            import psutil
+            executable = Path(psutil.Process(pid).exe())
+        # As its close button does (Windows: taskkill without /F asks the window to close).
+        subprocess.run(['taskkill', '/IM', 'rekordbox.exe'] if WINDOWS else
+                       ['/usr/bin/osascript', '-e', 'tell application id "com.pioneerdj.rekordboxdj" to quit'],
+                       timeout=60, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if WINDOWS else 0)
         deadline = time.monotonic() + 30
         while rekordbox_pid() and time.monotonic() < deadline:
             time.sleep(.5)
         if rekordbox_pid():
             raise RuntimeError('Rekordbox is still open; it may be waiting for you to confirm quitting')
-    launch(hidden)
+    launch(hidden, executable)
 
 
 def show():
     """Bring a hidden Rekordbox to the front, for its own screens and preferences."""
-    subprocess.run(['/usr/bin/open', '-a', str(APP)], check=True, timeout=15)
+    if not WINDOWS:
+        subprocess.run(['/usr/bin/open', '-a', str(APP)], check=True, timeout=15)
+        return
+    import ctypes
+    pid = rekordbox_pid()
+    if not pid:
+        raise RuntimeError('Rekordbox is not running')
+    user32 = ctypes.windll.user32
+    windows = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def each(hwnd, _):
+        owner = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(owner))
+        if owner.value == pid and user32.GetWindowTextLengthW(ctypes.c_void_p(hwnd)) and \
+                not user32.GetWindow(ctypes.c_void_p(hwnd), 4):  # GW_OWNER: its main window, not a tool window
+            windows.append(hwnd)
+        return True
+    user32.EnumWindows(each, None)
+    for hwnd in windows:
+        user32.ShowWindow(ctypes.c_void_p(hwnd), 9)  # SW_RESTORE
+        user32.SetForegroundWindow(ctypes.c_void_p(hwnd))
 
 
 def live(snapshot, pid, now=None):
@@ -345,7 +407,10 @@ class RekordboxBridgeReader:
 
     def _start_fallback(self):
         if self._fallback is None:
-            if self._fallback_factory is None:
+            if self._fallback_factory is None and WINDOWS:
+                from .rb_memory_reader import RekordboxMemoryReader
+                self._fallback_factory = RekordboxMemoryReader
+            elif self._fallback_factory is None:
                 from .mac_accessibility_reader import RekordboxAccessibilityReader
                 self._fallback_factory = RekordboxAccessibilityReader
             self._fallback = self._fallback_factory(deck_count=self.deck_count)

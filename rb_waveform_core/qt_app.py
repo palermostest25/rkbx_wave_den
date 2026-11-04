@@ -275,10 +275,7 @@ class Session(QObject):
             if source == 'OSC':
                 from .rkbx_link_listener import RekordboxLinkListener
                 self.reader = RekordboxLinkListener(decks=range(4))
-            elif sys.platform == 'win32':
-                from .rb_memory_reader import RekordboxMemoryReader
-                self.reader = RekordboxMemoryReader(deck_count=4)
-            elif sys.platform == 'darwin':
+            elif sys.platform in ('win32', 'darwin'):
                 from .mac_bridge import RekordboxBridgeReader, launch, rekordbox_pid
                 self.reader = RekordboxBridgeReader(deck_count=4)
                 # Rekordbox is the engine behind Wave: start it, out of sight, when it isn't running.
@@ -941,7 +938,7 @@ class MainWindow(QMainWindow):
         self.connection_detail.setWordWrap(True)
         self.connection_detail.setObjectName('help')
         form.addRow('Connection status', self.connection_detail)
-        if sys.platform == 'darwin':
+        if sys.platform in ('darwin', 'win32'):
             state_help = QLabel('Wave reads decks, loops and tempo straight from Rekordbox, which it starts with its bridge. '
                                 'Rekordbox stays the audio engine and keeps the FLX10.')
             state_help.setWordWrap(True)
@@ -956,8 +953,9 @@ class MainWindow(QMainWindow):
             rekordbox_layout = QHBoxLayout(rekordbox_row)
             rekordbox_layout.setContentsMargins(0, 0, 0, 0)
             rekordbox_layout.addWidget(self.button('SHOW REKORDBOX', self.show_rekordbox))
-            rekordbox_layout.addWidget(self.button('ACCESSIBILITY SETTINGS', lambda:
-                QDesktopServices.openUrl(QUrl('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'))))
+            if sys.platform == 'darwin':
+                rekordbox_layout.addWidget(self.button('ACCESSIBILITY SETTINGS', lambda:
+                    QDesktopServices.openUrl(QUrl('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'))))
             rekordbox_layout.addStretch()
             form.addRow('', rekordbox_row)
         open_row = QWidget()

@@ -89,6 +89,7 @@ class BridgeCommandTests(unittest.TestCase):
             with self.assertRaises(mb.OlderBridge):
                 mb.Bridge(path)
 
+    @unittest.skipIf(mb.WINDOWS, 'Windows keeps it private by its folder, not its mode')
     def test_unprivate_state_file_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'state.bin'
@@ -96,6 +97,25 @@ class BridgeCommandTests(unittest.TestCase):
             os.chmod(path, 0o644)
             with self.assertRaises(OSError):
                 mb.Bridge(path)
+
+
+class InstallTests(unittest.TestCase):
+    def test_newest_windows_rekordbox_is_started(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for version in ('rekordbox 7.2.9', 'rekordbox 7.2.19', 'rekordbox 6.8.5'):
+                (Path(directory)/version).mkdir()
+                (Path(directory)/version/'rekordbox.exe').touch()
+            self.assertEqual(mb.windows_executable(directory).parent.name, 'rekordbox 7.2.19')
+            self.assertIsNone(mb.windows_executable(Path(directory)/'missing'))
+
+    def test_config_names_the_bridge_by_hash_with_forward_slashes(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(mb, 'bridge_dir', lambda: Path(directory)/'b'):
+            source = Path(directory)/'wave-bridge.dll'
+            source.write_bytes(b'bridge')
+            config = mb.install(source).read_text()
+            module = config.split('module = ', 1)[1].split('\n', 1)[0]
+            self.assertNotIn('\\', module)
+            self.assertTrue(module.endswith('.dll') and Path(module).is_file())
 
 
 class DeviceDiscoveryTests(unittest.TestCase):

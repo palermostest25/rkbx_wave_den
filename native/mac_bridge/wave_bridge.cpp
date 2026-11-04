@@ -191,11 +191,11 @@ void note(const char *text) {
 void publish_status(uint32_t status, const char *why) {
     if (!shared) return;
     // May follow a tick that threw mid-write, so force odd rather than increment.
-    shared->seq.store(shared->seq.load() | 1, std::memory_order_release);
+    __atomic_store_n(&shared->seq, __atomic_load_n(&shared->seq, __ATOMIC_ACQUIRE) | 1, __ATOMIC_RELEASE);
     shared->status = status;
     shared->deck_count = 0;
     note(why);
-    shared->seq.store((shared->seq.load() | 1) + 1, std::memory_order_release);
+    __atomic_store_n(&shared->seq, (__atomic_load_n(&shared->seq, __ATOMIC_ACQUIRE) | 1) + 1, __ATOMIC_RELEASE);
 }
 
 bool open_shared() {
@@ -218,7 +218,7 @@ bool open_shared() {
     close(fd);
     if (map == MAP_FAILED) return false;
     shared = static_cast<BridgeState *>(map);
-    shared->seq.store(shared->seq.load() | 1, std::memory_order_release);  // a reader waits until the header is whole
+    __atomic_store_n(&shared->seq, __atomic_load_n(&shared->seq, __ATOMIC_ACQUIRE) | 1, __ATOMIC_RELEASE);  // a reader waits until the header is whole
     memcpy(shared->magic, kBridgeMagic, sizeof shared->magic);
     shared->version = kBridgeVersion;
     shared->pid = static_cast<uint32_t>(getpid());
@@ -229,7 +229,7 @@ bool open_shared() {
     // A request left from an earlier Rekordbox session must never run in this one.
     shared->reply = BridgeReply{};
     shared->reply.seq = shared->command.seq;
-    shared->seq.store((shared->seq.load() | 1) + 1, std::memory_order_release);
+    __atomic_store_n(&shared->seq, (__atomic_load_n(&shared->seq, __ATOMIC_ACQUIRE) | 1) + 1, __ATOMIC_RELEASE);
     return true;
 }
 
@@ -469,7 +469,7 @@ void tick() {
     const void *graph = dj ? *reinterpret_cast<const void *const *>(static_cast<const uint8_t *>(dj) + kEngineGraph) : nullptr;
     const int players = graph ? api.num_players(graph) : 0;
     const bool read_paths = ticks % 25 == 0;
-    shared->seq.fetch_add(1, std::memory_order_acq_rel);
+    __atomic_fetch_add(&shared->seq, 1, __ATOMIC_ACQ_REL);
     ++ticks;
     shared->ticks = ticks;
     shared->uptime_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
@@ -524,7 +524,7 @@ void tick() {
         }
         deck.flags = flags;
     }
-    shared->seq.fetch_add(1, std::memory_order_acq_rel);
+    __atomic_fetch_add(&shared->seq, 1, __ATOMIC_ACQ_REL);
     run_command(dj, players);
 }
 

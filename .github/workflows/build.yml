@@ -18,6 +18,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Build the Windows Rekordbox bridge
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: >-
+          cl /nologo /std:c++17 /O2 /MT /EHsc /W4 /LD /DWAVE_BRIDGE_VERSION=\"%GITHUB_SHA:~0,7%\"
+          native\win_bridge\wave_bridge_win.cpp /Fe:rb_waveform_core\data\wave-bridge.dll
+          /link user32.lib
+      - name: Check the bridge exports OpenSSL's provider entry
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: dumpbin /exports rb_waveform_core\data\wave-bridge.dll | findstr OSSL_provider_init
       - run: python -m pip install . pyinstaller
       - run: python -m unittest discover -s tests -v
       - name: Windows high-DPI native full-screen acceptance
@@ -37,6 +53,11 @@ jobs:
       - name: Archive macOS app
         if: runner.os == 'macOS'
         run: ditto -c -k --sequesterRsrc --keepParent "dist/Rekordbox Wave.app" "dist/Rekordbox-Wave-${{ matrix.os }}.zip"
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: wave-bridge-dll
+          path: rb_waveform_core/data/wave-bridge.dll
       - uses: actions/upload-artifact@v4
         with:
           name: rekordbox-wave-${{ matrix.os }}
