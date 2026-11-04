@@ -14,7 +14,7 @@ A DJ using a DDJ-FLX10 initially wanted four enlarged waveforms on a separate 15
 - Preserve currently supported Rekordbox versions. Existing live reader is Windows-specific, versions 7.2.2 and 7.2.14; macOS live memory support is unvalidated.
 
 ## Boundaries
-The initial release boundary was a playback display, with audio, browsing and performance controls staying in Rekordbox. The next touch workflow is planned and incomplete: the current increment adds read-only browsing, search, touch keyboard, scrolling and global numeric BPM sorting; it has no direct deck-load backend or full performance controls. Rekordbox remains the authority for playback, cues and engaged loops; controller input must not stand in for confirmed native state. Native authoritative engaged-loop bounds remain unavailable. Streaming analysis availability and platform/version compatibility require explicit validation; do not claim compatibility without testing.
+Rekordbox stays the audio engine and the authority for playback, cues and loops; the FLX10 stays connected to it. Wave's bridge (native/) reads Rekordbox 7.2.19's engine and browser and asks Rekordbox to load tracks and toggle key lock, never onto a playing deck. Library access is read-only. Wave never modifies Rekordbox's files and never claims support for a build it has not verified. The Windows bridge is built and verified against the binary but not yet tested on hardware.
 
 ## Revised acceptance requirements
 One native window with integrated readable settings. Selecting a monitor fills the full panel, including Windows taskbar area. Use the existing project source and build/test workflow; further binary investigation was stopped at the user’s request.

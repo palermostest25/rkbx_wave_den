@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rkbx_wave"
-version = "2.0.1"
-description = "Real-time, zoomable multi-deck waveform display for Rekordbox (reads Rekordbox memory directly)"
+version = "2.3.0"
+description = "A full-screen, touch-friendly XDJ-AZ-style deck screen and browser for Rekordbox"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
-    {name = "mrmilbe"}
+    {name = "mrmilbe"},
+    {name = "palermostest25"}
 ]
 keywords = ["rekordbox", "dj", "waveform", "pioneer", "cdj"]
 classifiers = [

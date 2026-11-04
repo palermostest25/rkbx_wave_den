@@ -1,0 +1,36 @@
+name: Bug report
+description: Something in Rekordbox Wave doesn't work or looks wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: input
+    id: status
+    attributes:
+      label: Status text
+      description: The connection text at the top of Wave (for example "REKORDBOX · direct"), or Settings → Connection.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Computer
+      options: [Windows, macOS (Apple Silicon), macOS (Intel)]
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Rekordbox Wave version, Rekordbox version (Help → About), and your OS version.
+      placeholder: Wave 2.3.0, Rekordbox 7.2.19, Windows 11 23H2
+    validations:
+      required: true
+  - type: input
+    id: controller
+    attributes:
+      label: Controller
+      placeholder: DDJ-FLX10

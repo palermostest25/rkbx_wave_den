@@ -25,3 +25,9 @@ dist/
 *.spec
 
 work/
+
+# Windows bridge build outputs
+*.obj
+rb_waveform_core/data/wave-bridge.dll
+rb_waveform_core/data/wave-bridge.lib
+rb_waveform_core/data/wave-bridge.exp

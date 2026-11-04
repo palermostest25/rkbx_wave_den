@@ -147,7 +147,7 @@ class Session(QObject):
     def load_unavailable(self):
         """Why touch loading can't be used now, or '' when it can."""
         if not hasattr(self.reader, 'load'):
-            return "Touch loading needs Wave's Rekordbox bridge: macOS with Rekordbox 7.2.19"
+            return "Touch loading needs Wave's Rekordbox bridge: Rekordbox 7.2.19 started by Wave (Native connection)"
         if not self.reader.bridged:
             return self.reader.RELAUNCH
         return ''

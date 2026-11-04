@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main, 'overhaul/**', 'complete/**']
+    tags: ['v*']
   pull_request:
 permissions:
   contents: read
@@ -33,7 +34,7 @@ jobs:
       - name: Check the bridge exports OpenSSL's provider entry
         if: runner.os == 'Windows'
         shell: cmd
-        run: dumpbin /exports rb_waveform_core\data\wave-bridge.dll | findstr OSSL_provider_init
+        run: dumpbin /exports rb_waveform_core\data\wave-bridge.dll | findstr OSSL_provider_init && del rb_waveform_core\data\wave-bridge.lib rb_waveform_core\data\wave-bridge.exp
       - run: python -m pip install . pyinstaller
       - run: python -m unittest discover -s tests -v
       - name: Windows high-DPI native full-screen acceptance
@@ -50,9 +51,16 @@ jobs:
           name: interface-${{ matrix.os }}
           path: validation/
       - run: python scripts/build_app.py
-      - name: Archive macOS app
+      - name: Package macOS app as a DMG
         if: runner.os == 'macOS'
-        run: ditto -c -k --sequesterRsrc --keepParent "dist/Rekordbox Wave.app" "dist/Rekordbox-Wave-${{ matrix.os }}.zip"
+        run: |
+          name=$([ "$(uname -m)" = arm64 ] && echo AppleSilicon || echo Intel)
+          mkdir dmg && cp -R "dist/Rekordbox Wave.app" dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname "Rekordbox Wave" -srcfolder dmg -format UDZO "dist/Rekordbox-Wave-macOS-$name.dmg"
+      - name: Name the Windows download
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cp "dist/Rekordbox Wave.exe" dist/Rekordbox-Wave-Windows-x64.exe
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
@@ -62,8 +70,8 @@ jobs:
         with:
           name: rekordbox-wave-${{ matrix.os }}
           path: |
-            dist/*.exe
-            dist/*.zip
+            dist/Rekordbox-Wave-*.exe
+            dist/*.dmg
           if-no-files-found: error
       - name: Smoke test packaged imports and entry point
         shell: python
@@ -77,3 +85,21 @@ jobs:
         with:
           name: packaged-interface-${{ matrix.os }}
           path: validation/packaged-native.png
+  release:
+    # A pushed v* tag drafts a release with every download; publish it from GitHub after checking it.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rekordbox-wave-*
+          merge-multiple: true
+          path: downloads
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --generate-notes
+          --title "Rekordbox Wave ${GITHUB_REF_NAME#v}" downloads/*

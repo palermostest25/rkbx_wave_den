@@ -1,0 +1,11 @@
+name: Feature request
+description: Suggest something Wave should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: Describe it the way you would use it at a gig. If another player (an XDJ-AZ, say) does it, say how.
+    validations:
+      required: true
