@@ -1,93 +1,144 @@
 # Rekordbox Wave
 
-A dedicated two- or four-deck waveform display for a separate monitor, with an AZ-style three-band canvas. Rekordbox retains browsing, audio and performance controls.
+**A full-screen, touch-friendly deck screen for Rekordbox, in the style of the XDJ-AZ.**
+Big three-band waveforms for two or four decks, an AZ-style info bar, and a touch browser that loads
+tracks straight into Rekordbox. Rekordbox stays the audio engine and keeps your controller; Wave is
+the screen.
 
-## Native Qt application
+[**Download the latest release**](https://github.com/palermostest25/rkbx_wave_den/releases/latest) ·
+Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
 
-The 2.0 interface uses one Qt window. **SETTINGS** or **F2** opens its integrated settings page; there is no separate options application. Settings start at 22 logical pixels and have their own text-size control. Qt handles Windows/macOS display scaling.
+![Four decks in Rekordbox Wave](docs/images/wave-4deck.png)
 
-Selecting a physical **Monitor** automatically enters full screen. It covers the complete panel, including the area normally occupied by the Windows taskbar. Windows uses a Per-Monitor-V2 DPI manifest and native monitor bounds. Full screen persists while settings are open. **Escape** returns from settings to waves; press it again to leave full screen. **F11** toggles full screen.
+## What it does
 
-- **2 DECK / 4 DECK:** switch without rebuilding the window or discarding tracks. Default four-deck order is **3,1,2,4**. Use a preset or type any permutation of 1–4 into **Deck order**.
-- **Waveform:** zoom in bars/beats, playhead placement, beat/bar markers, cue and loop visibility, colours and per-band levels.
-- **Display:** monitor binding and separate settings/cue text scales. A disconnected monitor falls back to the primary; the selected monitor is restored when it returns.
-- **Connection:** native playback, compatible OSC input, or offline ANLZ inspection.
-- **Profiles:** import/export JSON. Changes are saved atomically to the app-owned settings file.
+- **Waveforms like the AZ:** Rekordbox's own three-band colours and scale, beat grid, bar numbers,
+  hot cues, memory cues and loops, zoomable from 1 to 128 bars. Two or four decks, in any order (FLX10 default 3, 1, 2, 4).
+- **Deck info bar:** artwork, title and artist, time remaining or elapsed, BPM, key and key shift,
+  tempo and tempo range (±6 / ±10 / ±16 / WIDE), MASTER, SYNC and MT (tap MT to toggle key lock),
+  loop state, a bar countdown and a track overview that warns near the end.
+- **Touch browser:** your collection or a USB stick, by playlist, history, artist, album or key, with
+  search, an on-screen keyboard and sorting. Tap a deck to load the selected track.
+- **Works with your controller:** turn the browse knob and Wave's browser follows Rekordbox's cursor;
+  LOAD, BACK and everything else work as they always do. Tested with a DDJ-FLX10.
+- **Made for a second screen:** pick a monitor and Wave fills it, every time it is plugged in.
 
-`+` / `−` zoom while focused. The existing Windows global numpad zoom keys also work while Rekordbox has focus. Double-click the canvas to open settings. The display has no controls that seek or change audio playback.
+![The touch browser](docs/images/browser.png)
 
-## Waveforms, cues and loops
+## What you need
 
-PWV7 detail uses its actual mid/high/low byte ordering, fixed seven-bit heights and separate frequency-band scaling. Blue lows, amber mids, brown overlap and a small white high-frequency layer replace the old track-normalized rendering. The fixed white playhead is distinct from red first-beat ticks. Non-downbeats remain visible and bar numbers are drawn below the signal.
+- **Rekordbox 7.2.19**, installed normally. Wave reads Rekordbox's engine directly and checks the exact
+  build first; with any other version it says so and stays off rather than guess. (Without the bridge,
+  Windows falls back to an older reader for Rekordbox 7.2.2 and 7.2.14 and macOS to a read-only screen
+  reader, both with fewer features and no touch loading.)
+- Windows 10 or 11 (64-bit), or macOS 14 Sonoma or later.
+- A touchscreen is optional: everything also works with a mouse.
 
-Hot-cue flags and memory cues retain exact track positions. Nearby labels use free positions rather than overwriting one another. Saved loop boundaries are bracketed below the waveform. USB cues are combined from DAT/EXT/2EX, preferring richer PCO2 colours. Native-resolution cached tiles retain detail on long tracks; reduced peak-preserving tiles are used when zoomed out. Local database loading supports current and older pyrekordbox API layouts.
+## Install
 
-## Playback compatibility
+### Windows
 
-| Input | Available data |
+1. Download **`Rekordbox-Wave-Windows-x64.exe`** from the
+   [latest release](https://github.com/palermostest25/rkbx_wave_den/releases/latest).
+2. Double-click it. The app is not code-signed, so Windows SmartScreen may say *"Windows protected your
+   PC"*: click **More info → Run anyway**. Nothing is installed; you can keep the `.exe` anywhere
+   (on the desktop, for example) and delete it to uninstall.
+
+### macOS
+
+1. Download the DMG for your Mac from the
+   [latest release](https://github.com/palermostest25/rkbx_wave_den/releases/latest):
+   **Apple Silicon** (M1 and later) or **Intel**. Not sure? Apple menu → About This Mac → *Chip*.
+2. Open it and drag **Rekordbox Wave** to **Applications**.
+3. Open it from Applications. The app is not notarized by Apple, so the first time macOS says it
+   *cannot verify* it: click **Done**, then open **System Settings → Privacy & Security**, scroll down,
+   click **Open Anyway** next to Rekordbox Wave and confirm. You only do this once.
+
+## First run
+
+1. **Quit Rekordbox** if it is open (Wave needs to start it).
+2. Open **Rekordbox Wave**. It starts Rekordbox for you, minimised behind Wave, with Wave's bridge.
+   After a few seconds the status at the top shows **REKORDBOX · direct**.
+3. Load and play tracks as usual. Wave follows every deck.
+
+If Rekordbox was already running, Wave shows a **CONNECT** button: press it and Wave restarts
+Rekordbox with the bridge (it asks first; Rekordbox asks too if a deck is playing).
+To see Rekordbox itself (for its preferences, for example), use **Settings → Connection → SHOW REKORDBOX**.
+
+## Using Wave
+
+| To | Do this |
 | --- | --- |
-| Windows native | Existing Rekordbox 7.2.2 / 7.2.14.0 playback-position, BPM and analysis-path layouts |
-| macOS native | Read-only Accessibility connection to the normal Rekordbox app; verified live with 7.2.19.0342 |
-| Intel Mac | Same Accessibility connection; Intel bundle built natively, live hardware not yet verified |
-| OSC | Position, BPM and optional authoritative playing/rate/live-loop state |
+| Browse and load | **BROWSE**, pick a source and category, tap a track, then tap a deck's **LOAD** button. Wave never loads onto a playing deck. |
+| Browse from the controller | Turn the **browse knob**: Wave's browser opens and follows Rekordbox. Press **LOAD** on the controller as usual. |
+| Toggle key lock | Tap **MT** on a deck. |
+| Zoom the waveforms | Pinch, scroll over them, press **+ / −**, or (macOS) **SHIFT + BROWSE** on the controller. |
+| Two or four decks | **2 DECKS / 4 DECKS** at the top. Change the order in Settings → Display. |
+| Use a second monitor | Settings → Display → **Monitor**. Wave fills it whenever it is connected. |
+| Settings | **SETTINGS** or **F2**. **Escape** goes back; **F11** toggles full screen. |
 
-### Platter, monitor and colours
+![Settings](docs/images/settings.png)
 
-- **Platters:** when you scratch, jog-cue or move a deck by hand, Wave stops predicting and glides between real positions, so the waveform never runs ahead and snaps back. Normal playback still runs predicted and smooth. On macOS rekordbox shows time in tenths of a second. For tiny moves, Wave uses the edge of the tenth the platter just crossed, so a small wiggle no longer jitters. With a controller connected, its PLAY and CUE buttons tell a motor start from a hand nudge.
-- **Monitor:** full screen on a monitor is remembered. Whenever that monitor is connected, at launch or when plugged in, Wave fills it; otherwise Wave stays a normal window. F11/Esc leave full screen for now, and plugging the monitor in again returns to it.
-- **Zoom:** pinch on a trackpad, scroll with two fingers or a mouse wheel over the waveforms, or turn **SHIFT + BROWSE** on the controller. That is rekordbox's own waveform zoom, so plain BROWSE still only browses tracks. +/− keys and the Settings menu step through fixed sizes (1 to 128 bars).
-- **Waveform style:** Settings → Waveform → *Rekordbox* or *Wave classic* (the earlier look). The Rekordbox palette comes from flat-colour pixels measured on rekordbox 7's own decks: lows `#0054E2`, mids `#FFA600`, mids inside the bass `#B46607`, highs `#F6ECD9`. The lows and mids match a published rekordbox-style Mixxx skin (`#0055E1`, `#FFA600`). Bands are read and scaled the way rekordbox 7 draws them. I measured them against rekordbox's own deck drawing of a track: each stored PWV7 column (low, mid, high) correlates r = 0.89–0.95 with one band colour. All three bands share one linear scale that fills the lane at a raw value of about 100, with a thin highs line kept through the centre.
+Settings are saved automatically in `%APPDATA%\rkbx_wave` (Windows) or
+`~/Library/Application Support/rkbx_wave` (macOS), and can be exported as profiles.
 
-### Live hot cues and memory cues
+## Is it safe for my library?
 
-Cue edits appear on the waveform as you make them, on Windows and macOS, however you make them: on the controller, with the mouse, by adding or deleting. Wave re-reads the loaded tracks' cues from rekordbox's library several times a second (read-only). rekordbox saves cue edits there straight away. With a controller, hot-cue pads, SHIFT+pad (delete) and MEMORY show on the press itself, and the library then confirms them.
+- Wave opens Rekordbox's library **read-only**. It never writes to it.
+- It never modifies Rekordbox's files. The bridge is a small library Rekordbox loads when Wave starts it,
+  only for that session. Start Rekordbox normally and it runs exactly as before, without Wave.
+- The bridge only runs on the exact Rekordbox build it was checked against (it compares Rekordbox's code
+  before doing anything) and stops itself, never Rekordbox, if anything goes wrong.
+- Loading from Wave goes through Rekordbox's own load, as its browser does, and is refused on a playing deck.
 
-### Live loops from your controller
+## Troubleshooting
 
-Wave listens to your DJ controller's MIDI alongside rekordbox and decodes it with the `.midi.csv` map rekordbox itself ships for that controller (all 56 rekordbox maps with loop buttons are supported, and your own MIDI-learn maps take priority). Pressing **IN** shows an IN flag at once, with the loop-to-be growing toward the playhead. **OUT**, **auto/4-beat loop**, beat-loop pads, **½×/2×** and **RELOOP/EXIT** draw or clear the loop the moment you press them, with its length in beats. Wave only listens: it never sends anything to the controller, so rekordbox behaves exactly as before.
+| You see | Do this |
+| --- | --- |
+| *Unsupported Rekordbox build* | Install Rekordbox 7.2.19. Wave's bridge supports that build only. |
+| *Quit Rekordbox and press CONNECT* | Rekordbox was started without Wave. Press **CONNECT**, or quit Rekordbox and reopen Wave. |
+| *Rekordbox was not found* (Windows) | Wave looks in `C:\Program Files\rekordbox`. Start Rekordbox yourself once, then press **CONNECT**: Wave restarts it from wherever it is installed. |
+| Load buttons greyed out | The deck is playing, or Rekordbox isn't connected through the bridge (see above). |
+| A track shows no waveform | Analyse it in Rekordbox first. Wave draws Rekordbox's own analysis. |
 
-Loop points snap to the beat grid, as with rekordbox's default quantize. If rekordbox plays a slightly different loop, the next wrap corrects it. Without a controller (loops set with the mouse), a loop appears from its first repeat. On Windows, classic MIDI drivers let only one app open a port, so this works only where the controller's driver shares its port. Otherwise the status line says so.
+Still stuck? [Open an issue](https://github.com/palermostest25/rkbx_wave_den/issues/new/choose) with your
+OS, Rekordbox version and the status text Wave shows.
 
-No saved loop is falsely presented as currently engaged. Unknown native versions fail with an explanatory connection status. Streaming analysis depends on accessible ANLZ files.
+## Current limits
 
-On Mac, allow **Rekordbox Wave** in **System Settings → Privacy & Security → Accessibility**, then select Native in Wave. Keep Rekordbox in PERFORMANCE mode with its deck elapsed-time fields available (Browse and 4-Deck Horizontal were checked). Wave reads titles/times and resolves their existing ANLZ files through an enforced read-only SQLCipher connection. It does not modify Rekordbox, launch a helper or create another Rekordbox copy.
+- **Windows:** the bridge is new in 2.3.0 and has not yet been tested on hardware. Try it at home before a gig.
+- **Windows:** tap-to-load from a USB stick isn't supported yet (the controller's LOAD works).
+  SHIFT + BROWSE zoom isn't available either, because Windows lets only one app use the controller.
+- Wave shows Rekordbox; it doesn't replace it. Playback, effects and the mixer stay in Rekordbox.
 
-Playback-time values have 0.1-second display precision; bounded interpolation smooths movement between updates. Tracks are matched by title and artist, then by the deck's BPM and length, so streaming versions that share a title (Beatport drops "(Original Mix)") resolve to the version on the deck. Copies of one recording resolve to the one you prepared (analysed, most cues, most played). A track missing from the collection is looked up on any mounted rekordbox USB stick's export library. An unmatched track is retried every 2 seconds while a stream finishes analysing. On Windows the analysis path is read from rekordbox itself, so no matching is needed. Current live verification includes streaming tracks with cached analysis. Direct USB tracks absent from the local collection may need their ANLZ file selected manually in Settings (Native playback remains connected); unresolved metadata is reported instead of guessing a different track.
+## Build from source
 
-The earlier debug-copy approach is disabled because detached vendor helpers could bypass its process sandbox. It is not used by the Accessibility reader.
-
-## Run and build
-
-Use Python 3.10+; native build jobs use Python 3.12.
+Python 3.10 or later (releases use 3.12).
 
 ```sh
 python -m pip install .
-python rkbx_wave.py
-python rkbx_wave.py --demo
+python rkbx_wave.py            # or: python rkbx_wave.py --demo  (synthetic decks, no Rekordbox needed)
+python -m unittest discover -s tests
 ```
 
-The demo is explicitly labelled and uses synthetic analysis. For a real offline waveform, choose **Offline**, then select a deck and **OPEN ANALYSIS FILE** in Settings. Offline inspection has a static playhead.
+Packaging (`python -m pip install pyinstaller`, then `python scripts/build_app.py`) makes
+`Rekordbox Wave.exe` on Windows and `Rekordbox Wave.app` on macOS. The bridges live in `native/`:
+`native/mac_bridge/build.sh` builds the macOS library, and CI builds the Windows DLL with MSVC
+(see `.github/workflows/build.yml`). Pushing a `v*` tag builds every platform and drafts a release.
 
-```sh
-python -m pip install . pyinstaller
-python -m unittest discover -s tests -v
-python scripts/build_app.py
-```
+### OSC input
 
-Windows produces one `.exe`; Mac produces an `.app`. Native CI tests the integrated UI and full-screen bounds; an additional Windows pass uses 150% scale and checks ownership of the bottom monitor corners. `scripts/capture_demo.py --out work/captures` captures the actual Qt surface. `QT_QPA_PLATFORM=offscreen` allows layout-only captures on a headless system.
+**Settings → Connection → OSC** listens on localhost UDP 4460 for another tool to drive the display
+(deck IDs are zero-based): `/track/0/anlz_path`, `/time/0`, `/bpm/0/current`, `/bpm/0/original`,
+`/playing/0`, `/rate/0`, and `/loop/0` (start seconds, end seconds, enabled).
 
-Settings are in `%APPDATA%/rkbx_wave` on Windows and `~/Library/Application Support/rkbx_wave` on Mac. `--config <file>` selects another profile location.
+## Credits
 
-## OSC protocol
+A fork of [mrmilbe/rkbx_wave](https://github.com/mrmilbe/rkbx_wave) (MIT; original notices retained).
+Uses [pyrekordbox](https://github.com/dylanljones/pyrekordbox), Qt / PySide6 under the
+[LGPL](https://www.qt.io/licensing/open-source-lgpl-obligations), and memory layouts from
+[rkbx_link](https://github.com/grufkork/rkbx_link). Waveform format references:
+[Deep Symmetry](https://djl-analysis.deepsymmetry.org/djl-analysis/track_metadata.html).
 
-Choose **OSC** to listen on localhost UDP 4460. A separate compatible sender is required; Rekordbox does not supply this protocol itself. Deck IDs are zero-based:
-
-- `/track/0/anlz_path`: local folder or DAT-file path; empty clears the deck.
-- `/time/0`: playback seconds.
-- `/bpm/0/current`, `/bpm/0/original`: BPM.
-- `/playing/0`: 0 or 1; `/rate/0`: playback multiplier, including reverse.
-- `/loop/0`: start seconds, end seconds, enabled (0 or 1).
-
-## Credits and licences
-
-Fork of [mrmilbe/rkbx_wave](https://github.com/mrmilbe/rkbx_wave), with original MIT notices retained. Uses [pyrekordbox](https://github.com/dylanljones/pyrekordbox), Qt/PySide6 under its LGPL terms, and community memory layouts from [rkbx_link](https://github.com/grufkork/rkbx_link). Waveform format/calibration references: [Deep Symmetry](https://djl-analysis.deepsymmetry.org/djl-analysis/track_metadata.html) and the [AlphaTheta XDJ-AZ manual](https://downloads.support.alphatheta.com/manuals/all-in-one-dj-systems/XDJ-AZ/html/en/000COV_en/Part_names/Part_names.htm). Qt sources and licence information are available at [Qt](https://www.qt.io/licensing/open-source-lgpl-obligations).
+Rekordbox, XDJ-AZ and DDJ-FLX10 are trademarks of AlphaTheta Corporation. This project is not
+affiliated with or endorsed by AlphaTheta.

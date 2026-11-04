@@ -20,7 +20,7 @@ from typing import Optional, Tuple
 import numpy as np
 from PIL import Image
 
-from .ANLZ import analyze_anlz_folder, extract_beat_grid
+from .ANLZ import analyze_anlz_folder, band_gains, extract_beat_grid
 from .analysis import WaveformAnalysis, analysis_from_rb_waveform, resolve_audio_path
 from .cues import CueMarker, get_track_cues
 from .playhead import (
@@ -85,10 +85,12 @@ class DeckController:
         self.cached_waveform = info.waveform
         self.cached_duration = info.duration
         self.song_name = info.song_path.stem if info.song_path else "Unknown"
-        print(f"folder={folder}, path={info.song_path}")
+
         self.resolved_audio_path = resolve_audio_path(info.song_path, folder, self.library_root)
 
-        self.analysis = analysis_from_rb_waveform(self.cached_waveform, self.cached_duration, style=info.waveform_style)
+        self.analysis = analysis_from_rb_waveform(
+            self.cached_waveform, self.cached_duration, style=info.waveform_style,
+            gains=band_gains(folder) if info.waveform_style == "three_band" else (1.0, 1.0, 1.0))
 
         self.beat_grid_full = extract_beat_grid(folder)
         self.beat_grid_downbeats = _downbeats_only(self.beat_grid_full)

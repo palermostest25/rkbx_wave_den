@@ -175,6 +175,7 @@ class RekordboxAccessibilityReader:
                             names[f.deck]=identity
                             retry.pop(f.deck,None)
                             state.anlz_path=None
+                            state.title,state.artist,state.key,state.artwork=title or None,artist or None,None,None
                             missing=None
                             if title and title!='Not Loaded.':
                                 if library is None:library=Libraries()
@@ -182,6 +183,8 @@ class RekordboxAccessibilityReader:
                                 track=library.resolve(title,artist,length if length>1 else None,bpm)
                                 if track:
                                     state.anlz_path=str(track.analysis_folder)
+                                    state.key=track.key or None
+                                    state.artwork=str(track.artwork) if track.artwork else None
                                 else:
                                     retry[f.deck]=started+2
                                     missing=(f'No library match for {title} by {artist or "unknown artist"} '

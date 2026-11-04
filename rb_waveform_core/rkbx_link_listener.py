@@ -54,6 +54,10 @@ class DeckEvent:
     loop_end: Optional[float] = None
     loop_active: Optional[bool] = None
     error: Optional[str] = None
+    title: Optional[str] = None  # as the library names the track, when the source knows it
+    artist: Optional[str] = None
+    key: Optional[str] = None
+    artwork: Optional[str] = None
 
 
 def format_link_status(
@@ -84,6 +88,10 @@ class DeckState:
     loop_start: Optional[float] = None
     loop_end: Optional[float] = None
     loop_active: Optional[bool] = None
+    title: Optional[str] = None
+    artist: Optional[str] = None
+    key: Optional[str] = None
+    artwork: Optional[str] = None
 
     def snapshot(self, source: str, when: Optional[float] = None) -> DeckEvent:
         return DeckEvent(
@@ -100,6 +108,10 @@ class DeckState:
             loop_start=self.loop_start,
             loop_end=self.loop_end,
             loop_active=self.loop_active,
+            title=self.title,
+            artist=self.artist,
+            key=self.key,
+            artwork=self.artwork,
         )
 
     def _time_scale(self) -> Optional[float]:

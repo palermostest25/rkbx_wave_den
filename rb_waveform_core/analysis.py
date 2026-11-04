@@ -47,6 +47,7 @@ def analysis_from_rb_waveform(
 	waveform: np.ndarray,
 	duration: float | None,
 	style: str = "three_band",
+	gains: tuple = (1.0, 1.0, 1.0),
 ) -> WaveformAnalysis:
 	"""Convert a Rekordbox PWV waveform array (N x 3) to WaveformAnalysis.
 
@@ -72,7 +73,8 @@ def analysis_from_rb_waveform(
 	if style == "monochrome":
 		normalized = np.clip(data / 31.0, 0.0, 1.0)
 	else:
-		normalized = np.clip(data / 100.0, 0.0, 1.0)
+		# Per-band gains before the clip, so a boosted band keeps its peaks.
+		normalized = np.clip(data / 100.0 * np.asarray(gains, dtype=np.float32), 0.0, 1.0)
 	estimated_duration = duration if (duration and duration > 0.0) else len(data) / 75.0
 
 	return WaveformAnalysis(

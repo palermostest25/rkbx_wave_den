@@ -16,7 +16,7 @@ from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut, QDesktopServic
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QFormLayout, QLabel, QPushButton, QComboBox, QCheckBox,
     QDoubleSpinBox, QSpinBox, QSlider, QScrollArea, QStackedWidget,
-    QFileDialog, QColorDialog, QFrame, QMessageBox, QTabWidget)
+    QFileDialog, QColorDialog, QFrame, QMessageBox, QListWidget)
 
 from .config import WaveformColorConfig, WaveformRenderConfig, config_to_dict, dict_to_config
 from .cues import CueMarker, _marker_color, live_cues
@@ -36,6 +36,11 @@ def config_directory():
 
 # Three-band palettes. Rekordbox: flat-fill pixels measured from rekordbox 7's decks; the
 # blue and amber match a published rekordbox-style Mixxx skin (#0055E1, #FFA600).
+# How each source's clock behaves. The Mac UI clock ticks in tenths: hold through slow pitch,
+# treat it as a quantum, and ease its larger timing errors in slowly enough to stay invisible.
+DEFAULT_TIMING = dict(extrapolate_seconds=.08, stale_seconds=.25, resolution=0.0, smoothing_seconds=.3)
+TIMING = {'accessibility': dict(extrapolate_seconds=.3, stale_seconds=.6, resolution=.1, smoothing_seconds=.6)}
+
 STYLES = {
     'Rekordbox': dict(low_color=(0, 84, 226), mid_color=(255, 166, 0), overlap_color=(180, 102, 7), high_color=(246, 236, 217)),
     'Wave classic': dict(low_color=(20, 95, 235), mid_color=(244, 164, 20), overlap_color=(169, 107, 39), high_color=(255, 255, 255)),
@@ -82,18 +87,20 @@ class Session(QObject):
     zoomRequested = Signal(float)  # multiply the visible beats
     analysisChanged = Signal()
     statusChanged = Signal(str)
+    loadStatus = Signal(str)
 
     def __init__(self, *, demo=False, config_path=None):
         super().__init__()
         self.path = Path(config_path) if config_path else config_directory() / 'default_config.json'
         self.colors = WaveformColorConfig(**STYLES['Rekordbox'])
         self.render = WaveformRenderConfig()
-        self.view = dict(zoom_beats=32, playhead=.32, track_headers=False,
+        self.view = dict(zoom_beats=32, playhead=.32, deck_info=True, time_mode='remain', info_size=1.0,
+                         artwork=True, end_warning=30, start_rekordbox=True, hide_rekordbox=True,
                          grid=True, cues=True, loops=True, bar_numbers=True,
                          source='Native', settings_scale=1.0, always_on_top=True,
                          refresh_hz=60, style='Rekordbox')
         self.decks = {i: DeckController() for i in range(4)}
-        self.timelines = {i: PlaybackTimeline() for i in range(4)}
+        self.timelines = {i: PlaybackTimeline(infer_loops=demo) for i in range(4)}
         self.errors = {}
         self.reader = None
         self.reader_error = ''
@@ -106,7 +113,12 @@ class Session(QObject):
         self.demo = demo
         self.jobs = {}
         self.requested = {}
+        # deck -> title, artist, key and artwork as the library has the loaded track
+        self.meta = {}
         self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix='waveform-analysis')
+        # Load requests wait for Rekordbox's answer off the UI thread; one at a time.
+        self.loader = ThreadPoolExecutor(max_workers=1, thread_name_prefix='deck-loader')
+        self.loading = None  # (deck, track, request, deadline) until Rekordbox's engine has the file
         self.vsync_wait = None
         self.status = ''
         self.load_config(self.path, initial=True)
@@ -117,9 +129,12 @@ class Session(QObject):
             self.set_status('DEMO · synthetic analysis')
         else:
             self.connect_source()
-            from .midi_loops import MidiLoopListener
-            self.midi = MidiLoopListener()
-            self.midi.start()
+            if sys.platform == 'darwin':
+                # Only for SHIFT+BROWSE zoom. CoreMIDI shares a controller between apps; Windows MIDI
+                # gives a port to one app, and taking the FLX10 from Rekordbox would stop its decks.
+                from .midi_loops import MidiLoopListener
+                self.midi = MidiLoopListener()
+                self.midi.start()
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.timer.timeout.connect(self.tick)
@@ -128,6 +143,69 @@ class Session(QObject):
 
     def order(self):
         return deck_order(self.render.deck_order, self.render.deck_count)
+
+    def load_unavailable(self):
+        """Why touch loading can't be used now, or '' when it can."""
+        if not hasattr(self.reader, 'load'):
+            return "Touch loading needs Wave's Rekordbox bridge: Rekordbox 7.2.19 started by Wave (Native connection)"
+        if not self.reader.bridged:
+            return self.reader.RELAUNCH
+        return ''
+
+    def deck_playing(self, idx):
+        return bool(self.timelines[idx].playing)
+
+    def load_track(self, idx, track, source=''):
+        """Ask Rekordbox to load a track from the collection, or from the USB export at ``source``;
+        loadStatus reports the engine's answer."""
+        why = self.load_unavailable()
+        if not why and self.loading:
+            why = f'Still loading {self.loading[1].title}'
+        if not why and self.deck_playing(idx):
+            why = f'Deck {idx + 1} is playing: stop it before loading over it'
+        if not why and not str(track.identifier).isdigit():
+            why = 'Only Rekordbox tracks can be loaded from here'
+        if why:
+            self.loadStatus.emit(why)
+            return False
+        # A stick's export stores paths from its own root; the engine reports the mounted path.
+        root = Path(source).parents[2] if source else None
+        expected = str(root / track.path.lstrip('/')) if root else track.path
+        request = self.loader.submit(self.reader.load, idx, int(track.identifier), str(root) if root else None)
+        self.loading = (idx, replace(track, path=expected), request, time.monotonic() + 8)
+        self.loadStatus.emit(f'Loading {track.title} on deck {idx + 1}…')
+        return True
+
+    def toggle_master_tempo(self, idx):
+        """Key lock on or off for a deck, by Rekordbox's own engine; the deck state shows the result."""
+        status = getattr(self.reader, 'deck_status', {}).get(idx)
+        if status is None or not hasattr(self.reader, 'set_master_tempo'):
+            self.set_status(self.load_unavailable() or 'Master tempo needs the Rekordbox bridge')
+            return
+        self.loader.submit(self.reader.set_master_tempo, idx, not status.master_tempo)
+
+    def poll_loading(self, now):
+        if not self.loading:
+            return
+        idx, track, request, deadline = self.loading
+        if request.done():
+            try:
+                accepted, message = request.result()
+            except Exception as exc:
+                accepted, message = False, str(exc)
+            if not accepted:
+                self.loading = None
+                self.loadStatus.emit(f'Deck {idx + 1}: {message}')
+                return
+            # Done only when Rekordbox's engine reports this very file on this deck.
+            loaded = getattr(self.reader, 'deck_paths', {}).get(idx)
+            if loaded and track.path and Path(loaded).as_posix().casefold() == Path(track.path).as_posix().casefold():
+                self.loading = None
+                self.loadStatus.emit(f'Loaded {track.title} on deck {idx + 1}')
+                return
+        if now > deadline:
+            self.loading = None
+            self.loadStatus.emit(f'Rekordbox did not load {track.title} on deck {idx + 1}')
 
     def set_status(self, message):
         if message != self.status:
@@ -144,7 +222,10 @@ class Session(QObject):
             view.update(data.get('view', {}))
             if view.get('source') not in ('Native', 'OSC', 'Offline'):
                 raise ValueError('Invalid playback source')
-            for key, lo, hi in (('zoom_beats', 4, 512), ('playhead', .15, .75), ('settings_scale', 1, 2), ('refresh_hz', 20, 120)):
+            if view.get('time_mode') not in ('remain', 'elapsed'):
+                raise ValueError('Invalid time display')
+            for key, lo, hi in (('zoom_beats', 4, 512), ('playhead', .15, .75), ('settings_scale', 1, 2), ('refresh_hz', 20, 120),
+                                ('info_size', .5, 2), ('end_warning', 0, 600)):
                 value = float(view[key])
                 if not math.isfinite(value) or not lo <= value <= hi:
                     raise ValueError(f'Invalid {key}')
@@ -179,6 +260,9 @@ class Session(QObject):
         temporary.replace(target)
 
     def connect_source(self):
+        for timeline in self.timelines.values():
+            timeline.infer_loops = False
+            timeline.reset()
         if self.reader:
             self.reader.stop()
             self.reader = None
@@ -191,19 +275,12 @@ class Session(QObject):
             if source == 'OSC':
                 from .rkbx_link_listener import RekordboxLinkListener
                 self.reader = RekordboxLinkListener(decks=range(4))
-            elif sys.platform == 'win32':
-                from .rb_memory_reader import RekordboxMemoryReader
-                self.reader = RekordboxMemoryReader(deck_count=4)
-            elif sys.platform == 'darwin':
-                from .mac_accessibility_reader import RekordboxAccessibilityReader
-                self.reader = RekordboxAccessibilityReader(deck_count=4)
-                # The UI clock ticks in tenths: hold through slow pitch, treat it as a quantum,
-                # and ease its larger timing errors in slowly enough to stay invisible.
-                for timeline in self.timelines.values():
-                    timeline.extrapolate_seconds = .3
-                    timeline.stale_seconds = .6
-                    timeline.resolution = .1
-                    timeline.smoothing_seconds = .6
+            elif sys.platform in ('win32', 'darwin'):
+                from .mac_bridge import RekordboxBridgeReader, launch, rekordbox_pid
+                self.reader = RekordboxBridgeReader(deck_count=4)
+                # Rekordbox is the engine behind Wave: start it, out of sight, when it isn't running.
+                if self.view.get('start_rekordbox', True) and not rekordbox_pid():
+                    launch(hidden=self.view.get('hide_rekordbox', True))
             else:
                 raise RuntimeError('Native Rekordbox connection requires Windows or macOS')
             self.reader.start()
@@ -249,15 +326,20 @@ class Session(QObject):
             self.timelines[idx].reset()
             self.errors.pop(idx, None)
             return
+        if event.source == 'anlz_path':
+            self.meta[idx] = dict(title=event.title, artist=event.artist, key=event.key, artwork=event.artwork)
         if event.anlz_path and str(event.anlz_path) != self.requested.get(idx):
             self.open_track(idx, event.anlz_path)
             self.timelines[idx].reset()
         deck = self.decks[idx]
+        if self.meta.get(idx, {}).get('title'):
+            deck.song_name = self.meta[idx]['title']
         deck.update_live_bpm(event.current_bpm)
         timeline = self.timelines[idx]
         timeline.rate_hint = deck.time_scale if deck.original_bpm and deck.current_bpm else None
         timeline.beat_seconds = 60 / deck.original_bpm if deck.original_bpm else None
-        if event.time_seconds is not None and event.source in ('time', 'memory', 'accessibility'):
+        if event.time_seconds is not None and event.source in ('time', 'memory', 'accessibility', 'bridge'):
+            timeline.timing(TIMING.get(event.source, DEFAULT_TIMING))
             stamp = time.monotonic() + min(0, event.received_at - time.time())
             inferred = timeline.inferred_loop
             timeline.observe(event.time_seconds, observed_at=stamp,
@@ -282,6 +364,9 @@ class Session(QObject):
             steps = value if value < 64 else value - 128
             if steps:
                 self.zoomRequested.emit(2 ** (-steps / 4))
+            return
+        # A controller press is a request, not confirmation that Rekordbox acted on it.
+        if not self.demo:
             return
         timeline, deck = self.timelines[idx], self.decks[idx]
         if kind == 'play':
@@ -334,6 +419,9 @@ class Session(QObject):
 
     def apply_cues(self, idx, cues):
         """Show master.db's cues plus controller edits it hasn't recorded yet."""
+        if not self.demo:
+            self.decks[idx].cues = sorted(cues, key=lambda c: (c.time_sec, c.number))
+            return
         now = time.monotonic()
         cues = list(cues)
         pending = []
@@ -370,14 +458,15 @@ class Session(QObject):
                 if event is None:
                     break
                 self.receive(event)
-        while self.midi:
+        for _ in range(128 if self.midi else 0):
             event = self.midi.get_event()
             if event is None:
                 break
             self.loop_action(*event)
         for timeline in self.timelines.values():
-            timeline.controller = bool(self.midi and self.midi.controllers)
+            timeline.controller = self.demo and bool(self.midi and self.midi.controllers)
         self.poll_cues(now := time.monotonic())
+        self.poll_loading(now)
         for idx, future in list(self.jobs.items()):
             if not future.done():
                 continue
@@ -386,6 +475,7 @@ class Session(QObject):
                 deck = future.result()
                 if self.decks[idx].current_bpm:
                     deck.update_live_bpm(self.decks[idx].current_bpm)
+                deck.song_name = self.meta.get(idx, {}).get('title') or deck.song_name
                 self.decks[idx] = deck
                 self.analysisChanged.emit()
                 self.errors.pop(idx, None)
@@ -397,7 +487,8 @@ class Session(QObject):
             self.next_status = now + .5
             if self.reader.connected:
                 controllers = ' · '.join(self.midi.controllers or [self.midi.status]) if self.midi else ''
-                self.set_status('REKORDBOX · connected' + (f' · {controllers}' if controllers else ''))
+                detail = getattr(self.reader, 'status', '') or 'REKORDBOX · connected'
+                self.set_status(detail + (f' · {controllers}' if controllers else ''))
             else:
                 self.set_status(getattr(self.reader, 'status', 'Waiting for Rekordbox'))
         if self.vsync_wait:
@@ -424,6 +515,7 @@ class Session(QObject):
         if self.midi:
             self.midi.stop()
         self.worker.shutdown(wait=False, cancel_futures=True)
+        self.loader.shutdown(wait=False, cancel_futures=True)
 
 
 class MainWindow(QMainWindow):
@@ -443,20 +535,41 @@ class MainWindow(QMainWindow):
         self.toolbar = QFrame()
         self.toolbar.setObjectName('toolbar')
         top = QHBoxLayout(self.toolbar)
-        top.setContentsMargins(20, 8, 16, 8)
-        title = QLabel('WAVEFORM')
-        title.setObjectName('title')
-        top.addWidget(title)
-        top.addSpacing(22)
-        self.two = self.button('2 DECK', lambda: self.set_count(2))
-        self.four = self.button('4 DECK', lambda: self.set_count(4))
-        top.addWidget(self.two)
-        top.addWidget(self.four)
+        top.setContentsMargins(12, 7, 12, 7)
+        top.setSpacing(10)
+        # Deck count as one segmented switch, as on the AZ's own layout toggle.
+        segment = QFrame()
+        segment.setObjectName('segment')
+        switch = QHBoxLayout(segment)
+        switch.setContentsMargins(3, 3, 3, 3)
+        switch.setSpacing(2)
+        self.two = self.button('2 DECKS', lambda: self.set_count(2))
+        self.four = self.button('4 DECKS', lambda: self.set_count(4))
+        switch.addWidget(self.two)
+        switch.addWidget(self.four)
+        top.addWidget(segment)
+        self.browse_button = self.button('BROWSE', self.toggle_browser)
+        self.browse_button.setAccessibleName('Browse Rekordbox collection')
+        top.addWidget(self.browse_button)
         top.addStretch()
+        # Starts Rekordbox with Wave's bridge: shown while Wave could connect directly but isn't.
+        self.connect_button = self.button('CONNECT', self.connect_rekordbox)
+        self.connect_button.setObjectName('connect')
+        self.connect_button.setAccessibleName('Start Rekordbox connected to Wave')
+        self.connect_button.hide()
+        top.addWidget(self.connect_button)
         self.status = QLabel(session.status)
         self.status.setObjectName('connection')
         self.status.setMaximumWidth(510)
         top.addWidget(self.status)
+        self.clock = QLabel()
+        self.clock.setObjectName('clock')
+        self.clock.setAccessibleName('Time')
+        top.addWidget(self.clock)
+        self.clock_timer = QTimer(self)
+        self.clock_timer.timeout.connect(lambda: self.clock.setText(time.strftime('%H:%M')))
+        self.clock_timer.start(1000)
+        self.clock.setText(time.strftime('%H:%M'))
         self.settings_button = self.button('SETTINGS', self.toggle_settings)
         self.settings_button.setAccessibleName('Open display settings')
         top.addWidget(self.settings_button)
@@ -474,6 +587,22 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.canvas)
         self.settings_page = self.build_settings()
         self.pages.addWidget(self.settings_page)
+        from .qt_browser import BrowserPage
+        self.browser_page = BrowserPage()
+        self.browser_page.loadRequested.connect(self.session.load_track)
+        self.canvas.masterTempoToggled.connect(self.session.toggle_master_tempo)
+        self.session.loadStatus.connect(self.browser_page.show_load_status)
+        self.pages.addWidget(self.browser_page)
+        self.deck_watch = QTimer(self)
+        self.deck_watch.timeout.connect(self.sync_load_targets)
+        self.deck_watch.start(250)
+        # Follows Rekordbox's own browser as the controller's knob moves it, as the AZ's screen does.
+        self.mirrored = None
+        self.mirror_opened = False
+        self.mirror_moved = 0.0
+        self.browse_watch = QTimer(self)
+        self.browse_watch.timeout.connect(self.follow_rekordbox_browser)
+        self.browse_watch.start(50)
         self.layout.addWidget(self.pages, 1)
         if sys.platform == 'darwin':
             self.display_link = DisplayLinkRepaint(self.canvas)
@@ -495,9 +624,13 @@ class MainWindow(QMainWindow):
         self.session.changed.connect(self.poll_global_zoom)
         self.apply_theme()
         self.sync_count()
+        self.sync_nav()
         for key, action in [('F2', self.toggle_settings), ('F11', self.toggle_fullscreen), ('Escape', self.escape),
                             ('+', lambda: self.zoom(-1)), ('=', lambda: self.zoom(-1)), ('-', lambda: self.zoom(1))]:
-            shortcut = QShortcut(QKeySequence(key), self)
+            zoom_key = key in ('+', '=', '-')
+            shortcut = QShortcut(QKeySequence(key), self.canvas if zoom_key else self)
+            if zoom_key:
+                shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             shortcut.activated.connect(action)
         app = QApplication.instance()
         app.screenAdded.connect(lambda _: self.screens_changed(plugged=True))
@@ -520,6 +653,64 @@ class MainWindow(QMainWindow):
         if not self.display_link and self.session.timer.interval() != interval:
             self.session.timer.setInterval(interval)
 
+    def follow_rekordbox_browser(self):
+        reader = self.session.reader
+        browser = getattr(reader, 'browser', None) if reader and getattr(reader, 'bridged', False) else None
+        now = time.monotonic()
+        if browser is None:
+            self.mirrored = None
+            return
+        key = (browser.rows, browser.cursor, browser.first, browser.focus, browser.tree_path,
+               tuple(ident for ident, _ in browser.tracks))
+        if key != self.mirrored:
+            first_look = self.mirrored is None
+            self.mirrored = key
+            if not first_look:  # the knob moved: show it, opening the browser if it was closed
+                self.mirror_moved = now
+                if self.pages.currentWidget() is not self.browser_page:
+                    self.toggle_browser()
+                    self.mirror_opened = True
+            if self.pages.currentWidget() is self.browser_page and (not first_look or self.browser_page.view == ('rekordbox',)):
+                self.browser_page.mirror(browser, [root for _, root in getattr(reader, 'devices', ())])
+        elif self.mirror_opened and now - self.mirror_moved > 10:
+            # Opened by the knob and left alone: back to the waveforms, as after a load on the AZ.
+            self.mirror_opened = False
+            if self.pages.currentWidget() is self.browser_page and self.browser_page.view == ('rekordbox',):
+                self.toggle_browser()
+
+    def sync_load_targets(self):
+        reader = self.session.reader
+        self.connect_button.setVisible(bool(reader and hasattr(reader, 'load') and not reader.bridged))
+        if self.pages.currentWidget() is self.browser_page:
+            locked = {i: f'Deck {i + 1} is playing: stop it before loading over it' if self.session.deck_playing(i) else ''
+                      for i in range(4)}
+            self.browser_page.set_decks(self.session.order(), locked, self.session.load_unavailable(),
+                                        getattr(reader, 'deck_paths', {}))
+
+    def show_rekordbox(self):
+        from .mac_bridge import show
+        try:
+            show()
+        except Exception as exc:
+            QMessageBox.information(self, 'Rekordbox', str(exc))
+
+    def connect_rekordbox(self):
+        from .mac_bridge import rekordbox_pid, restart
+        if rekordbox_pid() and QMessageBox.question(
+                self, 'Connect Rekordbox', 'Restart Rekordbox so Wave can connect to it?\n\n'
+                'Playback stops while it restarts. Rekordbox asks first if a deck is playing.') != QMessageBox.StandardButton.Yes:
+            return
+        self.update_status('Restarting Rekordbox with Wave…' if rekordbox_pid() else 'Starting Rekordbox with Wave…')
+        job = self.session.loader.submit(restart, self.session.view.get('hide_rekordbox', True))
+        def finished():
+            if job.done():
+                self.connect_watch.stop()
+                if job.exception():
+                    QMessageBox.information(self, 'Connect Rekordbox', str(job.exception()))
+        self.connect_watch = QTimer(self)
+        self.connect_watch.timeout.connect(finished)
+        self.connect_watch.start(200)
+
     def button(self, title, action):
         button = QPushButton(title)
         button.clicked.connect(action)
@@ -536,31 +727,63 @@ class MainWindow(QMainWindow):
         check_icon = (Path(__file__).parent / "data/check.svg").as_posix()
         self.setStyleSheet('''
             QMainWindow, QWidget { background:#000; color:#eeeeee; font-family:Arial; }
-            QFrame#toolbar { border-bottom:1px solid #303030; }
-            QLabel#title { font-size:24px; font-weight:600; }
-            QLabel#connection { color:#a9b0b9; font-size:14px; }
-            QPushButton { border:1px solid #383c42; background:#101113; padding:9px 16px; font-size:16px; }
-            QPushButton:hover { background:#202731; border-color:#00a6ff; }
-            QPushButton:focus, QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus { border:2px solid #00a6ff; }
-            QPushButton[selected="true"] { color:#00a6ff; border-color:#008eda; }
+            QFrame#toolbar { background:#0e0f12; border-bottom:1px solid #1d2025; }
+            QLabel#connection { color:#8d96a0; font-size:13px; background:transparent; padding:0 6px; }
+            QLabel#clock { color:#f2f4f6; font-size:19px; font-weight:600; background:transparent; padding:0 10px; }
+            QPushButton { border:1px solid #2a2e35; border-radius:9px; background:#1a1d22; color:#e8eaed;
+                          padding:8px 18px; font-size:15px; font-weight:600; min-height:28px; }
+            QPushButton:hover { background:#22262c; }
+            QPushButton:pressed { background:#2c3138; }
+            QPushButton:disabled { color:#565c64; background:#141619; border-color:#1f2227; }
+            QPushButton:focus, QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus { border:1px solid #1a79eb; }
+            QPushButton[selected="true"] { color:#ffffff; background:#1a79eb; border-color:#1a79eb; }
+            QFrame#segment { background:#1a1d22; border:1px solid #2a2e35; border-radius:11px; }
+            QFrame#segment QPushButton { border:0; border-radius:8px; background:transparent; padding:6px 16px; color:#a7afb8; }
+            QFrame#segment QPushButton[selected="true"] { background:#1a79eb; color:#ffffff; }
             QScrollArea { border:0; }
-            QWidget#settings { background:#111418; }
+            QWidget#settings { background:#0b0c0e; }
             QWidget#settings QLabel { background:transparent; }
-            QComboBox, QDoubleSpinBox, QSpinBox { background:#20252c; padding:9px 12px; border:1px solid #4d5662; min-height:30px; }
-            QComboBox QAbstractItemView { background:#20252c; selection-background-color:#1765a3; }
+            QLabel#pageTitle { color:#ffffff; font-size:30px; font-weight:700; }
+            QComboBox, QDoubleSpinBox, QSpinBox { background:#1a1d22; color:#e8eaed; padding:9px 14px; border:1px solid #2a2e35;
+                                                  border-radius:9px; min-height:30px; }
+            QComboBox::drop-down { border:0; width:30px; }
+            QComboBox QAbstractItemView { background:#1a1d22; border:1px solid #2a2e35; selection-background-color:#1a79eb; outline:0; }
             QCheckBox { spacing:14px; padding:8px 0; background:transparent; }
-            QTabWidget::pane { border:1px solid #353c45; background:#111418; }
-            QTabBar::tab { background:#161a20; color:#adb8c6; padding:14px 26px; min-width:135px; }
-            QTabBar::tab:selected { color:#00b4ff; background:#242b34; }
-            QTabBar::tab:focus { border:1px solid #00b4ff; }
-            QCheckBox::indicator { width:25px; height:25px; }
-            QCheckBox::indicator:unchecked { background:#20252c; border:1px solid #778390; }
-            QCheckBox::indicator:checked { background:#009fe9; border:1px solid #77d6ff; image:none; }
+            QListWidget#settingsMenu { background:transparent; border:0; outline:0; }
+            QListWidget#settingsMenu::item { color:#9aa3ad; padding:16px 20px; margin:3px 0; border-radius:10px; font-weight:600; }
+            QListWidget#settingsMenu::item:hover { background:#181b20; color:#e8eaed; }
+            QListWidget#settingsMenu::item:selected { background:#1a79eb; color:#ffffff; }
+            QStackedWidget#settingsPages, QStackedWidget#settingsPages QScrollArea, QStackedWidget#settingsPages QScrollArea > QWidget > QWidget {
+                background:#14161a; border-radius:14px; }
+            QCheckBox::indicator { width:26px; height:26px; border-radius:7px; }
+            QCheckBox::indicator:unchecked { background:#1a1d22; border:1px solid #3a3f46; }
+            QCheckBox::indicator:checked { background:#1a79eb; border:1px solid #1a79eb; image:none; }
             QLabel#section { color:#fff; font-size:25px; font-weight:600; padding-top:14px; }
-            QLabel#help { color:#abb6c3; font-size:16px; }
-            QScrollBar:vertical { background:#111418; width:15px; }
-            QScrollBar::handle:vertical { background:#4c5968; min-height:40px; }
-        ''' + f'QCheckBox::indicator:checked {{ image:url("{check_icon}"); }}\nQWidget#settings, QWidget#settings * {{ font-size:{size}px; }}\nQWidget#settings QPushButton {{ min-height:30px; }}')
+            QLabel#help { color:#8d96a0; font-size:16px; }
+            QScrollBar:vertical { background:transparent; width:10px; }
+            QScrollBar::handle:vertical { background:#3a3f46; min-height:40px; border-radius:5px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
+            QWidget#browser { background:#0a0a0a; }
+            QWidget#browser QFrame#browserNav { background:#0d0d0d; border-right:1px solid #000; }
+            QWidget#browser QFrame#browserTop { background:#141414; border-bottom:1px solid #1d1d1d; }
+            QWidget#browser QLabel#heading { color:#b8b8b8; font-size:22px; background:transparent; }
+            QWidget#browser QPushButton#back { font-size:34px; padding:0 0 6px 0; border:1px solid #2c2c2c; border-radius:4px; background:#1b1b1b; }
+            QWidget#browser QPushButton#back:disabled { color:#3a3a3a; border-color:#1d1d1d; background:#141414; }
+            QWidget#browser QPushButton#keys { font-size:17px; font-weight:600; padding:0; border:1px solid #2c2c2c; border-radius:4px; background:#1b1b1b; }
+            QWidget#browser QLineEdit { background:#1f1f1f; color:#fff; border:1px solid #333; border-radius:4px; padding:0 14px; font-size:21px; selection-background-color:#1a79eb; }
+            QWidget#browser QLineEdit:focus { border:1px solid #1a79eb; }
+            QWidget#browser QTableView, QWidget#browser QListView { background:#0a0a0a; border:0; outline:0; }
+            QWidget#browser QHeaderView::section { background:#141414; color:#8a8a8a; border:0; border-bottom:1px solid #262626; padding:6px; font-size:14px; font-weight:600; }
+            QWidget#browser QLabel#message { background:#0d0d0d; color:#9aa3ad; font-size:15px; padding:6px 16px; border-top:1px solid #1d1d1d; }
+            QWidget#browser QFrame#loadbar { background:#141414; border-top:1px solid #262626; }
+            QWidget#browser QWidget#sourcesPage { background:#0a0a0a; }
+            QWidget#browser QWidget#keyboard { background:#111; border-top:1px solid #262626; }
+            QWidget#browser QWidget#keyboard QPushButton { background:#222; border:1px solid #333; border-radius:4px; font-size:19px; }
+            QWidget#browser QWidget#keyboard QPushButton:pressed { background:#1a79eb; }
+            QWidget#browser QScrollBar:vertical { width:10px; background:#0a0a0a; }
+            QWidget#browser QScrollBar::handle:vertical { background:#3a3a3a; min-height:40px; border-radius:5px; }
+            QPushButton#connect { color:#000; background:#ff9f1a; border-color:#ff9f1a; }
+        ''' + f'QCheckBox::indicator:checked {{ image:url("{check_icon}"); }}\nQWidget#settings, QWidget#settings * {{ font-size:{size}px; }}\nQWidget#settings QPushButton {{ min-height:30px; }}\nQWidget#settings QLabel#pageTitle {{ font-size:{round(size * 1.45)}px; font-weight:700; }}')
 
     def build_settings(self):
         scroll = QScrollArea()
@@ -571,12 +794,26 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(34, 24, 34, 34)
         outer.setSpacing(18)
         first = QHBoxLayout()
-        first.addWidget(QLabel('Display settings'))
+        heading = QLabel('Settings')
+        heading.setObjectName('pageTitle')
+        first.addWidget(heading)
         first.addStretch()
-        first.addWidget(self.button('BACK TO WAVEFORMS', self.toggle_settings))
+        first.addWidget(self.button('DONE', self.toggle_settings))
         outer.addLayout(first)
-        tabs = QTabWidget()
-        outer.addWidget(tabs)
+        # A side menu beside its page, as on the AZ, rather than a row of tabs.
+        body = QHBoxLayout()
+        body.setSpacing(18)
+        menu = QListWidget()
+        menu.setObjectName('settingsMenu')
+        menu.setAccessibleName('Settings sections')
+        menu.setFixedWidth(230)
+        menu.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        pages = QStackedWidget()
+        pages.setObjectName('settingsPages')
+        menu.currentRowChanged.connect(pages.setCurrentIndex)
+        body.addWidget(menu)
+        body.addWidget(pages, 1)
+        outer.addLayout(body, 1)
         def tab(title):
             page = QWidget()
             layout = QVBoxLayout(page)
@@ -590,10 +827,13 @@ class MainWindow(QMainWindow):
             area = QScrollArea()
             area.setWidgetResizable(True)
             area.setWidget(page)
-            tabs.addTab(area, title)
+            pages.addWidget(area)
+            menu.addItem(title)
+            menu.setCurrentRow(0)
             return form
         display_form = tab('DISPLAY')
         waveform_form = tab('WAVEFORM')
+        info_form = tab('DECK INFO')
         connection_form = tab('CONNECTION')
         profiles_form = tab('PROFILES')
         form = display_form
@@ -628,7 +868,7 @@ class MainWindow(QMainWindow):
         self.position_combo.setCurrentIndex(max(0, self.position_combo.findData(self.session.view['playhead'])))
         self.position_combo.currentIndexChanged.connect(lambda _: self.set_view('playhead', self.position_combo.currentData()))
         form.addRow('Playhead', self.position_combo)
-        for label, key in [('Track titles and BPM', 'track_headers'), ('Beat and bar markers', 'grid'),
+        for label, key in [('Beat and bar markers', 'grid'),
                            ('Bar numbers', 'bar_numbers'), ('Hot cues and memory cues', 'cues'), ('Saved and live loops', 'loops')]:
             box = QCheckBox(label)
             box.setChecked(bool(self.session.view.get(key, True)))
@@ -670,6 +910,24 @@ class MainWindow(QMainWindow):
             spin.setValue(getattr(self.session.render, field))
             spin.valueChanged.connect(lambda v, f=field: self.set_render(f, v, invalidate=True))
             form.addRow(label, spin)
+        form = info_form
+        def choice(label, key, options):
+            combo = QComboBox()
+            combo.setAccessibleName(label)
+            for text, value in options:
+                combo.addItem(text, value)
+            combo.setCurrentIndex(max(0, combo.findData(self.session.view.get(key))))
+            combo.currentIndexChanged.connect(lambda _, c=combo, k=key: self.set_view(k, c.currentData()))
+            form.addRow(label, combo)
+        choice('Time display', 'time_mode', [('Remaining · -03:27.1', 'remain'), ('Elapsed · 01:12.4', 'elapsed')])
+        choice('Information bar size', 'info_size', [('Compact', .8), ('Standard', 1.0), ('Large', 1.25)])
+        choice('End-of-track warning', 'end_warning', [('Off', 0), ('Last 15 seconds', 15), ('Last 30 seconds', 30),
+                                                        ('Last 60 seconds', 60)])
+        for label, key in [('Show the information bar', 'deck_info'), ('Show artwork', 'artwork')]:
+            box = QCheckBox(label)
+            box.setChecked(bool(self.session.view.get(key, True)))
+            box.toggled.connect(lambda value, k=key: self.set_view(k, value))
+            form.addRow('', box)
         form = connection_form
         self.source_combo = QComboBox()
         self.source_combo.addItems(['Native', 'OSC', 'Offline'])
@@ -680,9 +938,26 @@ class MainWindow(QMainWindow):
         self.connection_detail.setWordWrap(True)
         self.connection_detail.setObjectName('help')
         form.addRow('Connection status', self.connection_detail)
-        if sys.platform == 'darwin':
-            form.addRow(self.button('OPEN ACCESSIBILITY SETTINGS', lambda:
-                QDesktopServices.openUrl(QUrl('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'))))
+        if sys.platform in ('darwin', 'win32'):
+            state_help = QLabel('Wave reads decks, loops and tempo straight from Rekordbox, which it starts with its bridge. '
+                                'Rekordbox stays the audio engine and keeps the FLX10.')
+            state_help.setWordWrap(True)
+            state_help.setObjectName('help')
+            form.addRow('Rekordbox', state_help)
+            for label, key in [('Start Rekordbox with Wave', 'start_rekordbox'), ('Keep Rekordbox hidden behind Wave', 'hide_rekordbox')]:
+                box = QCheckBox(label)
+                box.setChecked(bool(self.session.view.get(key, True)))
+                box.toggled.connect(lambda value, k=key: self.set_view(k, value))
+                form.addRow('', box)
+            rekordbox_row = QWidget()
+            rekordbox_layout = QHBoxLayout(rekordbox_row)
+            rekordbox_layout.setContentsMargins(0, 0, 0, 0)
+            rekordbox_layout.addWidget(self.button('SHOW REKORDBOX', self.show_rekordbox))
+            if sys.platform == 'darwin':
+                rekordbox_layout.addWidget(self.button('ACCESSIBILITY SETTINGS', lambda:
+                    QDesktopServices.openUrl(QUrl('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'))))
+            rekordbox_layout.addStretch()
+            form.addRow('', rekordbox_row)
         open_row = QWidget()
         open_layout = QHBoxLayout(open_row)
         open_layout.setContentsMargins(0, 0, 0, 0)
@@ -797,26 +1072,49 @@ class MainWindow(QMainWindow):
             self.change_fullscreen(True)
 
     def toggle_settings(self):
-        opening = self.pages.currentIndex() == 0
-        self.pages.setCurrentIndex(1 if opening else 0)
-        self.settings_button.setText('BACK' if opening else 'SETTINGS')
+        opening = self.pages.currentWidget() is not self.settings_page
+        self.pages.setCurrentWidget(self.settings_page if opening else self.canvas)
+        self.sync_nav()
         if opening:
             self.refresh_screens()
         else:
             self.canvas.setFocus()
             self.pace_frames()
 
+    def toggle_browser(self):
+        opening = self.pages.currentWidget() is not self.browser_page
+        self.pages.setCurrentWidget(self.browser_page if opening else self.canvas)
+        self.sync_nav()
+        if opening:
+            self.browser_page.search.setFocus()
+        else:
+            self.pace_frames()
+
     def escape(self):
-        if self.pages.currentIndex():
+        if self.pages.currentWidget() is self.browser_page:
+            if self.browser_page.keyboard.isVisible():
+                self.browser_page.keyboard.hide()
+            elif not self.browser_page.go_back():
+                self.toggle_browser()
+        elif self.pages.currentIndex():
             self.toggle_settings()
         elif self.isFullScreen():
             self.toggle_fullscreen()
 
+    def mark(self, button, on):
+        button.setProperty('selected', on)
+        button.style().unpolish(button)
+        button.style().polish(button)
+
     def sync_count(self):
-        for button, count in ((self.two, 2), (self.four, 4)):
-            button.setProperty('selected', count == self.session.render.deck_count)
-            button.style().unpolish(button)
-            button.style().polish(button)
+        self.mark(self.two, self.session.render.deck_count == 2)
+        self.mark(self.four, self.session.render.deck_count == 4)
+
+    def sync_nav(self):
+        """One visual language for the toolbar: the active view glows, like the deck buttons."""
+        current = self.pages.currentWidget()
+        self.mark(self.browse_button, current is self.browser_page)
+        self.mark(self.settings_button, current is self.settings_page)
 
     def set_count(self, count):
         self.session.render.deck_count = count
@@ -918,6 +1216,7 @@ class MainWindow(QMainWindow):
             old.deleteLater()
             self.pages.addWidget(self.settings_page)
             self.pages.setCurrentWidget(self.settings_page)
+            self.sync_nav()
             self.connected_screen = None
             self.ensure_display()
             self.sync_count()
@@ -942,6 +1241,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.screen_check.stop()
+        self.deck_watch.stop()
+        self.browse_watch.stop()
+        self.browser_page.shutdown()
         self.persist()
         self.session.close()
         super().closeEvent(event)

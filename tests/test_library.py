@@ -29,6 +29,11 @@ class ReadOnlyLibraryTests(unittest.TestCase):
           INSERT INTO djmdContent VALUES('7','Stream','artist',213,13636,'/v4/catalog/tracks/1/','/s1/ANLZ.DAT',0,'',0);
           INSERT INTO djmdContent VALUES('8','Stream','artist',170,13483,'/v4/catalog/tracks/2/','/s2/ANLZ.DAT',0,'',0);
           INSERT INTO djmdCue(ContentID,InMsec,OutMsec,Kind) VALUES('4',500,-1,1);
+          ALTER TABLE djmdContent ADD COLUMN KeyID TEXT;
+          ALTER TABLE djmdContent ADD COLUMN ImagePath TEXT;
+          CREATE TABLE djmdKey(ID TEXT,ScaleName TEXT);
+          INSERT INTO djmdKey VALUES('k','8A');
+          UPDATE djmdContent SET KeyID='k',ImagePath='/PIONEER/Artwork/first/artwork.jpg' WHERE ID='1';
         ''')
         con.commit(); con.close()
         self.before = hashlib.sha256(self.path.read_bytes()).digest()
@@ -43,6 +48,9 @@ class ReadOnlyLibraryTests(unittest.TestCase):
         track = self.db.resolve('Song','Example',180,128)
         self.assertEqual(track.identifier,'1')
         self.assertEqual(track.analysis_folder,self.path.parent/'share/PIONEER/USBANLZ/first')
+        self.assertEqual((track.key,track.artwork),('8A',self.path.parent/'share/PIONEER/Artwork/first/artwork.jpg'))
+        self.assertEqual(self.db.resolve_path('/music/song.wav'),track)
+        self.assertIsNone(self.db.resolve_path('/music/other.wav'))
         self.assertEqual(self.db.cues(track.analysis_folder),[(1000,3000,1)])
         self.assertIsNone(self.db.resolve("Song' OR 1=1 --"))
 
@@ -125,3 +133,28 @@ class ReadOnlyLibraryTests(unittest.TestCase):
         self.assertEqual(self.db.resolve('Reimport', 'Example', 197.3).identifier, '4')
         self.assertEqual(self.db.resolve('Reimport', '  example ').identifier, '4')
 
+
+
+class BandGainTests(unittest.TestCase):
+    def folder_with(self, gains):
+        import struct
+        folder = tempfile.TemporaryDirectory()
+        tag = b'PWVC' + struct.pack('>II', 14, 20) + b'\0\0' + struct.pack('>HHH', *gains) if gains else b''
+        (Path(folder.name) / 'ANLZ0000.2EX').write_bytes(b'PMAI' + struct.pack('>II', 28, 28 + len(tag)) + bytes(16) + tag)
+        return folder
+
+    def test_each_band_is_put_back_on_rekordbox_scale(self):
+        from rb_waveform_core.ANLZ import band_gains, UNSCALED_BAND_GAINS
+        with self.folder_with((80, 100, 125)) as folder:
+            self.assertEqual(band_gains(folder), (1.25, 1.0, 0.8))   # the analyser's gain divided back out
+        with self.folder_with((100, 100, 100)) as folder:
+            self.assertEqual(band_gains(folder), UNSCALED_BAND_GAINS)
+        with self.folder_with(None) as folder:
+            self.assertEqual(band_gains(folder), (1.0, 1.0, 1.0))
+
+    def test_gain_applies_before_the_clip(self):
+        import numpy as np
+        from rb_waveform_core.analysis import analysis_from_rb_waveform
+        a = analysis_from_rb_waveform(np.array([[120, 50, 100]]), 1, gains=(.5, 1, 1))
+        self.assertAlmostEqual(float(a.low[0]), .6)  # 120 would have clipped to 1.0 first
+        self.assertEqual(float(a.high[0]), 1.0)
