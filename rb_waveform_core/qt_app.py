@@ -750,11 +750,11 @@ class MainWindow(QMainWindow):
             self.update_status('Rekordbox is waiting: answer its questions, then Wave connects' if status == STARTING_TEXT else
                                'Rekordbox is not responding: answer it if it asks something, or check your music drive')
 
-    def check_for_update(self):
-        if self.session.demo or not self.session.view.get('check_updates', True) or self.update_job:
+    def check_for_update(self, asked=False):
+        if self.update_job or not asked and (self.session.demo or not self.session.view.get('check_updates', True)):
             return
         from . import updater
-        self.update_job = ('check', self.updates.submit(updater.check))
+        self.update_job = ('asked' if asked else 'check', self.updates.submit(updater.check))
 
     def offer_update(self):
         from . import updater
@@ -798,13 +798,19 @@ class MainWindow(QMainWindow):
                 self.update_button.setEnabled(True)
                 self.update_button.setText(f'UPDATE {self.update.version}')
                 QMessageBox.information(self, 'Update Wave', f'Wave did not update, and is unchanged: {exc}')
+            elif kind == 'asked':
+                QMessageBox.information(self, 'Check for updates', f'GitHub could not be reached: {exc}')
             return  # a check that fails (offline, GitHub busy) is tried again later, quietly
-        if kind == 'check':
+        if kind in ('check', 'asked'):
             self.update = result
             self.update_button.setVisible(bool(result))
             if result:
                 self.update_button.setText(f'UPDATE {result.version}')
                 self.update_button.setToolTip(f'Rekordbox Wave {result.version} is on GitHub')
+            if kind == 'asked':
+                from . import __version__
+                QMessageBox.information(self, 'Check for updates', f'Rekordbox Wave {result.version} is ready: press UPDATE at the top.'
+                                        if result else f'Rekordbox Wave {__version__} is the latest version.')
         else:
             self.update_button.setText('RESTARTING…')
             self.close()
@@ -1077,6 +1083,7 @@ class MainWindow(QMainWindow):
             rekordbox_layout = QHBoxLayout(rekordbox_row)
             rekordbox_layout.setContentsMargins(0, 0, 0, 0)
             rekordbox_layout.addWidget(self.button('SHOW REKORDBOX', self.show_rekordbox))
+            rekordbox_layout.addWidget(self.button('CHECK FOR UPDATES', lambda: self.check_for_update(asked=True)))
             if sys.platform == 'darwin':
                 rekordbox_layout.addWidget(self.button('ACCESSIBILITY SETTINGS', lambda:
                     QDesktopServices.openUrl(QUrl('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'))))

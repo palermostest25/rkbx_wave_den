@@ -84,6 +84,15 @@ class QtAppTests(unittest.TestCase):
             self.window.follow_rekordbox_browser()
             mirror.assert_called_once()
 
+    def test_check_for_updates_answers_even_when_up_to_date(self):
+        with patch('rb_waveform_core.updater.check', return_value=None), \
+                patch('rb_waveform_core.qt_app.QMessageBox.information') as told:
+            self.window.check_for_update(asked=True)  # demo sessions skip only the automatic check
+            self.window.update_job[1].result()
+            self.window.poll_update()
+        self.assertIn('is the latest version', told.call_args.args[2])
+        self.assertFalse(self.window.update_button.isVisible())
+
     def test_rekordbox_stuck_starting_is_brought_forward_once_then_wave_returns(self):
         self.session.reader = Mock(status='Rekordbox is starting')
         with patch('rb_waveform_core.mac_bridge.show') as show, patch.object(self.window, 'activateWindow') as back:
