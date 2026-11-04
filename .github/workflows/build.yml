@@ -24,13 +24,19 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+      - name: Name the bridge by its source
+        if: runner.os == 'Windows'
+        shell: bash
+        # The bridge's file name is its hash, and Wave asks to restart Rekordbox when that changes:
+        # so the same bridge source must build the same bytes, whatever Wave release it ships in.
+        run: echo "BRIDGE_VERSION=$(git rev-parse HEAD:native | cut -c1-7)" >> "$GITHUB_ENV"
       - name: Build the Windows Rekordbox bridge
         if: runner.os == 'Windows'
         shell: cmd
         run: >-
-          cl /nologo /std:c++17 /O2 /MT /EHsc /W4 /LD /DWAVE_BRIDGE_VERSION=\"%GITHUB_SHA:~0,7%\"
+          cl /nologo /std:c++17 /O2 /MT /EHsc /W4 /LD /Brepro /DWAVE_BRIDGE_VERSION=\"%BRIDGE_VERSION%\"
           native\win_bridge\wave_bridge_win.cpp /Fe:rb_waveform_core\data\wave-bridge.dll
-          /link user32.lib
+          /link /Brepro user32.lib
       - name: Check the bridge exports OpenSSL's provider entry
         if: runner.os == 'Windows'
         shell: cmd

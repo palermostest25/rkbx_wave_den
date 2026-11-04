@@ -61,7 +61,7 @@ one, an **UPDATE** button appears at the top. Press it, with the decks stopped, 
 release for your computer, checks it against GitHub's published SHA-256, swaps itself out and restarts.
 Rekordbox keeps running, and Wave reconnects to it. To check right away, press **CHECK FOR UPDATES**
 in **Settings → Connection**, which is also where you can turn the automatic check off.
-Earlier versions need one manual download.
+Earlier versions need one manual download. Wave's version is in its window title and in **Settings → Connection**.
 
 ## First run
 
