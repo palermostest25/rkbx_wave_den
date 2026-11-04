@@ -177,7 +177,7 @@ class LoadFlowTests(unittest.TestCase):
             self.assertTrue(session.load_track(2, track, '/Volumes/GIG/PIONEER/rekordbox/exportLibrary.db'))
             session.reader.deck_paths = {2: '/Volumes/GIG/Contents/a/b.mp3'}
             self.wait(session, messages, 'Loaded')
-            self.assertEqual(asked, [(2, 7, '/Volumes/GIG')])
+            self.assertEqual(asked, [(2, 7, str(Path('/Volumes/GIG')))])
             self.assertIn('Loaded Stick Song on deck 3', messages)
             session.close()
 
@@ -231,7 +231,7 @@ class BrowserMirrorTests(unittest.TestCase):
         page.loadRequested.connect(lambda deck, track, source: loads.append((deck, track.path, source)))
         page.table.selectRow(0)
         page.load(0)
-        self.assertEqual(loads, [(0, '/Contents/a.mp3', '/Volumes/GIG/PIONEER/rekordbox/exportLibrary.db')])
+        self.assertEqual(loads, [(0, '/Contents/a.mp3', str(Path('/Volumes/GIG/PIONEER/rekordbox/exportLibrary.db')))])
         self.assertTrue(page.go_back())                              # BACK leaves the mirror for Wave's own lists
         self.assertNotEqual(page.view, ('rekordbox',))
         page.shutdown()
