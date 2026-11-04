@@ -54,6 +54,14 @@ Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
    *cannot verify* it: click **Done**, then open **System Settings → Privacy & Security**, scroll down,
    click **Open Anyway** next to Rekordbox Wave and confirm. You only do this once.
 
+### Updates
+
+From 2.3.3, Wave checks GitHub for a newer release when it starts and every few hours. When there is
+one, an **UPDATE** button appears at the top. Press it, with the decks stopped, and Wave downloads the
+release for your computer, checks it against GitHub's published SHA-256, swaps itself out and restarts.
+Rekordbox keeps running, and Wave reconnects to it. Turn the check off in **Settings → Connection**.
+Earlier versions need one manual download.
+
 ## First run
 
 1. **Quit Rekordbox** if it is open (Wave needs to start it).

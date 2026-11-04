@@ -100,7 +100,7 @@ class Session(QObject):
         self.colors = WaveformColorConfig(**STYLES['Rekordbox'])
         self.render = WaveformRenderConfig()
         self.view = dict(zoom_beats=32, playhead=.32, deck_info=True, time_mode='remain', info_size=1.0,
-                         artwork=True, end_warning=30, start_rekordbox=True, hide_rekordbox=True,
+                         artwork=True, end_warning=30, start_rekordbox=True, hide_rekordbox=True, check_updates=True,
                          grid=True, cues=True, loops=True, bar_numbers=True,
                          source='Native', settings_scale=1.0, always_on_top=True,
                          refresh_hz=60, style='Rekordbox')
@@ -563,6 +563,22 @@ class MainWindow(QMainWindow):
         self.connect_button.setAccessibleName('Start Rekordbox connected to Wave')
         self.connect_button.hide()
         top.addWidget(self.connect_button)
+        # Shown when GitHub has a newer Wave; installing waits for the user, never during playback.
+        self.update_button = self.button('UPDATE', self.offer_update)
+        self.update_button.setObjectName('connect')
+        self.update_button.setAccessibleName('Update Rekordbox Wave')
+        self.update_button.hide()
+        top.addWidget(self.update_button)
+        self.update = self.update_job = None
+        self.update_progress = 0
+        self.updates = ThreadPoolExecutor(max_workers=1, thread_name_prefix='updates')
+        self.update_watch = QTimer(self)
+        self.update_watch.timeout.connect(self.poll_update)
+        self.update_watch.start(500)
+        self.update_check = QTimer(self)
+        self.update_check.timeout.connect(self.check_for_update)
+        self.update_check.start(6 * 3600 * 1000)
+        QTimer.singleShot(5000, self.check_for_update)
         self.status = QLabel(session.status)
         self.status.setObjectName('connection')
         self.status.setMaximumWidth(510)
@@ -669,12 +685,19 @@ class MainWindow(QMainWindow):
         if browser is None:
             self.mirrored = None
             return
-        key = (browser.rows, browser.cursor, browser.first, browser.focus, browser.tree_path,
+        key = (browser.cursor, browser.focus, browser.tree_path, browser.rows, browser.first,
                tuple(ident for ident, _ in browser.tracks))
         if key != self.mirrored:
             first_look = self.mirrored is None
+            # Only Rekordbox's cursor moving is the knob; its list refreshing by itself (a stick mounting,
+            # a playlist updating) must not pull Wave off what the user picked, so it only redraws a mirror.
+            moved = not first_look and key[:3] != self.mirrored[:3]
             self.mirrored = key
-            if not first_look:  # the knob moved: show it, opening the browser if it was closed
+            if not moved and not first_look:
+                if self.pages.currentWidget() is self.browser_page and self.browser_page.view == ('rekordbox',):
+                    self.browser_page.mirror(browser, [root for _, root in getattr(reader, 'devices', ())])
+                return
+            if moved:  # the knob moved: show it, opening the browser if it was closed
                 self.mirror_moved = now
                 if self.pages.currentWidget() is not self.browser_page:
                     self.toggle_browser()
@@ -703,11 +726,12 @@ class MainWindow(QMainWindow):
                                         getattr(reader, 'deck_paths', {}))
 
     def watch_rekordbox_start(self, now=None):
-        """Rekordbox started behind Wave can stop at its own startup questions (library sync, My Tag and
-        so on) and builds no decks until they are answered: bring it forward so they can be, then come back."""
+        """Rekordbox behind Wave can stop at its own questions (library sync, My Tag and so on) when it starts
+        or loads, or hang on a music drive that stopped answering: bring it forward so it can be seen, then come back."""
+        from .mac_bridge import BUSY, STARTING_TEXT, show
         status = getattr(self.session.reader, 'status', '') or ''
         now = time.monotonic() if now is None else now
-        if not status.startswith('Rekordbox is starting'):
+        if status not in (STARTING_TEXT, BUSY):
             self.starting_since = None
             if self.rekordbox_shown and status == 'REKORDBOX · direct':
                 self.rekordbox_shown = False
@@ -717,12 +741,72 @@ class MainWindow(QMainWindow):
         self.starting_since = self.starting_since or now
         if not self.rekordbox_shown and now - self.starting_since > 8:
             self.rekordbox_shown = True
-            from .mac_bridge import show
             try:
                 show()
             except Exception:
                 return  # Rekordbox went away; the status says what to do
-            self.update_status('Rekordbox is waiting: answer its questions, then Wave connects')
+            self.update_status('Rekordbox is waiting: answer its questions, then Wave connects' if status == STARTING_TEXT else
+                               'Rekordbox is not responding: answer it if it asks something, or check your music drive')
+
+    def check_for_update(self):
+        if self.session.demo or not self.session.view.get('check_updates', True) or self.update_job:
+            return
+        from . import updater
+        self.update_job = ('check', self.updates.submit(updater.check))
+
+    def offer_update(self):
+        from . import updater
+        update = self.update
+        if not update or self.update_job:
+            return
+        if not updater.can_install():  # running from source: the release page has it
+            QDesktopServices.openUrl(QUrl(update.page))
+            return
+        if any(self.session.deck_playing(i) for i in range(4)):
+            QMessageBox.information(self, 'Update Wave', 'Stop every deck first: Wave restarts to update.')
+            return
+        if QMessageBox.question(self, 'Update Wave', f'Update Rekordbox Wave to {update.version}?\n\n'
+                                'Wave downloads it from GitHub, checks it and restarts. '
+                                'Rekordbox keeps running and Wave reconnects to it.') != QMessageBox.StandardButton.Yes:
+            return
+        import tempfile
+        folder = tempfile.mkdtemp(prefix='wave-update-')
+        self.update_progress = 0
+        self.update_button.setEnabled(False)
+
+        def run():
+            def progress(done, total):
+                self.update_progress = done * 100 // max(total, 1)
+            updater.install(updater.download(update, folder, progress))
+        self.update_job = ('install', self.updates.submit(run))
+
+    def poll_update(self):
+        if not self.update_job:
+            return
+        kind, job = self.update_job
+        if not job.done():
+            if kind == 'install':
+                self.update_button.setText(f'UPDATING {self.update_progress}%')
+            return
+        self.update_job = None
+        try:
+            result = job.result()
+        except Exception as exc:
+            if kind == 'install':
+                self.update_button.setEnabled(True)
+                self.update_button.setText(f'UPDATE {self.update.version}')
+                QMessageBox.information(self, 'Update Wave', f'Wave did not update, and is unchanged: {exc}')
+            return  # a check that fails (offline, GitHub busy) is tried again later, quietly
+        if kind == 'check':
+            self.update = result
+            self.update_button.setVisible(bool(result))
+            if result:
+                self.update_button.setText(f'UPDATE {result.version}')
+                self.update_button.setToolTip(f'Rekordbox Wave {result.version} is on GitHub')
+        else:
+            self.update_button.setText('RESTARTING…')
+            self.close()
+            QApplication.quit()
 
     def show_rekordbox(self):
         from .mac_bridge import show
@@ -981,7 +1065,8 @@ class MainWindow(QMainWindow):
             state_help.setWordWrap(True)
             state_help.setObjectName('help')
             form.addRow('Rekordbox', state_help)
-            for label, key in [('Start Rekordbox with Wave', 'start_rekordbox'), ('Keep Rekordbox hidden behind Wave', 'hide_rekordbox')]:
+            for label, key in [('Start Rekordbox with Wave', 'start_rekordbox'), ('Keep Rekordbox hidden behind Wave', 'hide_rekordbox'),
+                               ('Check GitHub for Wave updates', 'check_updates')]:
                 box = QCheckBox(label)
                 box.setChecked(bool(self.session.view.get(key, True)))
                 box.toggled.connect(lambda value, k=key: self.set_view(k, value))
@@ -1281,6 +1366,8 @@ class MainWindow(QMainWindow):
         self.deck_watch.stop()
         self.browse_watch.stop()
         self.browser_page.shutdown()
+        self.update_watch.stop()
+        self.updates.shutdown(wait=False, cancel_futures=True)
         self.persist()
         self.session.close()
         super().closeEvent(event)
@@ -1296,6 +1383,11 @@ def main():
     app.setApplicationName('Rekordbox Wave')
     app.setOrganizationName('Rekordbox Wave')
     app.setStyle('Fusion')
+    from .updater import clean_up
+    try:
+        clean_up()
+    except OSError:
+        pass  # a leftover of an earlier update; it is tried again next start
     session = Session(demo=args.demo, config_path=args.config)
     window = MainWindow(session)
     window.show()
