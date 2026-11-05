@@ -105,6 +105,21 @@ class TouchAndStateTests(unittest.TestCase):
         self.assertEqual(page.model.rowCount(),0)
         page.shutdown()
 
+    def test_switching_source_drops_the_old_sources_rows(self):
+        with patch('rb_waveform_core.qt_browser.sources',return_value=[('Collection','')]):
+            page=BrowserPage()
+        page.model.replace([catalog.CatalogTrack('219630356','Collection only','',0.0,'',0.0,'/x.mp3')])
+        page.table.selectRow(0)
+        self.assertIsNotNone(page.load_bar.track)
+        with patch.object(page,'run'):
+            page.choose_source('VIAGUS','/Volumes/VIAGUS/PIONEER/rekordbox/exportLibrary.db')
+        self.assertEqual(page.model.rowCount(),0)
+        self.assertIsNone(page.load_bar.track)
+        emitted=[]; page.loadRequested.connect(lambda *a: emitted.append(a))
+        page.load(0)
+        self.assertEqual(emitted,[])
+        page.shutdown()
+
     def test_native_session_ignores_controller_guesses_but_keeps_zoom(self):
         with tempfile.TemporaryDirectory() as directory:
             session=Session(demo=True,config_path=Path(directory)/'settings.json')
