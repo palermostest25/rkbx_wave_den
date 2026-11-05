@@ -1,6 +1,7 @@
 """Strictly read-only access to Rekordbox track metadata and cue points."""
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -171,7 +172,9 @@ def device_library_paths():
     for partition in psutil.disk_partitions(all=False):
         remote = 'remote' in partition.opts.split(',') or partition.fstype.lower() in NETWORK_FILESYSTEMS
         root = Path(partition.mountpoint)
-        if remote or root == Path('/') or str(root).startswith('/System/'):
+        # macOS mounts sticks under /Volumes; other mounts (a busy external disk) can stall the scan.
+        mac_elsewhere = sys.platform == 'darwin' and (root.parent != Path('/Volumes') or 'nobrowse' in partition.opts)
+        if remote or mac_elsewhere or root == Path('/') or str(root).startswith('/System/'):
             continue
         try:
             path = root/'PIONEER'/'rekordbox'/'exportLibrary.db'

@@ -130,6 +130,17 @@ class DeviceDiscoveryTests(unittest.TestCase):
             self.assertEqual(library.device_library_paths(), [])
         self.assertEqual(probed, [])
 
+    def test_mac_only_probes_visible_volumes(self):
+        from rb_waveform_core import library
+        parts = [SimpleNamespace(mountpoint='/opt/External', fstype='apfs', opts='rw,local'),
+                 SimpleNamespace(mountpoint='/Volumes/Recovery', fstype='apfs', opts='rw,nobrowse'),
+                 SimpleNamespace(mountpoint='/Volumes/VIAGUS', fstype='msdos', opts='rw,local')]
+        probed = []
+        with patch('psutil.disk_partitions', return_value=parts), patch.object(library.sys, 'platform', 'darwin'), \
+                patch.object(Path, 'is_file', lambda self: probed.append(self) or False):
+            library.device_library_paths()
+        self.assertEqual(probed, [Path('/Volumes/VIAGUS/PIONEER/rekordbox/exportLibrary.db')])
+
 
 class LoadFlowTests(unittest.TestCase):
     @classmethod

@@ -804,6 +804,9 @@ class BrowserPage(QWidget):
     def choose_source(self, label, path):
         self.source_label, self.source_path = label, path
         self.source_tile.set_source(label, path)
+        # The old source's rows would load by the wrong library's ids while the new one opens.
+        self.model.replace([])
+        self.selection_changed()
         self.open_category('PLAYLIST')
 
     def list_ready(self, view, items):
@@ -878,6 +881,7 @@ class BrowserPage(QWidget):
             self.model.append(tracks)
         else:
             self.model.replace(tracks, total)
+            self.selection_changed()  # a reset drops the selection without signalling it
             self.table.scrollToTop()
         self.appending = False
         if self.message.text() in ('Searching…', 'Opening…') or not self.message.text() or self.view[0] == 'tracks':
