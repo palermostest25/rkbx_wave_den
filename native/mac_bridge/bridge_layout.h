@@ -17,7 +17,9 @@ constexpr uint32_t kBrowseRows = 64;
 enum : uint32_t { kStatusStarting = 0, kStatusLive = 1, kStatusUnsupported = 2, kStatusFailed = 3 };
 enum : uint32_t { kDeckLoaded = 1, kDeckPlaying = 2, kDeckLooping = 4, kDeckMasterTempo = 8, kDeckSync = 16,
                   kDeckSlip = 32, kDeckKeySync = 64 };
-enum : uint32_t { kCommandLoad = 1, kCommandMasterTempo = 2, kCommandLoadDevice = 3 };
+enum : uint32_t { kCommandLoad = 1, kCommandMasterTempo = 2, kCommandLoadDevice = 3,
+                  kCommandBrowser = 4 };  // content_id 1: show Rekordbox's own browser window (device: Wave's
+                                                // window centre, x low 32 bits, y high), 0: put it away
 enum : int32_t { kReplyRequested = 1, kReplyBadRequest = -1, kReplyExpired = -2, kReplyBadDeck = -3,
                  kReplyDeckPlaying = -4, kReplyDeckBusy = -5, kReplyNoTrack = -6, kReplyNotReady = -7,
                  kReplyUnsupported = -8 };
@@ -43,7 +45,7 @@ struct BridgeCommand {         // written by Wave; check = FNV-1a of the 32 byte
     uint32_t deck;             // 0-based channel
     uint32_t content_id;       // track id (djmdContent.ID, or the stick's content_id); for kCommandMasterTempo 0/1
     uint64_t issued_ns;        // CLOCK_UPTIME_RAW; older than 2 s is refused
-    int64_t device;            // a handle from BridgeState::devices, for kCommandLoadDevice
+    int64_t device;            // a handle from BridgeState::devices, for kCommandLoadDevice; see kCommandBrowser
     uint64_t check;
 };
 

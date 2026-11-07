@@ -15,6 +15,9 @@
 #include <libproc.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <CoreGraphics/CoreGraphics.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -431,6 +434,164 @@ int load(const void *dj, int players, const BridgeCommand &c, char *message, siz
     return result;
 }
 
+// Rekordbox's own browser window, as its Split Screen shows it (View › Show Split Screen, or the
+// button at the bottom right of its window), over Wave's always-on-top window. Only AppKit calls on
+// Rekordbox's own windows, on its main thread: nothing of Rekordbox's code is called directly.
+using Id = void *;
+template <typename R = Id, typename... A> R msg(Id object, const char *selector, A... arguments) {
+    if (!object) return R();
+    return reinterpret_cast<R (*)(Id, SEL, A...)>(objc_msgSend)(object, sel_registerName(selector), arguments...);
+}
+Id ns_class(const char *name) { return reinterpret_cast<Id>(objc_getClass(name)); }
+Id ns_string(const char *text) { return msg(ns_class("NSString"), "stringWithUTF8String:", text); }
+Id ns_app() { return msg(ns_class("NSApplication"), "sharedApplication"); }
+
+constexpr int kAboveWave = 9;            // Qt keeps Wave on top at NSModalPanelWindowLevel (8)
+constexpr int kBrowserWait = 300;        // ticks (3 s) for Rekordbox to open or close the window
+
+struct SplitBrowser {
+    Id windows[16] = {};                 // Rekordbox's open windows before Split Screen was toggled
+    int count = 0;
+    int wait = 0;                        // ticks left to find the window that appeared
+    bool opening = false;
+    bool tried_twice = false;            // Split Screen was already on: toggled it off, then on again
+    bool was_hidden = false;             // Rekordbox was hidden behind Wave: hide it again after
+    bool centre = false;                 // put it over Wave: at Wave's window centre
+    double x = 0, y = 0;                 // that centre, in screen points from the main display's top left
+    Id window = nullptr;                 // the browser window, while Wave shows it
+} split;
+
+struct Rect { double x, y, width, height; };
+Rect frame(Id window) {
+#if defined(__x86_64__)
+    Rect r = {};  // a struct this size comes back through memory on x86_64
+    if (window) reinterpret_cast<void (*)(Rect *, Id, SEL)>(objc_msgSend_stret)(&r, window, sel_registerName("frame"));
+    return r;
+#else
+    return window ? reinterpret_cast<Rect (*)(Id, SEL)>(objc_msgSend)(window, sel_registerName("frame")) : Rect{};
+#endif
+}
+
+int visible_windows(Id *out, int capacity) {
+    Id all = msg(ns_app(), "windows");
+    const long n = msg<long>(all, "count");
+    int found = 0;
+    for (long i = 0; i < n && found < capacity; ++i) {
+        Id window = msg(all, "objectAtIndex:", static_cast<unsigned long>(i));
+        if ((msg<bool>(window, "isVisible") || msg<bool>(window, "isMiniaturized")) && msg<long>(window, "level") <= kAboveWave)
+            out[found++] = window;
+    }
+    return found;
+}
+
+// Still one of Rekordbox's windows: closing Split Screen in Rekordbox frees it, so never message it unseen.
+bool alive(Id window) {
+    Id all = msg(ns_app(), "windows");
+    const long n = msg<long>(all, "count");
+    for (long i = 0; window && i < n; ++i)
+        if (msg(all, "objectAtIndex:", static_cast<unsigned long>(i)) == window) return true;
+    return false;
+}
+
+// View › Show Split Screen, as the menu runs it. JUCE fills its menus as they open, so ask first.
+bool toggle_split_screen() {
+    Id menu = msg(msg(msg(ns_app(), "mainMenu"), "itemWithTitle:", ns_string("View")), "submenu");
+    Id delegate = msg(menu, "delegate");
+    if (delegate && msg<bool>(delegate, "respondsToSelector:", sel_registerName("menuNeedsUpdate:")))
+        msg<void>(delegate, "menuNeedsUpdate:", menu);
+    const long index = msg<long>(menu, "indexOfItemWithTitle:", ns_string("Show Split Screen"));
+    if (!menu || index < 0) return false;
+    msg<void>(menu, "performActionForItemAtIndex:", index);
+    return true;
+}
+
+void raise_browser(Id window) {
+    split.window = window;
+    if (split.centre) {  // AppKit counts up from the main display's bottom edge
+        const Rect r = frame(window);
+        const double top = CGDisplayBounds(CGMainDisplayID()).size.height - (split.y - r.height / 2);
+        struct Point { double x, y; } corner = {split.x - r.width / 2, top};
+        msg<void>(window, "setFrameTopLeftPoint:", corner);
+    }
+    msg<void>(window, "setLevel:", static_cast<long>(kAboveWave));
+    // Every Space, and beside a full-screen Wave.
+    msg<void>(window, "setCollectionBehavior:", msg<unsigned long>(window, "collectionBehavior") | 1UL | 256UL);
+    msg<void>(ns_app(), "activateIgnoringOtherApps:", true);
+    msg<void>(window, "makeKeyAndOrderFront:", static_cast<Id>(nullptr));
+}
+
+bool show_browser(int64_t centre, char *message, size_t size) {
+    split.centre = centre != 0;  // Wave's window centre: x in the low 32 bits, y in the high
+    split.x = static_cast<int32_t>(centre & 0xffffffff);
+    split.y = static_cast<int32_t>(static_cast<uint64_t>(centre) >> 32);
+    if (alive(split.window) && (msg<bool>(split.window, "isVisible") || msg<bool>(split.window, "isMiniaturized"))) {
+        msg<void>(split.window, "deminiaturize:", static_cast<Id>(nullptr));
+        raise_browser(split.window);
+        snprintf(message, size, "Rekordbox's browser is open");
+        return true;
+    }
+    Id app = ns_app();
+    split.was_hidden = msg<bool>(app, "isHidden");
+    if (split.was_hidden) msg<void>(app, "unhideWithoutActivation");
+    split.count = visible_windows(split.windows, 16);
+    split.opening = true;
+    split.tried_twice = false;
+    split.wait = kBrowserWait;
+    split.window = nullptr;
+    if (!toggle_split_screen()) {
+        split.opening = false;
+        snprintf(message, size, "Rekordbox has no Show Split Screen menu item");
+        return false;
+    }
+    snprintf(message, size, "Opening Rekordbox's browser");
+    return true;
+}
+
+void hide_browser(char *message, size_t size) {
+    split.opening = false;
+    if (alive(split.window) && (msg<bool>(split.window, "isVisible") || msg<bool>(split.window, "isMiniaturized")))
+        toggle_split_screen();
+    split.window = nullptr;
+    if (split.was_hidden) msg<void>(ns_app(), "hide:", static_cast<Id>(nullptr));
+    split.was_hidden = false;
+    snprintf(message, size, "Rekordbox's browser is put away");
+}
+
+// While the browser is up, what it opens (menus, dialogs) must come up over it, not behind Wave.
+void lift_new_windows() {
+    if (!alive(split.window)) { split.window = nullptr; return; }
+    Id now[16];
+    const int n = visible_windows(now, 16);
+    for (int i = 0; i < n; ++i) {
+        bool known = now[i] == split.window;
+        for (int j = 0; j < split.count; ++j) known = known || now[i] == split.windows[j];
+        if (!known && msg<long>(now[i], "level") < kAboveWave) msg<void>(now[i], "setLevel:", static_cast<long>(kAboveWave + 1));
+    }
+}
+
+// Each tick while opening: the window Split Screen added is the browser.
+void follow_split() {
+    if (split.window && !split.opening && ticks % 5 == 0) lift_new_windows();
+    if (!split.opening) return;
+    Id now[16];
+    const int n = visible_windows(now, 16);
+    for (int i = 0; i < n; ++i) {
+        bool known = false;
+        for (int j = 0; j < split.count; ++j) known = known || now[i] == split.windows[j];
+        if (!known) { split.opening = false; raise_browser(now[i]); return; }
+    }
+    if (n < split.count && !split.tried_twice) {
+        // Split Screen was already on, so the toggle closed it: open it again, now that it is off.
+        split.tried_twice = true;
+        split.count = n;
+        for (int i = 0; i < n; ++i) split.windows[i] = now[i];
+        split.wait = kBrowserWait;
+        toggle_split_screen();
+    } else if (--split.wait <= 0) {
+        split.opening = false;
+    }
+}
+
 void run_command(const void *dj, int players) {
     const BridgeCommand c = shared->command;  // a copy: Wave may be writing the next one
     if (c.seq == shared->reply.seq || command_check(c) != c.check) return;  // nothing new, or half-written
@@ -453,6 +614,11 @@ void run_command(const void *dj, int players) {
     } else if (c.kind == kCommandMasterTempo) {
         snprintf(message, sizeof message, "Deck %u has no track", c.deck + 1);
         result = kReplyBadDeck;
+    } else if (c.kind == kCommandBrowser && c.content_id) {
+        result = show_browser(c.device, message, sizeof message) ? kReplyRequested : kReplyUnsupported;
+    } else if (c.kind == kCommandBrowser) {
+        hide_browser(message, sizeof message);
+        result = kReplyRequested;
     } else {
         snprintf(message, sizeof message, "Unknown request");
         result = kReplyBadRequest;
@@ -526,6 +692,7 @@ void tick() {
     }
     __atomic_fetch_add(&shared->seq, 1, __ATOMIC_ACQ_REL);
     run_command(dj, players);
+    follow_split();
 }
 
 void start() {

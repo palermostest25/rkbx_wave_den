@@ -620,7 +620,9 @@ class MainWindow(QMainWindow):
         self.deck_watch.timeout.connect(self.sync_load_targets)
         self.starting_since = None
         self.rekordbox_shown = False
-        self.rekordbox_browsing = None  # (Wave's window state, deck tracks) while Rekordbox's browser is up
+        # (Wave's window state, deck tracks) while Rekordbox's browser is up; the state is None when
+        # Wave stayed on screen under Rekordbox's own browser window (macOS).
+        self.rekordbox_browsing = None
         self.deck_watch.timeout.connect(self.watch_rekordbox_start)
         self.deck_watch.start(250)
         # Follows Rekordbox's own browser as the controller's knob moves it, as the AZ's screen does.
@@ -727,7 +729,7 @@ class MainWindow(QMainWindow):
             state, tracks = self.rekordbox_browsing
             if track_loaded(tracks, self.deck_tracks()):
                 self.leave_rekordbox(state)
-            elif not self.isMinimized():
+            elif state is not None and not self.isMinimized():
                 self.rekordbox_browsing = None  # the user came back to Wave by hand
         if self.pages.currentWidget() is self.browser_page and track_loaded(before, paths):
             self.mirror_opened = False
@@ -1240,8 +1242,18 @@ class MainWindow(QMainWindow):
         return dict(paths) if paths else {i: getattr(deck, 'song_name', '') for i, deck in self.session.decks.items()}
 
     def browse_in_rekordbox(self):
-        """Rekordbox's window to the front, full size; Wave steps aside until a track is loaded."""
+        """Rekordbox's browser in front until a track is loaded. macOS, through the bridge: only its
+        Split Screen browser window, over Wave. Otherwise Rekordbox's whole window, and Wave steps aside."""
         from .mac_bridge import show
+        reader = self.session.reader
+        if sys.platform == 'darwin' and getattr(reader, 'bridged', False) and hasattr(reader, 'show_browser'):
+            centre = self.frameGeometry().center()
+            shown, why = reader.show_browser(True, (centre.x(), centre.y()))
+            if shown:
+                self.rekordbox_browsing = (None, self.deck_tracks())
+            else:
+                self.update_status(why)
+            return
         try:
             show(maximize=True)  # while Wave is still in front, so Windows lets it take the focus
         except Exception:
@@ -1253,6 +1265,10 @@ class MainWindow(QMainWindow):
     def leave_rekordbox(self, state):
         from .mac_bridge import hide
         self.rekordbox_browsing = None
+        if state is None:
+            self.session.reader.show_browser(False)
+            self.activateWindow()
+            return
         try:
             hide()
         except Exception:

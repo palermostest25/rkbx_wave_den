@@ -70,7 +70,8 @@ class QtAppTests(unittest.TestCase):
         reader = Mock(bridged=True, deck_paths={0: '/a.mp3', 1: ''})
         self.session.reader = reader
         self.session.view['browser'] = 'rekordbox'
-        with patch('rb_waveform_core.mac_bridge.show') as show, patch('rb_waveform_core.mac_bridge.hide') as hide:
+        with patch('rb_waveform_core.mac_bridge.show') as show, patch('rb_waveform_core.mac_bridge.hide') as hide, \
+                patch('rb_waveform_core.qt_app.sys.platform', 'win32'):
             self.window.browse()
             show.assert_called_once_with(maximize=True)
             self.assertTrue(self.window.isMinimized())
@@ -81,6 +82,23 @@ class QtAppTests(unittest.TestCase):
             self.window.sync_load_targets()
             hide.assert_called_once()
             self.assertFalse(self.window.isMinimized())
+            self.assertIsNone(self.window.rekordbox_browsing)
+
+    def test_mac_rekordbox_browser_opens_its_split_screen_window_over_wave(self):
+        reader = Mock(bridged=True, deck_paths={0: '/a.mp3', 1: ''})
+        reader.show_browser.return_value = (True, "Opening Rekordbox's browser")
+        self.session.reader = reader
+        self.session.view['browser'] = 'rekordbox'
+        with patch('rb_waveform_core.qt_app.sys.platform', 'darwin'):
+            self.window.browse()
+            centre = self.window.frameGeometry().center()
+            reader.show_browser.assert_called_once_with(True, (centre.x(), centre.y()))
+            self.assertFalse(self.window.isMinimized())  # Wave stays under Rekordbox's browser window
+            self.window.sync_load_targets()
+            self.assertIsNotNone(self.window.rekordbox_browsing)  # still browsing: nothing loaded
+            reader.deck_paths = {0: '/a.mp3', 1: '/b.mp3'}
+            self.window.sync_load_targets()
+            reader.show_browser.assert_called_with(False)
             self.assertIsNone(self.window.rekordbox_browsing)
 
     def test_only_the_knob_moving_pulls_the_browser_to_rekordboxs_list(self):
