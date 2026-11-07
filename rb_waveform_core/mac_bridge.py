@@ -347,6 +347,7 @@ def rekordbox_windows(pid):
         owner = ctypes.c_ulong()
         user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(owner))
         if owner.value == pid and user32.GetWindowTextLengthW(ctypes.c_void_p(hwnd)) and \
+                user32.IsWindowVisible(ctypes.c_void_p(hwnd)) and \
                 not user32.GetWindow(ctypes.c_void_p(hwnd), 4):  # GW_OWNER: its main window, not a tool window
             windows.append(hwnd)
         return True
@@ -364,8 +365,13 @@ def show(maximize=False):
     if not pid:
         raise RuntimeError('Rekordbox is not running')
     user32 = ctypes.windll.user32
-    for hwnd in rekordbox_windows(pid):
-        user32.ShowWindow(ctypes.c_void_p(hwnd), 3 if maximize else 9)  # SW_MAXIMIZE, SW_RESTORE
+    windows = rekordbox_windows(pid)
+    title = ctypes.create_unicode_buffer(32)
+    main = [hwnd for hwnd in windows if user32.GetWindowTextW(ctypes.c_void_p(hwnd), title, 32) and title.value == 'rekordbox']
+    # Only its main window grows; its helper windows and questions (My Tag and so on) keep their size,
+    # and come after it so a question lands on top.
+    for hwnd in main + [hwnd for hwnd in windows if hwnd not in main]:
+        user32.ShowWindow(ctypes.c_void_p(hwnd), 3 if maximize and hwnd in main else 9)  # SW_MAXIMIZE, SW_RESTORE
         user32.SetForegroundWindow(ctypes.c_void_p(hwnd))
 
 
