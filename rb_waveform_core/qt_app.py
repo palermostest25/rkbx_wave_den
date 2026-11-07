@@ -104,7 +104,7 @@ class Session(QObject):
                          artwork=True, end_warning=30, start_rekordbox=True, hide_rekordbox=True, check_updates=True,
                          grid=True, cues=True, loops=True, bar_numbers=True,
                          source='Native', settings_scale=1.0, always_on_top=True,
-                         refresh_hz=60, style='Rekordbox')
+                         refresh_hz=60, style='Rekordbox', browser='wave')
         self.decks = {i: DeckController() for i in range(4)}
         self.timelines = {i: PlaybackTimeline(infer_loops=demo) for i in range(4)}
         self.errors = {}
@@ -554,7 +554,7 @@ class MainWindow(QMainWindow):
         switch.addWidget(self.two)
         switch.addWidget(self.four)
         top.addWidget(segment)
-        self.browse_button = self.button('BROWSE', self.toggle_browser)
+        self.browse_button = self.button('BROWSE', self.browse)
         self.browse_button.setAccessibleName('Browse Rekordbox collection')
         top.addWidget(self.browse_button)
         top.addStretch()
@@ -620,6 +620,7 @@ class MainWindow(QMainWindow):
         self.deck_watch.timeout.connect(self.sync_load_targets)
         self.starting_since = None
         self.rekordbox_shown = False
+        self.rekordbox_browsing = None  # (Wave's window state, deck tracks) while Rekordbox's browser is up
         self.deck_watch.timeout.connect(self.watch_rekordbox_start)
         self.deck_watch.start(250)
         # Follows Rekordbox's own browser as the controller's knob moves it, as the AZ's screen does.
@@ -700,6 +701,10 @@ class MainWindow(QMainWindow):
                 if self.pages.currentWidget() is self.browser_page and self.browser_page.view == ('rekordbox',):
                     self.browser_page.mirror(browser, [root for _, root in getattr(reader, 'devices', ())])
                 return
+            if moved and self.session.view.get('browser') == 'rekordbox':
+                if not self.rekordbox_browsing:
+                    self.browse_in_rekordbox()  # the knob browses Rekordbox's own window
+                return
             if moved:  # the knob moved: show it, opening the browser if it was closed
                 self.mirror_moved = now
                 if self.pages.currentWidget() is not self.browser_page:
@@ -718,6 +723,12 @@ class MainWindow(QMainWindow):
         self.connect_button.setVisible(bool(reader and hasattr(reader, 'load') and (not reader.bridged or getattr(reader, 'stale', False))))
         paths, before = getattr(reader, 'deck_paths', {}), self.deck_paths
         self.deck_paths = paths
+        if self.rekordbox_browsing:
+            state, tracks = self.rekordbox_browsing
+            if track_loaded(tracks, self.deck_tracks()):
+                self.leave_rekordbox(state)
+            elif not self.isMinimized():
+                self.rekordbox_browsing = None  # the user came back to Wave by hand
         if self.pages.currentWidget() is self.browser_page and track_loaded(before, paths):
             self.mirror_opened = False
             self.toggle_browser()  # a track landed on a deck, from the screen or the controller: back to the waveforms
@@ -1082,6 +1093,8 @@ class MainWindow(QMainWindow):
                 box.setChecked(bool(self.session.view.get(key, True)))
                 box.toggled.connect(lambda value, k=key: self.set_view(k, value))
                 form.addRow('', box)
+            choice('Browser', 'browser', [("Wave's browser", 'wave'),
+                                          ("Rekordbox's browser · opens Rekordbox, closes it after a load", 'rekordbox')])
             rekordbox_row = QWidget()
             rekordbox_layout = QHBoxLayout(rekordbox_row)
             rekordbox_layout.setContentsMargins(0, 0, 0, 0)
@@ -1214,6 +1227,41 @@ class MainWindow(QMainWindow):
         else:
             self.canvas.setFocus()
             self.pace_frames()
+
+    def browse(self):
+        """BROWSE: Wave's own browser, or Rekordbox's when Settings picks it."""
+        if self.session.view.get('browser') == 'rekordbox' and self.pages.currentWidget() is not self.browser_page:
+            self.browse_in_rekordbox()
+        else:
+            self.toggle_browser()
+
+    def deck_tracks(self):
+        paths = getattr(self.session.reader, 'deck_paths', None)
+        return dict(paths) if paths else {i: getattr(deck, 'song_name', '') for i, deck in self.session.decks.items()}
+
+    def browse_in_rekordbox(self):
+        """Rekordbox's window to the front, full size; Wave steps aside until a track is loaded."""
+        from .mac_bridge import show
+        try:
+            show(maximize=True)  # while Wave is still in front, so Windows lets it take the focus
+        except Exception:
+            self.update_status('Rekordbox is not running: start it, or switch Settings › Browser to Wave')
+            return
+        self.rekordbox_browsing = (self.windowState(), self.deck_tracks())
+        self.showMinimized()  # Wave stays on top otherwise
+
+    def leave_rekordbox(self, state):
+        from .mac_bridge import hide
+        self.rekordbox_browsing = None
+        try:
+            hide()
+        except Exception:
+            pass  # Wave on top covers it anyway
+        self.setWindowState(state & ~Qt.WindowState.WindowMinimized)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.pace_frames()
 
     def toggle_browser(self):
         opening = self.pages.currentWidget() is not self.browser_page
