@@ -128,6 +128,11 @@ class ReadOnlyLibrary:
         ''', ('%/'+Path(folder).name+'/%',)).fetchall()
 
 
+# A stick's content.length is in seconds as Rekordbox 7.2 exports it (217 for 3:37), not the milliseconds
+# older exports used; no track runs ten hours, so a larger value is milliseconds.
+DEVICE_SECONDS = 'CASE WHEN coalesce(c.length,0)>36000 THEN c.length/1000.0 ELSE coalesce(c.length,0) END'
+
+
 class DeviceLibrary(ReadOnlyLibrary):
     """A rekordbox USB export (OneLibrary exportLibrary.db): tracks played straight off a stick."""
     def __init__(self, path=None, *, key=None):
@@ -144,8 +149,8 @@ class DeviceLibrary(ReadOnlyLibrary):
             self.QUERY = self.QUERY.replace("'' /*key*/", f"coalesce({keyed},'')")
             self.PATH_QUERY = self.PATH_QUERY.replace("'' /*key*/", f"coalesce({keyed},'')")
 
-    QUERY = '''
-        SELECT c.content_id,c.title,coalesce(a.name,''),c.length/1000.0,c.bpmx100,c.path,
+    QUERY = f'''
+        SELECT c.content_id,c.title,coalesce(a.name,''),{DEVICE_SECONDS},c.bpmx100,c.path,
                c.analysisDataFilePath,(SELECT count(*) FROM cue q WHERE q.content_id=c.content_id),0,'','' /*key*/,''
         FROM content c LEFT JOIN artist a ON a.artist_id=c.artist_id_artist
         WHERE c.title=? COLLATE NOCASE LIMIT 100
@@ -183,6 +188,20 @@ def device_library_paths():
         except OSError:
             pass
     return found
+
+
+def volume_name(root):
+    """A stick's name as the computer shows it: its folder on macOS, its volume label on Windows."""
+    if root.name:
+        return root.name
+    try:
+        import ctypes
+        label = ctypes.create_unicode_buffer(261)
+        if ctypes.windll.kernel32.GetVolumeInformationW(str(root), label, 261, None, None, None, None, 0) and label.value:
+            return label.value
+    except (AttributeError, OSError):
+        pass
+    return root.drive or str(root)  # an unlabelled stick: its drive, e.g. E:
 
 
 NETWORK_FILESYSTEMS = {'smbfs', 'nfs', 'afpfs', 'webdav', 'cifs', 'ftp', 'macfuse', 'osxfuse', 'fuse'}

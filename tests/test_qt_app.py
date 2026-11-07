@@ -66,6 +66,23 @@ class QtAppTests(unittest.TestCase):
         self.window.sync_load_targets()
         self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
 
+    def test_rekordbox_browser_setting_opens_rekordbox_and_returns_after_a_load(self):
+        reader = Mock(bridged=True, deck_paths={0: '/a.mp3', 1: ''})
+        self.session.reader = reader
+        self.session.view['browser'] = 'rekordbox'
+        with patch('rb_waveform_core.mac_bridge.show') as show, patch('rb_waveform_core.mac_bridge.hide') as hide:
+            self.window.browse()
+            show.assert_called_once_with(maximize=True)
+            self.assertTrue(self.window.isMinimized())
+            self.assertIsNot(self.window.pages.currentWidget(), self.window.browser_page)
+            self.window.sync_load_targets()  # nothing loaded yet: Rekordbox stays up
+            hide.assert_not_called()
+            reader.deck_paths = {0: '/a.mp3', 1: '/b.mp3'}  # picked in Rekordbox, loaded on deck 2
+            self.window.sync_load_targets()
+            hide.assert_called_once()
+            self.assertFalse(self.window.isMinimized())
+            self.assertIsNone(self.window.rekordbox_browsing)
+
     def test_only_the_knob_moving_pulls_the_browser_to_rekordboxs_list(self):
         from rb_waveform_core.mac_bridge import Browser
         state = dict(rows=10, cursor=2, first=0, focus='list', tree_path='Collection', tracks=((1, '/a'),))

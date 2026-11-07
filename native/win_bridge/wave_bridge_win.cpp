@@ -35,6 +35,11 @@ constexpr uint64_t kLoadMessageVtable = 0x143879948ULL;    // djplay::DjplayComm
 constexpr int kCollection = 1;                       // db::_browse_type for the collection
 constexpr int kDevice = 2;                           // ... and for a device, as on macOS (the same enum)
 constexpr uint64_t kBrowseView = 0x145f38738ULL;           // browse::BrowseBasicView's instance (initBrowseComponent)
+// A stick has two databases: its Device Library (export.pdb) and its OneLibrary (exportLibrary.db),
+// each under its own handle. Wave's ids are OneLibrary's, so only that one is offered to Wave.
+constexpr uint64_t kOneLibraryVtable = 0x143d43910ULL;     // the OneLibrary database's class
+constexpr uint64_t kStickLoadSlot = 0x590;                 // its slot for loading the track table
+constexpr uint64_t kStickTracks = 0x88;                    // its track table: null until loaded
 
 struct Code { uint64_t address, size, hash; };
 enum : int { NUM_PLAYERS, IS_LOADED, IS_LOADING, IS_PLAYING, POSITION_MS, TOTAL_MS, FILE_PATH, TEMPO, BPM,
@@ -43,7 +48,7 @@ enum : int { NUM_PLAYERS, IS_LOADED, IS_LOADING, IS_PLAYING, POSITION_MS, TOTAL_
              TEMPO_SELECT, MESSAGE_CTOR, POST_MESSAGE, LOAD_TEMPLATE, DATABASE_GET, GET_ROW_DATA_TRACK,
              TRACK_CTOR, TRACK_DTOR, TRACK_BASIC_INFO, BROWSE_INSTANCE, BROWSE_MANAGERS, LIST_CONTAINER,
              CONTAINER_LIST, TREE_VIEWER, ROW_TRACK, SELECTED_ROWS, LIST_BOX, HAS_FOCUS, DEVICE_ROOT,
-             ALL_DEVICES, CRT_FREE, CODE_COUNT };
+             ALL_DEVICES, CRT_FREE, STICK_DATABASE, STICK_LOAD, STICK_ROW, CODE_COUNT };
 // FNV-1a of each function's first bytes; entries never called pin what the bridge reads directly:
 // PLAYER_CONTROL the graph's players (+0x430/+0x43c), ENGINE_GET and DATABASE_GET the singletons,
 // MAIN_COMPONENT its static, LOAD_TEMPLATE (whole) the load message and UiManager offset.
@@ -95,6 +100,11 @@ constexpr Code kCode[CODE_COUNT] = {
     {0x141f316a0, 0x30, 0x0010aaa567934b28ULL},  // db::DatabaseIF::getDeviceRoot(long), String by hidden pointer
     {0x141f316e0, 0xd, 0x07e17db09ecbcf74ULL},   // db::DatabaseIF::getAllDeviceHandle(Array<long>&): 32-bit handles
     {0x14299f450, 0x5, 0x3b02d066bf27fab5ULL},   // free, as that Array releases its storage with it
+    // A stick's tracks: Rekordbox on Windows reads a stick's track table only when its own browser
+    // first opens that stick, and until then finds no track on it. The bridge reads it the same way.
+    {0x141f557f0, 0x40, 0x7c8d688eac9c82a1ULL},  // the stick database for a handle (null if unusable)
+    {0x14218bdf0, 0x48, 0x8a7f9ea550e6b48fULL},  // a stick database's track table loader
+    {0x142190ae0, 0x50, 0x42d649ab558148d3ULL},  // its row lookup: no table (+0x88), no track
 };
 
 struct JString { const char *text; };  // juce::String: one pointer to its UTF-8 text
@@ -124,6 +134,8 @@ using AllDevices = void (*)(void *database, IntArray *);
 using DeviceRoot = JString *(*)(void *database, JString *out, int32_t handle);
 using CrtFree = void (*)(void *);
 using BasicInfo = void *(*)(void *item);
+using StickDatabase = void *(*)(void *database_impl, int32_t handle, int32_t *index);
+using StickLoad = int32_t (*)(void *stick, int32_t *status, void *progress);
 
 struct Api {
     uintptr_t slide = 0;
@@ -149,6 +161,8 @@ struct Api {
     AllDevices all_devices;
     DeviceRoot device_root;
     CrtFree crt_free;
+    StickDatabase stick_database;
+    StickLoad stick_load;
 } api;
 
 BridgeState *shared = nullptr;
@@ -281,7 +295,22 @@ const char *verify_build() {
     api.all_devices = at<AllDevices>(ALL_DEVICES);
     api.device_root = at<DeviceRoot>(DEVICE_ROOT);
     api.crt_free = at<CrtFree>(CRT_FREE);
+    api.stick_database = at<StickDatabase>(STICK_DATABASE);
+    api.stick_load = at<StickLoad>(STICK_LOAD);
+    // The OneLibrary class must load and look up rows with the functions checked above.
+    const auto *one_library = reinterpret_cast<const uint64_t *>(kOneLibraryVtable - kBase + api.slide);
+    if (one_library[kStickLoadSlot / 8] != kCode[STICK_LOAD].address - kBase + api.slide ||
+        one_library[0x40 / 8] != 0x1421685d0ULL - kBase + api.slide)
+        return "Rekordbox's code differs from the verified build; bridge disabled";
     return nullptr;
+}
+
+// A mounted stick's OneLibrary database, or null: its Device Library, or a stick Rekordbox can't use.
+void *one_library(int32_t handle) {
+    void *database = const_cast<void *>(global(kDatabase));
+    void *impl = database ? field<void *>(database, 0) : nullptr;
+    void *stick = impl ? api.stick_database(impl, handle, nullptr) : nullptr;
+    return stick && field<uint64_t>(stick, 0) == kOneLibraryVtable - kBase + api.slide ? stick : nullptr;
 }
 
 // Mounted devices, refreshed every couple of seconds: Wave picks a stick's handle by its root.
@@ -291,12 +320,14 @@ void read_devices() {
     if (database) {
         IntArray handles = {};  // empty: Rekordbox allocates it, on its own heap
         api.all_devices(database, &handles);
-        for (int i = 0; i < handles.used && i < int(kBridgeDevices); ++i) {
-            found[i].handle = handles.data[i];
+        for (int i = 0, n = 0; i < handles.used && n < int(kBridgeDevices); ++i) {
+            if (!one_library(handles.data[i])) continue;
+            found[n].handle = handles.data[i];
             JString root = {nullptr};
             api.device_root(database, &root, handles.data[i]);
-            snprintf(found[i].root, sizeof found[i].root, "%s", root.text ? root.text : "");
+            snprintf(found[n].root, sizeof found[n].root, "%s", root.text ? root.text : "");
             api.string_dtor(&root);
+            ++n;
         }
         if (handles.data) api.crt_free(handles.data);
     }
@@ -349,7 +380,7 @@ void read_browser() {
         const void *track = track_data && index >= 0 && index < stored ? track_data[index] : nullptr;
         BrowseRow &out = b.rows_[count];
         out.id = track ? field<uint32_t>(track, 0x8) : 0;
-        const char *path = track ? field<const char *>(track, 0xa8) : nullptr;
+        const char *path = track ? field<const char *>(track, 0x98) : nullptr;  // the full path; +0xa8 is its name
         snprintf(out.path, sizeof out.path, "%s", path ? path : "");
     }
     b.rows = rows; b.cursor = cursor; b.first = first; b.count = count;
@@ -387,6 +418,17 @@ int load(const void *dj, int players, const BridgeCommand &c, char *message, siz
     void *database = const_cast<void *>(global(kDatabase));
     void *player = ui_player(deck);
     if (!database || !player) { snprintf(message, size, "Rekordbox is still starting"); return kReplyNotReady; }
+    if (device) {
+        void *stick = one_library(static_cast<int32_t>(c.device));
+        if (!stick) { snprintf(message, size, "That USB stick is no longer mounted"); return kReplyNoTrack; }
+        // Never reloaded once read: Rekordbox's own browser may hold its rows.
+        int32_t status = 0;
+        if (!field<void *>(stick, kStickTracks) && (api.stick_load(stick, &status, nullptr) != 0 ||
+                                                     !field<void *>(stick, kStickTracks))) {
+            snprintf(message, size, "Rekordbox could not read that USB stick's library");
+            return kReplyNoTrack;
+        }
+    }
     alignas(16) uint8_t track[0x600];  // RowDataTrack is 0x4e0; the margin costs nothing
     static_assert(sizeof track >= kTrackSize, "track buffer");
     api.track_ctor(track);

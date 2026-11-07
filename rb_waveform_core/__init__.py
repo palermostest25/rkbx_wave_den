@@ -2,7 +2,7 @@
 
 """Rekordbox-style waveform core (production)."""
 
-__version__ = '2.3.7'  # pyproject.toml reads this; a release tag v<this> builds it
+__version__ = '2.3.8'  # pyproject.toml reads this; a release tag v<this> builds it
 
 from .config import WaveformColorConfig, WaveformRenderConfig, RenderMode
 from .analysis import WaveformAnalysis

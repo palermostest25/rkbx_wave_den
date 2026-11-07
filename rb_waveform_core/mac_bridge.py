@@ -336,15 +336,9 @@ def restart(hidden=False):
     launch(hidden, executable)
 
 
-def show():
-    """Bring a hidden Rekordbox to the front, for its own screens and preferences."""
-    if not WINDOWS:
-        subprocess.run(['/usr/bin/open', '-a', str(APP)], check=True, timeout=15)
-        return
+def rekordbox_windows(pid):
+    """Rekordbox's main windows (not its tool windows), on Windows."""
     import ctypes
-    pid = rekordbox_pid()
-    if not pid:
-        raise RuntimeError('Rekordbox is not running')
     user32 = ctypes.windll.user32
     windows = []
 
@@ -357,9 +351,33 @@ def show():
             windows.append(hwnd)
         return True
     user32.EnumWindows(each, None)
-    for hwnd in windows:
-        user32.ShowWindow(ctypes.c_void_p(hwnd), 9)  # SW_RESTORE
+    return windows
+
+
+def show(maximize=False):
+    """Bring a hidden Rekordbox to the front, for its own screens and preferences or its browser."""
+    if not WINDOWS:
+        subprocess.run(['/usr/bin/open', '-a', str(APP)], check=True, timeout=15)
+        return
+    import ctypes
+    pid = rekordbox_pid()
+    if not pid:
+        raise RuntimeError('Rekordbox is not running')
+    user32 = ctypes.windll.user32
+    for hwnd in rekordbox_windows(pid):
+        user32.ShowWindow(ctypes.c_void_p(hwnd), 3 if maximize else 9)  # SW_MAXIMIZE, SW_RESTORE
         user32.SetForegroundWindow(ctypes.c_void_p(hwnd))
+
+
+def hide():
+    """Put Rekordbox back out of sight once its browser has done its job; it keeps playing.
+    macOS: Wave coming back in front covers it."""
+    if not WINDOWS:
+        return
+    import ctypes
+    pid = rekordbox_pid()
+    for hwnd in rekordbox_windows(pid) if pid else ():
+        ctypes.windll.user32.ShowWindow(ctypes.c_void_p(hwnd), 6)  # SW_MINIMIZE
 
 
 def live(snapshot, pid, now=None):

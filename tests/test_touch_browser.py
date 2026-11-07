@@ -244,8 +244,24 @@ class DeviceCatalogTests(unittest.TestCase):
               INSERT INTO artist VALUES(1,'USB Artist');
               INSERT INTO "key" VALUES(1,'8A');
               INSERT INTO content VALUES(1,'USB Song',1,12825,180500,'/Contents/track.wav',1);
+              INSERT INTO content VALUES(2,'Seconds Song',1,13000,217,'/Contents/seconds.wav',1);
             ''')
             connection.commit(); connection.close()
             total,rows=catalog.browse(str(path),sort='BPM')
-            self.assertEqual(total,1)
+            self.assertEqual(total,2)
             self.assertEqual((rows[0].bpm,rows[0].key,rows[0].duration),(128.25,'8A',180.5))
+            # Rekordbox 7.2 exports store seconds: 217 is 3:37, not a fifth of a second.
+            self.assertEqual(rows[1].duration,217.0)
+
+
+class VolumeNameTests(unittest.TestCase):
+    def test_a_stick_is_named_by_its_folder_or_else_its_drive(self):
+        from pathlib import PureWindowsPath
+        from rb_waveform_core.library import volume_name
+        self.assertEqual(volume_name(Path('/Volumes/VIAGUS')),'VIAGUS')
+        with patch('ctypes.windll',create=True,new=SimpleNamespace(kernel32=SimpleNamespace(
+                GetVolumeInformationW=lambda root,label,*rest: setattr(label,'value','VIAGUS') or 1))):
+            self.assertEqual(volume_name(PureWindowsPath('D:/')),'VIAGUS')
+        with patch('ctypes.windll',create=True,new=SimpleNamespace(kernel32=SimpleNamespace(
+                GetVolumeInformationW=lambda *args: 0))):
+            self.assertEqual(volume_name(SimpleNamespace(name='',drive='E:')),'E:')
