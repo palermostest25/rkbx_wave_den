@@ -370,11 +370,9 @@ def show(maximize=False):
 
 
 def hide():
-    """Put Rekordbox back out of sight once its browser has done its job; it keeps playing."""
+    """Put Rekordbox back out of sight once its browser has done its job; it keeps playing.
+    macOS: Wave coming back in front covers it."""
     if not WINDOWS:
-        from AppKit import NSRunningApplication
-        for app in NSRunningApplication.runningApplicationsWithBundleIdentifier_('com.pioneerdj.rekordboxdj'):
-            app.hide()
         return
     import ctypes
     pid = rekordbox_pid()
