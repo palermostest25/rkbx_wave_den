@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import shutil
 
-from .library import ReadOnlyLibrary, DeviceLibrary, device_library_paths
+from .library import DEVICE_SECONDS, ReadOnlyLibrary, DeviceLibrary, device_library_paths, volume_name
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,7 @@ class Schema:
             key = 'k.name' if self.has('key', 'key_id', 'name') and self.has('content', 'key_id') else "''"
             image = 'i.path' if self.has('image', 'image_id', 'path') and self.has('content', 'image_id') else "''"
             fields = (f"c.content_id,c.title,coalesce(a.name,''),coalesce(c.bpmx100,0)/100.0,coalesce({key},''),"
-                      f"coalesce(c.length,0)/1000.0,c.path,coalesce({image},'')")
+                      f"{DEVICE_SECONDS},c.path,coalesce({image},'')")
             tables = 'content c LEFT JOIN artist a ON a.artist_id=c.artist_id_artist'
             if key != "''":
                 tables += ' LEFT JOIN "key" k ON k.key_id=c.key_id'
@@ -133,7 +133,7 @@ def tracks_for_paths(paths):
 
 
 def sources():
-    return [('Collection', '')] + [(p.parents[2].name, str(p)) for p in device_library_paths()]
+    return [('Collection', '')] + [(volume_name(p.parents[2]), str(p)) for p in device_library_paths()]
 
 
 def source_stats(source=''):
