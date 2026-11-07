@@ -44,7 +44,7 @@ BROWSER_AT = DEVICES_AT + 4*DEVICE.size
 SIZE = BROWSER_AT + BROWSER.size + 64*ROW.size
 STARTING, LIVE, UNSUPPORTED, FAILED = range(4)
 LOADED, PLAYING, LOOPING, MASTER_TEMPO, SYNC, SLIP, KEY_SYNC = 1, 2, 4, 8, 16, 32, 64
-LOAD, MASTER_TEMPO_SET, LOAD_DEVICE = 1, 2, 3
+LOAD, MASTER_TEMPO_SET, LOAD_DEVICE, SHOW_BROWSER = 1, 2, 3, 4
 # Rekordbox keeps the tempo range as its percentage; 100 is WIDE. Checked against its own deck labels.
 TEMPO_RANGES = {6: '±6', 10: '±10', 16: '±16', 100: 'WIDE'}
 REQUESTED = 1
@@ -208,6 +208,15 @@ class Bridge:
 
     def set_master_tempo(self, deck, on, timeout=2.5):
         return self.request(MASTER_TEMPO_SET, deck, int(bool(on)), 0, timeout)
+
+    def show_browser(self, on, centre=None, timeout=2.5):
+        """macOS: Rekordbox's own Split Screen browser window, centred at ``centre`` (Wave's window
+        centre in screen points), or put it away."""
+        x, y = centre or (0, 0)
+        packed = (int(y) & 0xffffffff) << 32 | int(x) & 0xffffffff if centre else 0
+        if packed >= 1 << 63:
+            packed -= 1 << 64  # the field is signed
+        return self.request(SHOW_BROWSER, 0, int(bool(on)), packed, timeout)
 
     def request(self, kind, deck, value, device=0, timeout=2.5):
         if not 0 <= deck < 4:
@@ -454,6 +463,12 @@ class RekordboxBridgeReader:
         if not (bridge and self.bridged):
             return False, self.RELAUNCH
         return bridge.set_master_tempo(deck, on)
+
+    def show_browser(self, on, centre=None):
+        bridge = self.bridge
+        if not (bridge and self.bridged):
+            return False, self.RELAUNCH
+        return bridge.show_browser(on, centre)
 
     def _start_fallback(self):
         if self._fallback is None:

@@ -9,6 +9,6 @@ version=$(sed -n "s/^__version__ = '\(.*\)'.*/\1/p" "$here/../../rb_waveform_cor
 clang++ -std=c++17 -O2 -Wall -Wextra -fvisibility=hidden -fexceptions \
     -arch arm64 -arch x86_64 -mmacosx-version-min=11.0 -dynamiclib \
     -DWAVE_BRIDGE_VERSION="\"$version\"" -I"$include" \
-    -o "$out" "$here/wave_bridge.cpp"
+    -o "$out" "$here/wave_bridge.cpp" -lobjc -framework CoreGraphics
 codesign --force --sign - "$out"
 echo "$out"
