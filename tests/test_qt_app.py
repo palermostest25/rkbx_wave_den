@@ -286,6 +286,37 @@ class QtAppTests(unittest.TestCase):
             page.tapped_item(page.categories.index(0, 0))
         self.assertEqual(page.view, ('tracks', ('PLAYLIST', 'a')))
 
+    def test_pushing_into_a_playlist_never_loads_a_track_highlighted_earlier(self):
+        from rb_waveform_core.catalog import CatalogTrack, Category
+        reader = Mock(bridged=True, devices=(), browser=None, deck_paths={0: '/music/mine.mp3'})
+        self.session.reader = reader
+        self.window.sync_load_targets()
+        self.window.toggle_browser()
+        page = self.window.browser_page
+        page.stack.setCurrentWidget(page.table)
+        page.model.replace([CatalogTrack('7', 'Clap', '', 0.0, '', 1.0, '/rekordbox/Sampler/Clap.wav')], 1)
+        page.table.selectRow(0)  # highlighted earlier, in the collection
+        with patch.object(page, 'run'):
+            page.navigate(('list', 'PLAYLIST', None), 'PLAYLIST')
+        self.assertIsNone(page.selected_track())  # not shown, so not picked
+        page.list_ready(page.view, [Category('g', 'Gigs', 0, True), Category('p', 'Peak', 4)])
+        page.list.setCurrentIndex(page.categories.index(1, 0))
+        old = CatalogTrack('42', 'Mine', 'Me', 124.0, '', 300.0, '/music/mine.mp3')
+        loads = []
+        with patch.object(page, 'run', lambda f, callback, *a: callback({'/music/mine.mp3': old}) if a else None), \
+                patch.object(page, 'request'), \
+                patch.object(self.session, 'load_track', side_effect=lambda *a: loads.append(a) or True):
+            reader.deck_paths = {0: '/music/peak-1.mp3'}  # the knob pushed: Rekordbox loaded its cursor track
+            self.window.sync_load_targets()
+        self.assertEqual([(deck, track.title) for deck, track, *_ in loads], [(0, 'Mine')])  # its own track back
+        self.assertEqual(page.view, ('tracks', ('PLAYLIST', 'p')))  # and the playlist opened, as the push meant
+
+    def test_view_on_the_controller_closes_the_browser(self):
+        self.session.controllerBrowse.emit('browse', 1, -1)
+        self.assertIs(self.window.pages.currentWidget(), self.window.browser_page)
+        self.session.controllerBrowse.emit('view', 0, -1)
+        self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
+
     def test_touching_the_overview_previews_that_part_and_glides_back(self):
         self.session.preview_hold(0, 120.0)
         self.assertEqual(self.session.preview_position(0), 120.0)

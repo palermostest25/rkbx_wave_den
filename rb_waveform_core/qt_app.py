@@ -449,7 +449,7 @@ class Session(QObject):
             if steps:
                 self.controllerBrowse.emit('browse', steps, -1)
             return
-        if kind in ('browse_press', 'back', 'load'):
+        if kind in ('browse_press', 'back', 'view', 'load'):
             self.controllerBrowse.emit(kind, 0, -1 if idx is None else idx)
             return
         if kind == 'zoom':
@@ -805,6 +805,7 @@ class MainWindow(QMainWindow):
         self.mirror_moved = 0.0
         self.knob_focus = ''          # the last pane Rekordbox's knob was in: 'list' or 'tree'
         self.controller_seen = False  # the controller's own knob messages have arrived (MIDI)
+        self.pressed_at = 0.0         # when the controller's knob was last pushed (MIDI)
         self.knob_logged = False
         self.rekordbox_cursor = ''    # the file under Rekordbox's cursor: what controller LOAD loads
         self.redirect = None          # (deck, file) while Wave swaps a controller load for its own pick
@@ -942,6 +943,8 @@ class MainWindow(QMainWindow):
 
     def on_controller(self, kind, steps, deck):
         """The controller's browse knob, its push, BACK and LOAD, read straight from the controller."""
+        if kind == 'browse_press':
+            self.pressed_at = time.monotonic()  # a load that follows is the same push, not a second one
         if not self.controller_seen:
             self.controller_seen = True  # from now on the controller's own messages drive the browser
             log.info('The browse knob is read from the controller itself (%s)', kind)
@@ -961,6 +964,9 @@ class MainWindow(QMainWindow):
         elif kind == 'back' and not page.go_back():
             self.mirror_opened = False
             self.toggle_browser()  # BACK at the top: back to the waveforms
+        elif kind == 'view':
+            self.mirror_opened = False
+            self.toggle_browser()  # VIEW: straight back to the waveforms
 
     @staticmethod
     def cursor_track(browser):
@@ -1012,12 +1018,18 @@ class MainWindow(QMainWindow):
                 continue
             if picked is not None and same(path, picked.path):
                 return False  # Rekordbox loaded what Wave shows anyway
+            if picked is None and page.stack.currentWidget() is page.list and \
+                    time.monotonic() - self.pressed_at > 1.5:
+                # The knob pushed (or LOAD pressed) on a highlighted playlist: Rekordbox took it as a load.
+                # In Wave it opens the playlist; the deck gets its own track back below.
+                page.enter()
             if picked is not None:
                 track, source = picked, page.source_path
             elif before[idx]:
                 track, source = None, ''
             else:
-                page.show_load_status('Highlight a track first: turn the knob in a playlist, then LOAD.')
+                page.show_load_status(f"Rekordbox loaded a track on deck {idx + 1}: Wave can't unload it. "
+                                      'Highlight a track here, then LOAD.')
                 return False
             if track is None:
                 # Nothing picked in Wave: the deck gets back what it had before the stray LOAD.
