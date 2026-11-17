@@ -94,6 +94,8 @@ class DisplayLinkRepaint(QObject):
 
 
 class Session(QObject):
+    PREVIEW_HOLD = 3.0    # seconds a touch preview stays after the finger lifts
+    PREVIEW_RETURN = .35  # and the glide back to the playhead
     changed = Signal()
     zoomRequested = Signal(float)  # multiply the visible beats
     analysisChanged = Signal()
@@ -109,10 +111,11 @@ class Session(QObject):
                          artwork=True, end_warning=30, start_rekordbox=True, hide_rekordbox=True, check_updates=True,
                          grid=True, cues=True, loops=True, bar_numbers=True,
                          source='Native', settings_scale=1.0, always_on_top=True,
-                         refresh_hz=60, style='Rekordbox', browser='rekordbox',
+                         refresh_hz=60, style='Rekordbox', browser='wave', knob_loads_wave=True,
                          auto_connect=True, keep_rekordbox_running=True, quit_rekordbox=True,
                          close_popups=True, keep_awake=True, settings_version=SETTINGS_VERSION)
         self.decks = {i: DeckController() for i in range(4)}
+        self.previews = {}    # deck -> (seconds, held until) while its overview is touched
         self.timelines = {i: PlaybackTimeline(infer_loops=demo) for i in range(4)}
         self.errors = {}
         self.reader = None
@@ -505,6 +508,33 @@ class Session(QObject):
         self.cue_edits[idx] = pending
         self.decks[idx].cues = sorted(cues, key=lambda c: (c.time_sec, c.number))
 
+    def preview_hold(self, idx, seconds):
+        """A finger on deck ``idx``'s overview: its lane shows ``seconds`` until the finger lifts."""
+        self.previews[idx] = (seconds, None)
+
+    def preview_release(self, idx):
+        if idx in self.previews:
+            self.previews[idx] = (self.previews[idx][0], time.monotonic() + self.PREVIEW_HOLD)
+
+    def preview_position(self, idx, now=None):
+        """Where deck ``idx``'s lane looks while previewing, or None. It eases back to the playhead."""
+        look = self.previews.get(idx)
+        if look is None:
+            return None
+        seconds, until = look
+        now = time.monotonic() if now is None else now
+        if until is None:
+            return seconds
+        live = self.position(idx)
+        if live is None or now >= until + self.PREVIEW_RETURN:
+            self.previews.pop(idx, None)
+            return None
+        if now <= until:
+            return seconds
+        blend = (now - until) / self.PREVIEW_RETURN
+        blend = blend * blend * (3 - 2 * blend)  # smooth glide home
+        return seconds + (live - seconds) * blend
+
     def position(self, idx):
         if self.demo:
             return 40 + (time.monotonic() - self.started) % 100
@@ -716,6 +746,8 @@ class MainWindow(QMainWindow):
         self.browser_page = BrowserPage()
         self.browser_page.loadRequested.connect(self.session.load_track)
         self.canvas.masterTempoToggled.connect(self.session.toggle_master_tempo)
+        self.canvas.timeModeToggled.connect(
+            lambda: self.set_view('time_mode', 'elapsed' if self.session.view.get('time_mode') == 'remain' else 'remain'))
         self.session.loadStatus.connect(self.browser_page.show_load_status)
         self.pages.addWidget(self.browser_page)
         self.deck_paths = {}
@@ -736,6 +768,9 @@ class MainWindow(QMainWindow):
         self.mirrored = None
         self.mirror_opened = False
         self.mirror_moved = 0.0
+        self.knob_focus = ''          # the last pane Rekordbox's knob was in: 'list' or 'tree'
+        self.rekordbox_cursor = ''    # the file under Rekordbox's cursor: what controller LOAD loads
+        self.redirect = None          # (deck, file) while Wave swaps a controller load for its own pick
         self.browse_watch = QTimer(self)
         self.browse_watch.timeout.connect(self.follow_rekordbox_browser)
         self.browse_watch.start(50)
@@ -794,6 +829,9 @@ class MainWindow(QMainWindow):
             self.session.timer.setInterval(interval)
 
     def follow_rekordbox_browser(self):
+        """The controller's browse knob. With Rekordbox's browser chosen it brings that browser over Wave;
+        with Wave's touch browser it moves Wave's own highlight, as the knob does on the AZ, and never
+        drags Wave over to wherever Rekordbox's own list happens to be."""
         reader = self.session.reader
         browser = getattr(reader, 'browser', None) if reader and getattr(reader, 'bridged', False) else None
         now = time.monotonic()
@@ -802,34 +840,47 @@ class MainWindow(QMainWindow):
             return
         key = (browser.cursor, browser.focus, browser.tree_path, browser.rows, browser.first,
                tuple(ident for ident, _ in browser.tracks))
-        if key != self.mirrored:
-            first_look = self.mirrored is None
-            # Only Rekordbox's cursor moving is the knob; its list refreshing by itself (a stick mounting,
-            # a playlist updating) must not pull Wave off what the user picked, so it only redraws a mirror.
-            # Focus counts only when it lands somewhere: on Windows it reads as none whenever Wave is touched.
-            moved = not first_look and (key[0] != self.mirrored[0] or key[2] != self.mirrored[2]
-                                        or (key[1] and key[1] != self.mirrored[1]))
-            self.mirrored = key
-            if not moved and not first_look:
-                if self.pages.currentWidget() is self.browser_page and self.browser_page.view == ('rekordbox',):
-                    self.browser_page.mirror(browser, [root for _, root in getattr(reader, 'devices', ())])
-                return
-            if moved and self.session.view.get('browser') == 'rekordbox':
-                if not self.rekordbox_browsing:
-                    self.browse_in_rekordbox()  # the knob browses Rekordbox's own window
-                return
-            if moved:  # the knob moved: show it, opening the browser if it was closed
-                self.mirror_moved = now
-                if self.pages.currentWidget() is not self.browser_page:
-                    self.toggle_browser()
-                    self.mirror_opened = True
-            if self.pages.currentWidget() is self.browser_page and (not first_look or self.browser_page.view == ('rekordbox',)):
-                self.browser_page.mirror(browser, [root for _, root in getattr(reader, 'devices', ())])
-        elif self.mirror_opened and now - self.mirror_moved > 10:
-            # Opened by the knob and left alone: back to the waveforms, as after a load on the AZ.
-            self.mirror_opened = False
-            if self.pages.currentWidget() is self.browser_page and self.browser_page.view == ('rekordbox',):
+        if key == self.mirrored:
+            if self.mirror_opened and now - self.mirror_moved > 20 and self.pages.currentWidget() is self.browser_page:
+                # Opened by the knob and left alone: back to the waveforms, as the AZ does.
+                self.mirror_opened = False
                 self.toggle_browser()
+            return
+        previous, self.mirrored = self.mirrored, key
+        self.rekordbox_cursor = self.cursor_track(browser)
+        if previous is None:
+            return  # the first look is where Rekordbox was, not a move
+        same_list = key[3] == previous[3] and key[2] == previous[2]
+        delta = key[0] - previous[0] if same_list and key[0] >= 0 and previous[0] >= 0 else 0
+        # Focus counts only when it lands somewhere: on Windows it reads as none whenever Wave is touched.
+        focus, before = key[1], self.knob_focus
+        if focus:
+            self.knob_focus = focus
+        pushed = bool(focus and before and focus != before)
+        moved = bool(delta) or key[2] != previous[2] or pushed
+        if not moved:
+            return  # Rekordbox's list refreshed by itself (a stick mounting, a playlist updating)
+        if self.session.view.get('browser') == 'rekordbox':
+            if not self.rekordbox_browsing:
+                self.browse_in_rekordbox()  # the knob browses Rekordbox's own window
+            return
+        self.mirror_moved = now
+        if self.pages.currentWidget() is not self.browser_page:
+            self.toggle_browser()  # the first turn opens the browser where the DJ left it
+            self.mirror_opened = True
+            return
+        if delta:
+            self.browser_page.step(delta)
+        elif pushed and focus == 'list':
+            self.browser_page.enter()       # knob pressed: into the highlighted playlist
+        elif pushed and focus == 'tree':
+            self.browser_page.go_back()     # BACK on the controller: up a level
+
+    @staticmethod
+    def cursor_track(browser):
+        """The file under Rekordbox's own cursor, which the controller's LOAD loads."""
+        row = browser.cursor - browser.first
+        return browser.tracks[row][1] if 0 <= row < len(browser.tracks) else ''
 
     def sync_load_targets(self):
         reader = self.session.reader
@@ -846,7 +897,11 @@ class MainWindow(QMainWindow):
                 self.rekordbox_browsing = None  # the user came back to Wave by hand
             elif browsing['kind'] == 'window' and not self.rekordbox_window_alive(browsing['hwnd']):
                 self.leave_rekordbox()  # closed or minimised in Rekordbox
+        if self.redirect and self.redirect_landed(paths):
+            return
         if self.pages.currentWidget() is self.browser_page and track_loaded(before, paths):
+            if self.redirect_controller_load(before, paths):
+                return
             self.mirror_opened = False
             self.toggle_browser()  # a track landed on a deck, from the screen or the controller: back to the waveforms
             return
@@ -855,6 +910,37 @@ class MainWindow(QMainWindow):
                       for i in range(4)}
             self.browser_page.set_decks(self.session.order(), locked, self.session.load_unavailable(),
                                         getattr(reader, 'deck_paths', {}))
+
+    def redirect_controller_load(self, before, paths):
+        """The controller's LOAD loaded Rekordbox's own pick while Wave's touch browser shows another: load
+        Wave's pick onto that deck instead. True while Wave is doing so."""
+        if not self.session.view.get('knob_loads_wave', True) or not self.rekordbox_cursor:
+            return False
+        picked = self.browser_page.selected_track()
+        same = lambda a, b: bool(a and b) and Path(a).as_posix().casefold() == Path(b).as_posix().casefold()
+        for idx, path in paths.items():
+            if idx not in before or before[idx] == path or not same(path, self.rekordbox_cursor):
+                continue
+            if picked is None or same(path, picked.path) or path.casefold().endswith(picked.path.casefold()):
+                return False  # Rekordbox loaded what Wave shows anyway
+            if self.session.load_track(idx, picked, self.browser_page.source_path):
+                self.redirect = (idx, path, time.monotonic() + 8)
+                self.browser_page.show_load_status(f'Loading {picked.title} on deck {idx + 1}, as picked here…')
+                log.info('Controller LOAD on deck %d: loading the track picked in Wave instead', idx + 1)
+                return True
+        return False
+
+    def redirect_landed(self, paths):
+        """While a redirected load is under way, wait for it (or give up) before leaving the browser."""
+        idx, rekordbox_pick, deadline = self.redirect
+        if self.session.loading and time.monotonic() < deadline:
+            return True
+        self.redirect = None
+        swapped = paths.get(idx) and paths.get(idx) != rekordbox_pick
+        if swapped and self.pages.currentWidget() is self.browser_page:
+            self.mirror_opened = False
+            self.toggle_browser()  # Wave's pick is on the deck: back to the waveforms
+        return True  # if it didn't land, the browser stays, with Rekordbox's answer in its message line
 
     def watch_rekordbox(self, now=None):
         """Rekordbox behind Wave can stop at its own questions (library sync, My Tag, sign-in…) when it starts or

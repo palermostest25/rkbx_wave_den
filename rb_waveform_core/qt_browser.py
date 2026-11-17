@@ -921,6 +921,40 @@ class BrowserPage(QWidget):
             self.message.setText(f'{browser.cursor + 1:,} of {browser.rows:,} · LOAD on the controller, or tap a deck below'
                                  if browser.cursor >= 0 else f'{browser.rows:,} tracks')
 
+    # The controller's browse knob, driving this browser ------------------------------------------------
+    def step(self, delta):
+        """Move the highlight ``delta`` rows in what Wave shows now, as the knob turns. Returns the row."""
+        view = self.stack.currentWidget()
+        if view is self.table:
+            model, count = self.model, self.model.rowCount()
+            rows = self.table.selectionModel().selectedRows()
+            current = rows[0].row() if rows else -1
+        elif view is self.list:
+            model, count = self.categories, self.categories.rowCount()
+            current = self.list.currentIndex().row() if self.list.currentIndex().isValid() else -1
+        else:
+            return -1
+        if not count:
+            return -1
+        target = max(0, min(count - 1, (current if current >= 0 else (-1 if delta > 0 else count)) + delta))
+        if view is self.table:
+            if target >= count - 3 and model.canFetchMore():
+                model.fetchMore()  # more of a long list, as the knob nears its end
+            self.table.selectRow(target)
+            self.table.scrollTo(model.index(target, 1), QAbstractItemView.ScrollHint.EnsureVisible)
+        else:
+            index = model.index(target, 0)
+            self.list.setCurrentIndex(index)
+            self.list.scrollTo(index, QAbstractItemView.ScrollHint.EnsureVisible)
+        return target
+
+    def enter(self):
+        """The knob pressed: open the highlighted playlist or folder. True if something opened."""
+        if self.stack.currentWidget() is self.list and self.list.currentIndex().isValid():
+            self.open_item(self.list.currentIndex())
+            return True
+        return False
+
     def resolved(self, found):
         self.resolving = False
         self.known.update(found)

@@ -71,7 +71,7 @@ class QtAppTests(unittest.TestCase):
         main = Win(11, 'rekordbox', False, True, (0, 0, 1600, 900), False, True, False)
         reader = Mock(bridged=True, pid=42, deck_paths={0: '/a.mp3', 1: ''})
         self.session.reader = reader
-        self.assertEqual(self.session.view['browser'], 'rekordbox')  # the default
+        self.session.view['browser'] = 'rekordbox'
         with patch('rb_waveform_core.win_windows.windows_of', return_value=[main]), \
                 patch('rb_waveform_core.win_windows.split_screen_from_menu', return_value=False), \
                 patch('rb_waveform_core.win_windows.window_rect', return_value=(0, 0, 1920, 1080)), \
@@ -121,24 +121,74 @@ class QtAppTests(unittest.TestCase):
             reader.show_browser.assert_called_with(False)
             self.assertIsNone(self.window.rekordbox_browsing)
 
-    def test_only_the_knob_moving_pulls_the_browser_to_rekordboxs_list(self):
+    def test_the_knob_moves_waves_own_browser_and_never_jumps_to_rekordboxs_list(self):
         from rb_waveform_core.mac_bridge import Browser
-        state = dict(rows=10, cursor=2, first=0, focus='list', tree_path='Collection', tracks=((1, '/a'),))
+        from rb_waveform_core.catalog import CatalogTrack
+        state = dict(rows=500, cursor=20, first=0, focus='list', tree_path='', tracks=((1, '/a'),))
         reader = Mock(bridged=True, devices=(), browser=Browser(**state))
-        self.session.view['browser'] = 'wave'
+        self.session.reader = reader
+        self.assertEqual(self.session.view['browser'], 'wave')
+        page = self.window.browser_page
+        self.window.follow_rekordbox_browser()  # first look: no move
+        self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
+        reader.browser = Browser(**{**state, 'cursor': 21})
+        self.window.follow_rekordbox_browser()  # the first turn opens Wave's browser where it was left
+        self.assertIs(self.window.pages.currentWidget(), page)
+        rows = [CatalogTrack(str(i), f'Track {i}', 'Artist', 120.0, '', 200.0, f'/music/{i}.mp3') for i in range(30)]
+        page.stack.setCurrentWidget(page.table)
+        page.model.replace(rows, len(rows))
+        page.table.selectRow(5)
+        with patch.object(page, 'mirror') as mirror:
+            reader.browser = Browser(**{**state, 'cursor': 24})  # three clicks clockwise
+            self.window.follow_rekordbox_browser()
+            reader.browser = Browser(**{**state, 'cursor': 23})  # one back
+            self.window.follow_rekordbox_browser()
+            reader.browser = Browser(**{**state, 'cursor': 23, 'rows': 501})  # Rekordbox refreshed: not a turn
+            self.window.follow_rekordbox_browser()
+        mirror.assert_not_called()
+        self.assertEqual(page.selected_track().title, 'Track 7')
+        self.assertNotEqual(page.view, ('rekordbox',))
+
+    def test_controller_load_loads_the_track_picked_in_waves_browser(self):
+        from rb_waveform_core.mac_bridge import Browser
+        from rb_waveform_core.catalog import CatalogTrack
+        reader = Mock(bridged=True, devices=(), deck_paths={0: '/music/old.mp3', 1: ''},
+                      browser=Browser(rows=9, cursor=0, first=0, focus='list', tree_path='', tracks=((7, '/music/rb.mp3'),)))
         self.session.reader = reader
         self.window.follow_rekordbox_browser()
+        self.window.sync_load_targets()
         self.window.toggle_browser()
-        self.window.browser_page.view = ('device', '/Volumes/STICK')  # the user picked their stick
-        with patch.object(self.window.browser_page, 'mirror') as mirror:
-            reader.browser = Browser(**{**state, 'rows': 12, 'tracks': ((1, '/a'), (2, '/b'))})  # Rekordbox refreshed
-            self.window.follow_rekordbox_browser()
-            reader.browser = Browser(**{**state, 'rows': 12, 'focus': ''})  # Windows: Wave was touched, Rekordbox lost focus
-            self.window.follow_rekordbox_browser()
-            mirror.assert_not_called()
-            reader.browser = Browser(**{**state, 'rows': 12, 'cursor': 3})  # the knob turned
-            self.window.follow_rekordbox_browser()
-            mirror.assert_called_once()
+        page = self.window.browser_page
+        page.stack.setCurrentWidget(page.table)
+        page.model.replace([CatalogTrack('12', 'Mine', 'Me', 124.0, '', 300.0, '/music/mine.mp3')], 1)
+        page.table.selectRow(0)
+        with patch.object(self.session, 'load_track', return_value=True) as load:
+            reader.deck_paths = {0: '/music/old.mp3', 1: '/music/rb.mp3'}  # LOAD on the controller, deck 2
+            self.session.loading = ('busy',)
+            self.window.sync_load_targets()
+            load.assert_called_once()
+            self.assertEqual((load.call_args.args[0], load.call_args.args[1].title), (1, 'Mine'))
+            self.assertIs(self.window.pages.currentWidget(), page)  # waits for Wave's pick to land
+            reader.deck_paths = {0: '/music/old.mp3', 1: '/music/mine.mp3'}
+            self.session.loading = None
+            self.window.sync_load_targets()
+        self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
+
+    def test_touching_the_overview_previews_that_part_and_glides_back(self):
+        self.session.preview_hold(0, 120.0)
+        self.assertEqual(self.session.preview_position(0), 120.0)
+        self.session.preview_release(0)
+        now = time.monotonic()
+        self.assertEqual(self.session.preview_position(0, now + 1), 120.0)  # held a moment after lifting
+        between = self.session.preview_position(0, now + 3.2)
+        self.assertIsNotNone(between)
+        self.assertIsNone(self.session.preview_position(0, now + 4))  # back on the playhead
+        self.assertIsNone(self.session.preview_position(1))
+
+    def test_tapping_the_time_flips_remaining_and_elapsed(self):
+        mode = self.session.view['time_mode']
+        self.window.canvas.timeModeToggled.emit()
+        self.assertNotEqual(self.session.view['time_mode'], mode)
 
     def test_the_version_is_in_the_title(self):
         from rb_waveform_core import __version__
