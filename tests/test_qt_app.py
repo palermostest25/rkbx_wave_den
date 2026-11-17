@@ -334,6 +334,17 @@ class QtAppTests(unittest.TestCase):
         self.session.knobZoom.emit(127)
         self.assertIsNone(self.session.knob_beats)  # switched off: the knob does nothing
 
+    def test_the_window_builds_with_windows_touch_keyboard_settings(self):
+        # Windows only shows these; build them here too, so a mistake can't hide until a Windows start.
+        from rb_waveform_core import touch_keyboard
+        with patch.object(touch_keyboard, 'available', return_value=True), \
+                patch.object(touch_keyboard, 'mode', return_value=touch_keyboard.NO_KEYBOARD), \
+                patch.object(touch_keyboard, 'set_mode') as set_mode:
+            window = MainWindow(self.session)
+            window.touch_segment.set_value(touch_keyboard.NEVER, emit=True)
+            set_mode.assert_called_with(touch_keyboard.NEVER, None)
+            window.close()
+
     def test_touching_the_overview_previews_that_part_and_glides_back(self):
         self.session.preview_hold(0, 120.0)
         self.assertEqual(self.session.preview_position(0), 120.0)
