@@ -125,6 +125,36 @@ def flag_positions(anchors, width, maximum):
     return result
 
 
+class Dimmer(QWidget):
+    """The booth dimmer: a black veil over the whole window that touches pass straight through."""
+    def __init__(self, parent, level):
+        super().__init__(parent)
+        self.level = level
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setGeometry(parent.rect())
+        parent.installEventFilter(self)
+        self.refresh()
+
+    def refresh(self):
+        # Hidden at full brightness, so it costs nothing while it isn't wanted.
+        self.setVisible(self.level() < .999)
+        self.raise_()
+        self.update()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Resize:
+            self.setGeometry(obj.rect())
+            self.raise_()
+        return False
+
+    def paintEvent(self, event):
+        level = self.level()
+        if level < .999:
+            p = QPainter(self)
+            p.fillRect(self.rect(), QColor(0, 0, 0, round(255 * (1 - max(.2, level)))))
+
+
 class WaveformCanvas(QWidget):
     settingsRequested = Signal()
     masterTempoToggled = Signal(int)  # deck whose MT was tapped

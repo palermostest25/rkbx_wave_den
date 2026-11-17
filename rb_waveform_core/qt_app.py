@@ -113,7 +113,8 @@ class Session(QObject):
                          source='Native', settings_scale=1.0, always_on_top=True,
                          refresh_hz=60, style='Rekordbox', browser='wave', knob_loads_wave=True,
                          auto_connect=True, keep_rekordbox_running=True, quit_rekordbox=True,
-                         close_popups=True, keep_awake=True, settings_version=SETTINGS_VERSION)
+                         close_popups=True, keep_awake=True, settings_version=SETTINGS_VERSION,
+                         dim=1.0, battery=True, master_bpm=True)
         self.decks = {i: DeckController() for i in range(4)}
         self.previews = {}    # deck -> (seconds, held until) while its overview is touched
         self.timelines = {i: PlaybackTimeline(infer_loops=demo) for i in range(4)}
@@ -692,12 +693,22 @@ class MainWindow(QMainWindow):
         self.status.setTextFormat(Qt.TextFormat.RichText)
         self.status.setMaximumWidth(510)
         top.addWidget(self.status)
+        self.master_label = QLabel()
+        self.master_label.setObjectName('master')
+        self.master_label.setAccessibleName('Tempo master')
+        top.addWidget(self.master_label)
+        self.battery_label = QLabel()
+        self.battery_label.setObjectName('battery')
+        self.battery_label.setAccessibleName('Battery')
+        top.addWidget(self.battery_label)
+        self.battery_plugged = None
         self.clock = QLabel()
         self.clock.setObjectName('clock')
         self.clock.setAccessibleName('Time')
         top.addWidget(self.clock)
         self.clock_timer = QTimer(self)
         self.clock_timer.timeout.connect(lambda: self.clock.setText(time.strftime('%H:%M')))
+        self.clock_timer.timeout.connect(self.update_toolbar_readouts)
         self.clock_timer.start(1000)
         self.clock.setText(time.strftime('%H:%M'))
         self.settings_button = self.button('SETTINGS', self.toggle_settings)
@@ -775,6 +786,8 @@ class MainWindow(QMainWindow):
         self.browse_watch.timeout.connect(self.follow_rekordbox_browser)
         self.browse_watch.start(50)
         self.layout.addWidget(self.pages, 1)
+        from .qt_display import Dimmer
+        self.dimmer = Dimmer(self.root, lambda: float(self.session.view.get('dim', 1.0) or 1.0))
         if sys.platform == 'darwin':
             self.display_link = DisplayLinkRepaint(self.canvas)
         else:
@@ -1242,6 +1255,7 @@ class MainWindow(QMainWindow):
     def apply_theme(self):
         size = round(22 * self.session.view.get('settings_scale', 1))
         check_icon = (Path(__file__).parent / "data/check.svg").as_posix()
+        chevron = (Path(__file__).parent / "data/chevron.svg").as_posix()
         self.setStyleSheet('''
             QMainWindow, QWidget { background:#000; color:#eeeeee; font-family:Arial; }
             QFrame#toolbar { background:#0e0f12; border-bottom:1px solid #1d2025; }
@@ -1307,213 +1321,125 @@ class MainWindow(QMainWindow):
             QFrame#banner QPushButton { padding:4px 14px; min-height:24px; font-size:14px; }
             QFrame#banner QPushButton#bannerClose { background:transparent; border:0; color:#c9ced4; font-size:18px; padding:2px 8px; }
             QFrame#banner QPushButton#bannerAction { color:#000; background:#ff9f1a; border-color:#ff9f1a; }
-        ''' + f'QCheckBox::indicator:checked {{ image:url("{check_icon}"); }}\nQWidget#settings, QWidget#settings * {{ font-size:{size}px; }}\nQWidget#settings QPushButton {{ min-height:30px; }}\nQWidget#settings QLabel#pageTitle {{ font-size:{round(size * 1.45)}px; font-weight:700; }}')
+            QLabel#master { color:#ffa21a; font-size:14px; font-weight:700; background:transparent; padding:0 8px; letter-spacing:1px; }
+            QLabel#battery { color:#d9dde2; font-size:14px; font-weight:600; background:transparent; padding:0 6px; }
+            QWidget#settings QScrollArea, QWidget#settingsBody { background:transparent; }
+            QWidget#settings QFrame#card { background:#14161a; border:1px solid #1f2328; border-radius:16px; }
+            QWidget#settings QFrame#row, QWidget#settings QWidget#buttons { background:transparent; }
+            QWidget#settings QFrame#rule { background:#1f2328; }
+            QWidget#settings QLabel { background:transparent; }
+            QWidget#settings QLabel#rowTitle { color:#f2f4f6; font-weight:600; }
+            QWidget#settings QLabel#cardTitle { color:#6f7882; font-weight:700; letter-spacing:2px; padding:4px 0 6px 0; }
+            QWidget#settings QLabel#aboutTitle { color:#ffffff; font-weight:700; padding:8px 0; }
+            QWidget#settings QPushButton#primary { color:#ffffff; background:#1a79eb; border-color:#1a79eb; }
+            QWidget#settings QPushButton#primary:hover { background:#2b87f3; }
+            QWidget#settings QComboBox { background:#1d2026; border:1px solid #30353d; border-radius:10px; padding:8px 44px 8px 16px; }
+            QWidget#settings QComboBox:hover { border-color:#4a525c; }
+            QWidget#settings QComboBox:on { border-color:#1a79eb; }
+            QWidget#settings QComboBox::drop-down { subcontrol-origin:padding; subcontrol-position:center right; width:40px; border:0; }
+            QWidget#settings QComboBox QLineEdit { background:transparent; border:0; padding:0; }
+            QComboBox QAbstractItemView { background:#1d2026; border:1px solid #30353d; border-radius:10px; padding:6px; outline:0;
+                                          color:#e8eaed; selection-background-color:#1a79eb; }
+            QComboBox QAbstractItemView::item { min-height:46px; padding:0 14px; border-radius:8px; }
+            QComboBox QAbstractItemView::item:hover { background:#262a31; }
+            QComboBox QAbstractItemView::item:selected { background:#1a79eb; color:#ffffff; }
+            QWidget#settings QDoubleSpinBox { background:#1d2026; border:1px solid #30353d; border-radius:10px; padding:8px 12px; }
+            QWidget#settings QDoubleSpinBox::up-button, QWidget#settings QDoubleSpinBox::down-button { width:28px; border:0; }
+            QWidget#settings QFrame#segment { background:#1d2026; border:1px solid #30353d; border-radius:12px; }
+            QWidget#settings QFrame#segment QPushButton { padding:8px 16px; border-radius:9px; min-height:24px; }
+            QProgressBar { background:#1d2026; border:0; border-radius:3px; }
+            QProgressBar::chunk { background:#1a79eb; border-radius:3px; }
+        ''' + f'''
+            QComboBox::down-arrow {{ image:url("{chevron}"); width:18px; height:18px; }}
+            QCheckBox::indicator:checked {{ image:url("{check_icon}"); }}
+            QWidget#settings, QWidget#settings * {{ font-size:{size}px; }}
+            QWidget#settings QLabel#rowHelp {{ font-size:{round(size * .72)}px; color:#8d96a0; }}
+            QWidget#settings QLabel#cardTitle {{ font-size:{round(size * .6)}px; }}
+            QWidget#settings QLabel#pageHeading {{ font-size:{round(size * 1.25)}px; font-weight:700; color:#ffffff; padding:4px 0 2px 2px; }}
+            QWidget#settings QLabel#aboutTitle {{ font-size:{round(size * 1.3)}px; }}
+            QWidget#settings QPushButton {{ min-height:30px; font-size:{round(size * .74)}px; }}
+            QWidget#settings QFrame#segment QPushButton {{ font-size:{round(size * .74)}px; }}
+            QWidget#settings QLabel#pageTitle {{ font-size:{round(size * 1.45)}px; font-weight:700; }}
+        ''')
 
     def build_settings(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        content = QWidget()
-        content.setObjectName('settings')
-        outer = QVBoxLayout(content)
-        outer.setContentsMargins(34, 24, 34, 34)
-        outer.setSpacing(18)
-        first = QHBoxLayout()
-        heading = QLabel('Settings')
-        heading.setObjectName('pageTitle')
-        first.addWidget(heading)
-        first.addStretch()
-        first.addWidget(self.button('DONE', self.toggle_settings))
-        outer.addLayout(first)
-        # A side menu beside its page, as on the AZ, rather than a row of tabs.
-        body = QHBoxLayout()
-        body.setSpacing(18)
-        menu = QListWidget()
-        menu.setObjectName('settingsMenu')
-        menu.setAccessibleName('Settings sections')
-        menu.setFixedWidth(230)
-        menu.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        pages = QStackedWidget()
-        pages.setObjectName('settingsPages')
-        menu.currentRowChanged.connect(pages.setCurrentIndex)
-        body.addWidget(menu)
-        body.addWidget(pages, 1)
-        outer.addLayout(body, 1)
-        def tab(title):
-            page = QWidget()
-            layout = QVBoxLayout(page)
-            layout.setContentsMargins(26, 22, 26, 26)
-            form = QFormLayout()
-            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-            form.setHorizontalSpacing(32)
-            form.setVerticalSpacing(20)
-            layout.addLayout(form)
-            layout.addStretch()
-            area = QScrollArea()
-            area.setWidgetResizable(True)
-            area.setWidget(page)
-            pages.addWidget(area)
-            menu.addItem(title)
-            menu.setCurrentRow(0)
-            return form
-        display_form = tab('DISPLAY')
-        waveform_form = tab('WAVEFORM')
-        info_form = tab('DECK INFO')
-        connection_form = tab('CONNECTION')
-        profiles_form = tab('PROFILES')
-        form = display_form
-        self.screen_combo = QComboBox()
-        self.screen_combo.setAccessibleName('Target monitor')
-        self.screen_combo.activated.connect(self.select_screen)
-        form.addRow('Monitor', self.screen_combo)
-        self.refresh_screens()
-        self.fullscreen_check = QCheckBox('Cover the entire monitor, including the taskbar area')
-        self.fullscreen_check.setChecked(self.session.render.fill_display)
-        self.fullscreen_check.toggled.connect(self.change_fullscreen)
-        form.addRow('Full screen', self.fullscreen_check)
-        self.order_combo = QComboBox()
-        for label, order in [('FLX10 · 3, 1, 2, 4', '3,1,2,4'), ('Numeric · 1, 2, 3, 4', '1,2,3,4'), ('Paired · 1, 3, 2, 4', '1,3,2,4'), ('Reverse · 4, 3, 2, 1', '4,3,2,1')]:
-            self.order_combo.addItem(label, order)
-        self.order_combo.setCurrentIndex(max(0, self.order_combo.findData(self.session.render.deck_order)))
-        self.order_combo.setEditable(True)
-        self.order_combo.currentIndexChanged.connect(lambda _: self.set_custom_order())
-        self.order_combo.lineEdit().editingFinished.connect(self.set_custom_order)
-        form.addRow('Deck order', self.order_combo)
-        form = waveform_form
-        self.zoom_combo = QComboBox()
-        for beats in (4, 8, 16, 32, 64, 128, 256, 512):
-            self.zoom_combo.addItem(f'{beats // 4} bars · {beats} beats', beats)
-        beats = self.session.view['zoom_beats']
-        self.zoom_combo.setCurrentIndex(min(range(self.zoom_combo.count()), key=lambda i: abs(math.log2(self.zoom_combo.itemData(i) / beats))))
-        self.zoom_combo.currentIndexChanged.connect(lambda _: self.set_view('zoom_beats', self.zoom_combo.currentData()))
-        form.addRow('Waveform zoom', self.zoom_combo)
-        self.position_combo = QComboBox()
-        for label, fraction in [('AZ position · 32%', .32), ('Centre · 50%', .5), ('Left · 20%', .2)]:
-            self.position_combo.addItem(label, fraction)
-        self.position_combo.setCurrentIndex(max(0, self.position_combo.findData(self.session.view['playhead'])))
-        self.position_combo.currentIndexChanged.connect(lambda _: self.set_view('playhead', self.position_combo.currentData()))
-        form.addRow('Playhead', self.position_combo)
-        for label, key in [('Beat and bar markers', 'grid'),
-                           ('Bar numbers', 'bar_numbers'), ('Hot cues and memory cues', 'cues'), ('Saved and live loops', 'loops')]:
-            box = QCheckBox(label)
-            box.setChecked(bool(self.session.view.get(key, True)))
-            box.toggled.connect(lambda value, k=key: self.set_view(k, value))
-            form.addRow('', box)
-        form = display_form
-        scale = QDoubleSpinBox()
-        scale.setRange(1.0, 2.0)
-        scale.setSingleStep(.1)
-        scale.setSuffix(' ×')
-        scale.setValue(self.session.view['settings_scale'])
-        scale.valueChanged.connect(self.set_settings_scale)
-        form.addRow('Settings text size', scale)
-        wave_scale = QDoubleSpinBox()
-        wave_scale.setRange(.75, 2)
-        wave_scale.setSingleStep(.1)
-        wave_scale.setSuffix(' ×')
-        wave_scale.setValue(self.session.render.ui_scale)
-        wave_scale.valueChanged.connect(lambda x: self.set_render('ui_scale', x))
-        form.addRow('Cue and deck text size', wave_scale)
-        form = waveform_form
-        band_row = QWidget()
-        band_layout = QHBoxLayout(band_row)
-        band_layout.setContentsMargins(0, 0, 0, 0)
-        for band in ('low', 'mid', 'high'):
-            band_layout.addWidget(self.button(band.upper(), lambda _, b=band: self.pick_color(b)))
-        form.addRow('Three-band colours', band_row)
-        style = QComboBox()
-        style.setAccessibleName('Waveform style')
-        style.addItems(list(STYLES))
-        style.setCurrentText(self.session.view.get('style', 'Rekordbox'))
-        style.textActivated.connect(self.set_style)
-        form.addRow('Waveform style', style)
-        for label, field in [('Low level', 'low_gain'), ('Mid level', 'mid_gain'), ('High level', 'high_gain')]:
-            spin = QDoubleSpinBox()
-            spin.setRange(.1, 3)
-            spin.setSingleStep(.1)
-            spin.setSuffix(' ×')
-            spin.setValue(getattr(self.session.render, field))
-            spin.valueChanged.connect(lambda v, f=field: self.set_render(f, v, invalidate=True))
-            form.addRow(label, spin)
-        form = info_form
-        def choice(label, key, options):
-            combo = QComboBox()
-            combo.setAccessibleName(label)
-            for text, value in options:
-                combo.addItem(text, value)
-            combo.setCurrentIndex(max(0, combo.findData(self.session.view.get(key))))
-            combo.currentIndexChanged.connect(lambda _, c=combo, k=key: self.set_view(k, c.currentData()))
-            form.addRow(label, combo)
-        choice('Time display', 'time_mode', [('Remaining · -03:27.1', 'remain'), ('Elapsed · 01:12.4', 'elapsed')])
-        choice('Information bar size', 'info_size', [('Compact', .8), ('Standard', 1.0), ('Large', 1.25)])
-        choice('End-of-track warning', 'end_warning', [('Off', 0), ('Last 15 seconds', 15), ('Last 30 seconds', 30),
-                                                        ('Last 60 seconds', 60)])
-        for label, key in [('Show the information bar', 'deck_info'), ('Show artwork', 'artwork')]:
-            box = QCheckBox(label)
-            box.setChecked(bool(self.session.view.get(key, True)))
-            box.toggled.connect(lambda value, k=key: self.set_view(k, value))
-            form.addRow('', box)
-        form = connection_form
-        self.source_combo = QComboBox()
-        self.source_combo.addItems(['Native', 'OSC', 'Offline'])
-        self.source_combo.setCurrentText(self.session.view['source'])
-        self.source_combo.currentTextChanged.connect(self.change_source)
-        form.addRow('Playback connection', self.source_combo)
-        self.connection_detail = QLabel(self.session.status)
-        self.connection_detail.setWordWrap(True)
-        self.connection_detail.setObjectName('help')
-        form.addRow('Connection status', self.connection_detail)
-        form.addRow('Wave version', QLabel(__version__))
-        if sys.platform in ('darwin', 'win32'):
-            state_help = QLabel('Wave reads decks, loops and tempo straight from Rekordbox, which it starts with its bridge. '
-                                'Rekordbox stays the audio engine and keeps the FLX10.')
-            state_help.setWordWrap(True)
-            state_help.setObjectName('help')
-            form.addRow('Rekordbox', state_help)
-            for label, key in [('Start Rekordbox with Wave', 'start_rekordbox'),
-                               ('Connect to a Rekordbox started without Wave, by itself', 'auto_connect'),
-                               ('Start Rekordbox again if it closes', 'keep_rekordbox_running'),
-                               ('Quit Rekordbox when Wave quits', 'quit_rekordbox'),
-                               ('Keep Rekordbox hidden behind Wave', 'hide_rekordbox'),
-                               ("Close Rekordbox's notices and offers by itself", 'close_popups'),
-                               ('Keep the screen awake', 'keep_awake'),
-                               ('Check GitHub for Wave updates', 'check_updates')]:
-                box = QCheckBox(label)
-                box.setChecked(bool(self.session.view.get(key, True)))
-                box.toggled.connect(lambda value, k=key: self.set_view(k, value))
-                form.addRow('', box)
-            choice('Browser', 'browser', [("Rekordbox's browser · over Wave, put away after a load", 'rekordbox'),
-                                          ("Wave's touch browser", 'wave')])
-            rekordbox_row = QWidget()
-            rekordbox_layout = QHBoxLayout(rekordbox_row)
-            rekordbox_layout.setContentsMargins(0, 0, 0, 0)
-            rekordbox_layout.addWidget(self.button('SHOW REKORDBOX', self.show_rekordbox))
-            rekordbox_layout.addWidget(self.button('CHECK FOR UPDATES', lambda: self.check_for_update(asked=True)))
-            rekordbox_layout.addWidget(self.button('OPEN LOG', self.open_log))
-            if sys.platform == 'darwin':
-                rekordbox_layout.addWidget(self.button('ACCESSIBILITY SETTINGS', lambda:
-                    QDesktopServices.openUrl(QUrl('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'))))
-            rekordbox_layout.addStretch()
-            form.addRow('', rekordbox_row)
-        open_row = QWidget()
-        open_layout = QHBoxLayout(open_row)
-        open_layout.setContentsMargins(0, 0, 0, 0)
-        self.open_deck = QComboBox()
-        for idx in range(4):
-            self.open_deck.addItem(f'Deck {idx + 1}', idx)
-        open_layout.addWidget(self.open_deck)
-        open_layout.addWidget(self.button('OPEN ANALYSIS FILE…', self.open_analysis))
-        form.addRow('Track analysis', open_row)
-        profiles = QHBoxLayout()
-        profiles.addWidget(self.button('IMPORT PROFILE…', self.import_profile))
-        profiles.addWidget(self.button('EXPORT PROFILE…', self.export_profile))
-        profiles.addStretch()
-        profiles_form.addRow(profiles)
-        help_label = QLabel('F2: settings    F11: full screen    + / −: zoom    Escape: back / leave full screen')
-        help_label.setObjectName('help')
-        help_label.setWordWrap(True)
-        outer.addWidget(help_label)
-        scroll.setWidget(content)
-        return scroll
+        from .qt_settings import build
+        return build(self)
+
+    def refresh_settings(self):
+        """Settings show what is true now: some choices also change outside this page (a tap on a deck's time)."""
+        for name, key in (('time_segment', 'time_mode'), ('browser_segment', 'browser')):
+            control = getattr(self, name, None)
+            if control is not None:
+                control.set_value(self.session.view.get(key))
+        if getattr(self, 'count_segment', None) is not None:
+            self.count_segment.set_value(self.session.render.deck_count)
+        self.refresh_rekordbox_summary()
+
+    def refresh_rekordbox_summary(self):
+        label = getattr(self, 'rekordbox_summary', None)
+        if label is None:
+            return
+        from .rekordbox_setup import SUPPORTED_TEXT, summary, supported_install
+        try:
+            label.setText(summary())
+            have = supported_install() is not None
+        except Exception as exc:
+            label.setText(f'Rekordbox could not be checked: {exc}')
+            have = False
+        self.install_button.setText('REINSTALL' if have else f'INSTALL REKORDBOX {SUPPORTED_TEXT}')
+        self.install_button.setObjectName('' if have else 'primary')
+        self.install_button.style().unpolish(self.install_button)
+        self.install_button.style().polish(self.install_button)
+
+    def install_rekordbox(self, choose=False):
+        """Get AlphaTheta's installer for the supported Rekordbox (or use one the DJ downloaded) and run it."""
+        from . import rekordbox_setup as rs
+        if getattr(self, 'installing', None) and not self.installing.done():
+            return
+        archive = None
+        if choose:
+            archive, _ = QFileDialog.getOpenFileName(self, f'Rekordbox {rs.SUPPORTED_TEXT} installer', '',
+                                                     'Rekordbox installer (*.zip *.exe *.pkg)')
+            if not archive:
+                return
+        elif any(self.session.deck_playing(i) for i in range(4)):
+            self.show_banner('Stop every deck first: installing Rekordbox restarts it.', 'warn', timeout=6000)
+            return
+        self.install_progress.setRange(0, 0)
+        self.install_progress.show()
+        self.install_text = 'Preparing…'
+
+        def progress(done, total):
+            self.install_fraction = done / total if total else None
+
+        def status(text):
+            self.install_text = text
+        self.install_fraction = None
+        self.installing = self.updates.submit(rs.install_supported, progress, archive, status)
+        watch = QTimer(self)
+
+        def poll():
+            self.connection_detail.setText(self.install_text)
+            if self.install_fraction is not None:
+                self.install_progress.setRange(0, 1000)
+                self.install_progress.setValue(int(self.install_fraction * 1000))
+            if not self.installing.done():
+                return
+            watch.stop()
+            self.install_progress.hide()
+            try:
+                self.installing.result()
+                self.show_banner(f'Rekordbox {rs.SUPPORTED_TEXT} is installed: Wave starts it now.', 'info', timeout=8000)
+                if self.session.host:
+                    self.session.host.connect_now()
+            except Exception as exc:
+                log.warning('Rekordbox install: %s', exc)
+                self.show_banner(str(exc), 'warn', action=('DOWNLOAD PAGE', lambda: QDesktopServices.openUrl(
+                    QUrl(rs.DOWNLOAD_PAGE))), key='install')
+            self.refresh_rekordbox_summary()
+        watch.timeout.connect(poll)
+        watch.start(200)
 
     def refresh_screens(self):
         if not hasattr(self, 'screen_combo'):
@@ -1613,6 +1539,7 @@ class MainWindow(QMainWindow):
         self.sync_nav()
         if opening:
             self.refresh_screens()
+            self.refresh_settings()
         else:
             self.canvas.setFocus()
             self.pace_frames()
@@ -1762,6 +1689,8 @@ class MainWindow(QMainWindow):
 
     def set_count(self, count):
         self.session.render.deck_count = count
+        if getattr(self, 'count_segment', None) is not None:
+            self.count_segment.set_value(count)
         self.sync_count()
         self.canvas.update()
         self.persist()
@@ -1805,8 +1734,42 @@ class MainWindow(QMainWindow):
         self.session.configure_host()
         if key == 'keep_awake':
             self.awake.set(bool(value))
+        if key == 'dim':
+            self.dimmer.refresh()
         self.canvas.update()
         self.persist()
+
+    def update_toolbar_readouts(self):
+        """Once a second: the tempo master's BPM, and the battery, with a warning when the charger comes out."""
+        view = self.session.view
+        master = ''
+        if view.get('master_bpm', True):
+            for idx, status in getattr(self.session.reader, 'deck_status', {}).items():
+                if getattr(status, 'master', False) and getattr(status, 'bpm', 0):
+                    master = f'MASTER {idx + 1} · {status.bpm:.1f}'
+        self.master_label.setText(master)
+        self.master_label.setVisible(bool(master))
+        battery = None
+        if view.get('battery', True):
+            try:
+                import psutil
+                battery = psutil.sensors_battery()
+            except Exception:
+                battery = None
+        self.battery_label.setVisible(battery is not None)
+        if battery is None:
+            return
+        percent, plugged = round(battery.percent), bool(battery.power_plugged)
+        colour = '#2fd16b' if plugged else '#ff4d4d' if percent <= 20 else '#ff9f1a' if percent <= 40 else '#d9dde2'
+        self.battery_label.setText(f'<span style="color:{colour}">{"⚡" if plugged else "▮"} {percent}%</span>')
+        if self.battery_plugged is True and not plugged:
+            self.show_banner(f'Running on battery: {percent}%. Check the charger.', 'warn', timeout=15000, key='battery')
+            log.warning('Charger unplugged at %d%%', percent)
+        elif plugged and self.banner_key == 'battery':
+            self.hide_banner('battery')
+        if not plugged and percent <= 15 and self.banner_key != 'battery':
+            self.show_banner(f'Battery low: {percent}%. Plug in the charger.', 'warn', key='battery')
+        self.battery_plugged = plugged
 
     def open_log(self):
         folder = config_directory() / 'logs'

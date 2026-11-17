@@ -63,11 +63,12 @@ def uptime_ns():
 
 
 def windows_executable(root=None):
-    """The newest installed rekordbox: Program Files\\rekordbox\\rekordbox 7.x.y\\rekordbox.exe."""
-    root = Path(root or Path(os.environ.get('ProgramFiles', r'C:\Program Files'))/'rekordbox')
-    found = sorted(root.glob('rekordbox */rekordbox.exe'),
-                   key=lambda path: tuple(int(n) for n in re.findall(r'\d+', path.parent.name)))
-    return found[-1] if found else None
+    """The Rekordbox Wave supports when it is installed - versions sit side by side in Program Files\\rekordbox\\
+    rekordbox 7.x.y - otherwise the newest installed."""
+    from .rekordbox_setup import installed
+    found = installed(root, 'win32')
+    supported = [i for i in found if i.supported]
+    return (supported or found)[-1].executable if found else None
 
 
 def fnv(data):
