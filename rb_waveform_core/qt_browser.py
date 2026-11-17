@@ -549,6 +549,8 @@ class BrowserPage(QWidget):
         self.known = {}              # file -> CatalogTrack, for the rows Rekordbox lists
         self.resolving = False
         self.device_roots = ()
+        self.pending_item = None     # a list item to highlight once its list arrives
+        self.pending_track = ''      # a track id to highlight once its rows arrive
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -585,9 +587,15 @@ class BrowserPage(QWidget):
         self.back.setFixedSize(52, 52)
         self.back.clicked.connect(self.go_back)
         bar.addWidget(self.back)
-        self.heading = QLabel('TRACK')
-        self.heading.setObjectName('heading')
-        bar.addWidget(self.heading, 1)
+        # Where the browser is, as a row of crumbs: tap any of them to go back there.
+        self.crumbs = QWidget()
+        self.crumbs.setObjectName('crumbs')
+        self.crumb_row = QHBoxLayout(self.crumbs)
+        self.crumb_row.setContentsMargins(0, 0, 0, 0)
+        self.crumb_row.setSpacing(2)
+        bar.addWidget(self.crumbs, 1)
+        self.heading = QLabel('TRACK')  # the crumbs as text, for screen readers and tests
+        self.heading.hide()
         self.search = QLineEdit()
         self.search.setPlaceholderText('Search title or artist')
         self.search.setAccessibleName('Search collection')
@@ -719,6 +727,32 @@ class BrowserPage(QWidget):
     def set_heading(self):
         crumbs = [self.source_label.upper()] + [title for title, _ in self.trail] + [self.title]
         self.heading.setText('  ›  '.join(crumbs))
+        self.crumbs.setAccessibleName('  ›  '.join(crumbs))
+        while self.crumb_row.count():
+            widget = self.crumb_row.takeAt(0).widget()
+            if widget is not None:
+                widget.hide()
+                widget.setParent(None)  # gone now, not at the next event loop turn
+                widget.deleteLater()
+        # The source, then every level above, then where the browser is now (not a button).
+        levels = [(self.source_label.upper(), None)] + [(title, n) for n, (title, _) in enumerate(self.trail)]
+        if len(levels) > 4:  # deep folders: the source, an ellipsis, and the last two levels
+            levels = levels[:1] + [('…', len(self.trail) - 3)] + levels[-2:]
+        short = lambda text: text if len(text) <= 22 else text[:20] + '…'
+        for text, level in levels:
+            crumb = QPushButton(short(text))
+            crumb.setToolTip(text)
+            crumb.setObjectName('crumb')
+            crumb.setCursor(Qt.CursorShape.PointingHandCursor)
+            crumb.clicked.connect(lambda _=False, n=level: self.back_to(n))
+            self.crumb_row.addWidget(crumb)
+            arrow = QLabel('›')
+            arrow.setObjectName('crumbArrow')
+            self.crumb_row.addWidget(arrow)
+        here = QLabel(short(self.title))
+        here.setObjectName('crumbHere')
+        self.crumb_row.addWidget(here)
+        self.crumb_row.addStretch(1)
         self.back.setEnabled(bool(self.trail) or self.view[0] != 'sources')
         for kind, tile in self.tiles.items():
             tile.set_on(kind == self.kind and self.view[0] != 'sources')
@@ -747,6 +781,10 @@ class BrowserPage(QWidget):
     def open_category(self, kind):
         self.kind = kind
         self.trail = []
+        if kind != 'SEARCH' and self.search.text():
+            self.search.blockSignals(True)  # a new category starts without the last search
+            self.search.clear()
+            self.search.blockSignals(False)
         if kind in ('TRACK', 'SEARCH'):
             self.navigate(('tracks', None), kind)
             if kind == 'SEARCH':
@@ -759,12 +797,26 @@ class BrowserPage(QWidget):
         item = index.data(Qt.ItemDataRole.UserRole)
         if item is None:
             return
+        if self.search.text():
+            self.search.blockSignals(True)  # a playlist opens whole, not filtered by an old search
+            self.search.clear()
+            self.search.blockSignals(False)
         self.trail.append((self.title, self.view))
         kind = self.view[1]
         if item.folder:
             self.navigate(('list', kind, item.identifier), item.name)
         else:
             self.navigate(('tracks', (kind, item.identifier)), item.name)
+
+    def back_to(self, level):
+        """A crumb was tapped: go back to that level (None: the source list)."""
+        if level is None:
+            self.show_sources()
+            return
+        if 0 <= level < len(self.trail):
+            title, view = self.trail[level]
+            del self.trail[level:]
+            self.navigate(view, title)
 
     def go_back(self):
         """One level up; False at a category's root, where BACK leaves the browser."""
@@ -814,6 +866,42 @@ class BrowserPage(QWidget):
             return
         self.categories.replace(items)
         self.message.setText(f'{len(items):,} {self.title.lower()}' if items else 'Nothing here')
+        wanted, self.pending_item = self.pending_item, None
+        for row, item in enumerate(items):
+            if wanted is not None and item.identifier == wanted:
+                index = self.categories.index(row, 0)
+                self.list.setCurrentIndex(index)
+                self.list.scrollTo(index, QAbstractItemView.ScrollHint.PositionAtCenter)
+
+    # Following Rekordbox's own browser, for a knob Wave can't read directly ------------------------
+    def show_located(self, located):
+        """Show the list holding the playlist Rekordbox is on, with that playlist highlighted."""
+        if located.kind not in ('PLAYLIST', 'HISTORY'):
+            return
+        if self.view == ('tracks', (located.kind, located.identifier)):
+            return  # already in it
+        root = 'PLAYLIST' if located.kind == 'PLAYLIST' else 'HISTORY'
+        self.kind = root
+        self.trail = [(root, ('list', root, None))] + \
+            [(name, ('list', root, ident)) for ident, name in located.trail[:-1]]
+        parent = located.trail[-1] if located.trail else None
+        self.pending_item = located.identifier
+        if parent:
+            self.navigate(('list', root, parent[0]), parent[1])
+        else:
+            self.trail = []
+            self.navigate(('list', root, None), root)
+
+    def enter_located(self, located, track_id=''):
+        """Open the playlist Rekordbox is on, with Rekordbox's own cursor track highlighted."""
+        if located.kind not in ('PLAYLIST', 'HISTORY'):
+            return
+        if self.view != ('tracks', (located.kind, located.identifier)):
+            root = located.kind
+            self.kind = root
+            self.trail = [(root, ('list', root, None))] + [(name, ('list', root, ident)) for ident, name in located.trail]
+            self.navigate(('tracks', (root, located.identifier)), located.name)
+        self.pending_track = str(track_id or '')
 
     # Track queries ---------------------------------------------------------------------------
     def scope(self):
@@ -883,6 +971,12 @@ class BrowserPage(QWidget):
             self.model.replace(tracks, total)
             self.selection_changed()  # a reset drops the selection without signalling it
             self.table.scrollToTop()
+        wanted, self.pending_track = self.pending_track, ''
+        if wanted:
+            row = next((n for n, t in enumerate(self.model.tracks) if str(t.identifier) == wanted), -1)
+            if row >= 0:
+                self.table.selectRow(row)
+                self.table.scrollTo(self.model.index(row, 1), QAbstractItemView.ScrollHint.PositionAtCenter)
         self.appending = False
         if self.message.text() in ('Searching…', 'Opening…') or not self.message.text() or self.view[0] == 'tracks':
             self.message.setText(f'{total:,} tracks' if total else 'No matching tracks')
@@ -968,6 +1062,12 @@ class BrowserPage(QWidget):
                 return str(Path(root) / 'PIONEER' / 'rekordbox' / 'exportLibrary.db')
         return ''
 
+    def for_loading(self, track):
+        """(track, source) to load a track known by its mounted file: a stick's export stores paths from its root."""
+        source = self.source_for(track)
+        relative = '/' + Path(track.path).relative_to(Path(source).parents[2]).as_posix() if source else track.path
+        return replace(track, path=relative), source
+
     # Loading ------------------------------------------------------------------------------------
     def selected_track(self):
         rows = self.table.selectionModel().selectedRows()
@@ -984,10 +1084,7 @@ class BrowserPage(QWidget):
         elif self.locked.get(idx):
             self.message.setText(self.locked[idx])
         elif self.view == ('rekordbox',):
-            source = self.source_for(track)
-            # A stick's export stores paths from its root; the mirror has the mounted file.
-            relative = '/' + Path(track.path).relative_to(Path(source).parents[2]).as_posix() if source else track.path
-            self.loadRequested.emit(idx, replace(track, path=relative), source)
+            self.loadRequested.emit(idx, *self.for_loading(track))
         else:
             self.loadRequested.emit(idx, track, self.source_path)
 

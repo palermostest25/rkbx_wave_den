@@ -49,7 +49,27 @@ class MidiMapTests(unittest.TestCase):
         self.assertNotIn((0x97, 0x10), table)  # pad FX
         self.assertEqual(table[0x92, 0x3D], (2, ('memory', None)))
         self.assertEqual(table[0xB6, 0x64], (None, ('zoom', 'relative')))  # SHIFT + BROWSE
-        self.assertNotIn((0xB6, 0x40), table)  # plain BROWSE keeps browsing tracks only
+        self.assertEqual(table[0xB6, 0x40], (None, ('browse', 'relative')))  # the browse knob drives Wave's browser
+
+    def test_browser_controls_are_found_by_name_and_message(self):
+        from rb_waveform_core.midi_loops import browse_action
+        self.assertEqual(browse_action('Browse', 0xB6), ('browse', 'relative'))
+        self.assertEqual(browse_action('BrowsePress', 0x96), ('browse_press', None))
+        self.assertEqual(browse_action('Back', 0x96), ('back', None))
+        self.assertEqual(browse_action('Load', 0x96), ('load', None))
+        self.assertEqual(browse_action('LoadDeck3', 0x96), ('load', 2))
+        for name, status in (('Browse+Shift', 0xB6), ('PlayPause', 0x90), ('Preview', 0x96)):
+            self.assertIsNone(browse_action(name, status))
+
+    def test_knob_turns_and_presses_reach_wave(self):
+        listener = MidiLoopListener()
+        listener._tables[1] = {(0xB6, 0x40): (None, ('browse', 'relative')), (0x96, 0x41): (None, ('browse_press', None)),
+                               (0x96, 0x65): (None, ('back', None)), (0x90, 0x46): (0, ('load', None))}
+        self.assertTrue(listener.browses)
+        listener._receive(1, bytes((0xB6, 0x40, 0x7E, 0x96, 0x41, 0x7F, 0x96, 0x41, 0x00, 0x90, 0x46, 0x7F)))
+        events = [listener.get_event()[:3] for _ in range(3)]
+        self.assertEqual(events, [(None, 'browse', ('relative', 0x7E)), (None, 'browse_press', None), (0, 'load', None)])
+        self.assertIsNone(listener.get_event())  # the release is not a second press
 
     def test_windows_finds_maps_beside_the_running_rekordbox(self):
         from unittest.mock import patch

@@ -24,6 +24,7 @@ from .config import WaveformColorConfig, WaveformRenderConfig, config_to_dict, d
 from .cues import CueMarker, _marker_color, live_cues
 from .deck_controller import DeckController
 from .displays import deck_order
+from .catalog import CatalogTrack, tracks_for_paths
 from .live_state import PlaybackTimeline
 from .qt_display import WaveformCanvas, screen_key, find_screen, bind_fullscreen
 from .mac_bridge import BUSY, STARTING_TEXT
@@ -101,6 +102,7 @@ class Session(QObject):
     analysisChanged = Signal()
     statusChanged = Signal(str)
     loadStatus = Signal(str)
+    controllerBrowse = Signal(str, int, int)  # 'browse' (steps) | 'browse_press' | 'back' | 'load' (deck), from MIDI
 
     def __init__(self, *, demo=False, config_path=None):
         super().__init__()
@@ -136,6 +138,7 @@ class Session(QObject):
         # Load requests wait for Rekordbox's answer off the UI thread; one at a time.
         self.loader = ThreadPoolExecutor(max_workers=1, thread_name_prefix='deck-loader')
         self.loading = None  # (deck, track, request, deadline) until Rekordbox's engine has the file
+        self.wave_loads = {}  # deck -> (file Wave asked for, until when): Wave's own loads, not the controller's
         self.vsync_wait = None
         self.host = None      # keeps Rekordbox started and connected behind Wave (Native)
         self.popups = None    # watches Rekordbox's popups (Native)
@@ -150,10 +153,11 @@ class Session(QObject):
             self.set_status('DEMO · synthetic analysis')
         else:
             self.connect_source()
-            if sys.platform == 'darwin':
-                # Only for SHIFT+BROWSE zoom. CoreMIDI shares a controller between apps; Windows MIDI
-                # gives a port to one app, and taking the FLX10 from Rekordbox would stop its decks.
-                from .midi_loops import MidiLoopListener
+            from .midi_loops import MidiLoopListener, shared_midi
+            if shared_midi():
+                # The browse knob, BACK and LOAD, and SHIFT+BROWSE zoom, read beside Rekordbox. Only where the
+                # system shares the controller: classic Windows MIDI gives a port to one app, and taking the
+                # FLX10 from Rekordbox would stop its decks.
                 self.midi = MidiLoopListener()
                 self.midi.start()
         self.timer = QTimer(self)
@@ -194,8 +198,17 @@ class Session(QObject):
         expected = str(root / track.path.lstrip('/')) if root else track.path
         request = self.loader.submit(self.reader.load, idx, int(track.identifier), str(root) if root else None)
         self.loading = (idx, replace(track, path=expected), request, time.monotonic() + 8)
+        self.wave_loads[idx] = (expected, time.monotonic() + 15)
         self.loadStatus.emit(f'Loading {track.title} on deck {idx + 1}…')
         return True
+
+    def loaded_by_wave(self, idx, path):
+        """True when deck ``idx`` got ``path`` because Wave asked for it (not the controller's LOAD)."""
+        expected, until = self.wave_loads.get(idx, ('', 0))
+        if time.monotonic() > until or not expected or not path:
+            return bool(self.loading and self.loading[0] == idx)
+        a, b = Path(path).as_posix().casefold(), Path(expected).as_posix().casefold()
+        return a == b or a.endswith(b) or b.endswith(a)
 
     def toggle_master_tempo(self, idx):
         """Key lock on or off for a deck, by Rekordbox's own engine; the deck state shows the result."""
@@ -430,6 +443,15 @@ class Session(QObject):
 
     def loop_action(self, idx, kind, beats, stamp):
         """Mirror a controller loop or cue press the moment it happens, as rekordbox will play it."""
+        if kind == 'browse':
+            value = beats[1]
+            steps = value if value < 64 else value - 128
+            if steps:
+                self.controllerBrowse.emit('browse', steps, -1)
+            return
+        if kind in ('browse_press', 'back', 'load'):
+            self.controllerBrowse.emit(kind, 0, -1 if idx is None else idx)
+            return
         if kind == 'zoom':
             # rekordbox's own waveform zoom (SHIFT + BROWSE on most controllers), an endless
             # encoder: 1 = one step clockwise, 127 = one step back.
@@ -757,6 +779,7 @@ class MainWindow(QMainWindow):
         self.browser_page = BrowserPage()
         self.browser_page.loadRequested.connect(self.session.load_track)
         self.canvas.masterTempoToggled.connect(self.session.toggle_master_tempo)
+        self.session.controllerBrowse.connect(self.on_controller)
         self.canvas.timeModeToggled.connect(
             lambda: self.set_view('time_mode', 'elapsed' if self.session.view.get('time_mode') == 'remain' else 'remain'))
         self.session.loadStatus.connect(self.browser_page.show_load_status)
@@ -842,17 +865,19 @@ class MainWindow(QMainWindow):
             self.session.timer.setInterval(interval)
 
     def follow_rekordbox_browser(self):
-        """The controller's browse knob. With Rekordbox's browser chosen it brings that browser over Wave;
-        with Wave's touch browser it moves Wave's own highlight, as the knob does on the AZ, and never
-        drags Wave over to wherever Rekordbox's own list happens to be."""
+        """The controller's browse knob, seen through Rekordbox's own browser (when Wave can't read the
+        controller directly). With Rekordbox's browser chosen it brings that browser over Wave. With Wave's
+        touch browser: a cursor move in Rekordbox's track list moves Wave's highlight; Rekordbox's list
+        changing (the knob in its playlist pane, or pressed) opens Wave's browser on the same playlist."""
         reader = self.session.reader
         browser = getattr(reader, 'browser', None) if reader and getattr(reader, 'bridged', False) else None
         now = time.monotonic()
         if browser is None:
             self.mirrored = None
             return
-        key = (browser.cursor, browser.focus, browser.tree_path, browser.rows, browser.first,
-               tuple(ident for ident, _ in browser.tracks))
+        ids = tuple(ident for ident, _ in browser.tracks)
+        key = (browser.cursor, browser.focus, browser.tree_path, browser.rows, browser.first, ids)
+        self.page_devices()
         if key == self.mirrored:
             if self.mirror_opened and now - self.mirror_moved > 20 and self.pages.currentWidget() is self.browser_page:
                 # Opened by the knob and left alone: back to the waveforms, as the AZ does.
@@ -863,31 +888,71 @@ class MainWindow(QMainWindow):
         self.rekordbox_cursor = self.cursor_track(browser)
         if previous is None:
             return  # the first look is where Rekordbox was, not a move
-        same_list = key[3] == previous[3] and key[2] == previous[2]
-        delta = key[0] - previous[0] if same_list and key[0] >= 0 and previous[0] >= 0 else 0
-        # Focus counts only when it lands somewhere: on Windows it reads as none whenever Wave is touched.
-        focus, before = key[1], self.knob_focus
-        if focus:
-            self.knob_focus = focus
-        pushed = bool(focus and before and focus != before)
-        moved = bool(delta) or key[2] != previous[2] or pushed
-        if not moved:
-            return  # Rekordbox's list refreshed by itself (a stick mounting, a playlist updating)
+        cursor_moved = key[0] != previous[0] and key[0] >= 0 and previous[0] >= 0
+        list_changed = key[3] != previous[3] or key[2] != previous[2] or (
+            not cursor_moved and key[4] == previous[4] and ids and previous[5] and not set(ids) & set(previous[5]))
+        if not cursor_moved and not list_changed:
+            return  # Rekordbox's rows refreshed by themselves (a stick mounting, a playlist updating)
         if self.session.view.get('browser') == 'rekordbox':
             if not self.rekordbox_browsing:
                 self.browse_in_rekordbox()  # the knob browses Rekordbox's own window
             return
+        if self.session.midi and self.session.midi.browses:
+            return  # the controller itself drives Wave's browser (on_controller)
         self.mirror_moved = now
-        if self.pages.currentWidget() is not self.browser_page:
-            self.toggle_browser()  # the first turn opens the browser where the DJ left it
+        opening = self.pages.currentWidget() is not self.browser_page
+        if opening:
+            self.toggle_browser(by_knob=True)  # the knob turned or pressed: the browser opens, as on the AZ
             self.mirror_opened = True
+        page = self.browser_page
+        if list_changed or page.stack.currentWidget() is page.list:
+            # Rekordbox moved to another list, or the DJ went into its track list from a playlist:
+            # find which list it is and show the same one.
+            self.locate_rekordbox(browser, enter=not list_changed)
+        elif cursor_moved and not opening:
+            page.step(key[0] - previous[0])
+
+    def locate_rekordbox(self, browser, enter):
+        page = self.browser_page
+        paths = [path for _, path in browser.tracks if path]
+        source = page.source_for(CatalogTrack('', '', '', 0.0, '', 0.0, paths[0])) if paths else ''
+        cursor_id = next((ident for ident, path in browser.tracks[max(0, browser.cursor - browser.first):][:1]), '')
+
+        def found(located):
+            if located is None or self.pages.currentWidget() is not page:
+                return
+            if source != page.source_path:
+                return  # Rekordbox is on another library than Wave's browser: leave Wave where the DJ put it
+            if enter:
+                page.enter_located(located, cursor_id)
+            else:
+                page.show_located(located)
+        from .catalog import locate
+        page.run(locate, found, source, [ident for ident, _ in browser.tracks], browser.rows)
+
+    def page_devices(self):
+        roots = tuple(root for _, root in getattr(self.session.reader, 'devices', ()))
+        if roots != self.browser_page.device_roots:
+            self.browser_page.device_roots = roots
+
+    def on_controller(self, kind, steps, deck):
+        """The controller's browse knob, its push, BACK and LOAD, read straight from the controller."""
+        if self.session.view.get('browser') == 'rekordbox' or kind == 'load':
+            return  # Rekordbox's own browser follows its controller; LOAD is seen when the deck changes
+        page = self.browser_page
+        self.mirror_moved = time.monotonic()
+        if self.pages.currentWidget() is not page:
+            if kind in ('browse', 'browse_press'):
+                self.toggle_browser(by_knob=True)  # the knob turned or pressed on the waveforms: the browser opens
+                self.mirror_opened = True
             return
-        if delta:
-            self.browser_page.step(delta)
-        elif pushed and focus == 'list':
-            self.browser_page.enter()       # knob pressed: into the highlighted playlist
-        elif pushed and focus == 'tree':
-            self.browser_page.go_back()     # BACK on the controller: up a level
+        if kind == 'browse':
+            page.step(steps)
+        elif kind == 'browse_press':
+            page.enter()
+        elif kind == 'back' and not page.go_back():
+            self.mirror_opened = False
+            self.toggle_browser()  # BACK at the top: back to the waveforms
 
     @staticmethod
     def cursor_track(browser):
@@ -925,20 +990,42 @@ class MainWindow(QMainWindow):
                                         getattr(reader, 'deck_paths', {}))
 
     def redirect_controller_load(self, before, paths):
-        """The controller's LOAD loaded Rekordbox's own pick while Wave's touch browser shows another: load
-        Wave's pick onto that deck instead. True while Wave is doing so."""
-        if not self.session.view.get('knob_loads_wave', True) or not self.rekordbox_cursor:
+        """A deck changed while Wave's touch browser is open, and Wave didn't load it: that is the controller's
+        LOAD, which loads Rekordbox's own pick. Load Wave's pick onto that deck instead; with nothing picked
+        in Wave, put back what the deck had. True while Wave is doing either."""
+        if not self.session.view.get('knob_loads_wave', True):
             return False
-        picked = self.browser_page.selected_track()
-        same = lambda a, b: bool(a and b) and Path(a).as_posix().casefold() == Path(b).as_posix().casefold()
+        page = self.browser_page
+        picked = page.selected_track()
+        same = lambda a, b: bool(a and b) and (Path(a).as_posix().casefold() == Path(b).as_posix().casefold()
+                                               or Path(a).as_posix().casefold().endswith(Path(b).as_posix().casefold()))
         for idx, path in paths.items():
-            if idx not in before or before[idx] == path or not same(path, self.rekordbox_cursor):
+            if idx not in before or before[idx] == path or not path or self.session.loaded_by_wave(idx, path):
                 continue
-            if picked is None or same(path, picked.path) or path.casefold().endswith(picked.path.casefold()):
+            if picked is not None and same(path, picked.path):
                 return False  # Rekordbox loaded what Wave shows anyway
-            if self.session.load_track(idx, picked, self.browser_page.source_path):
-                self.redirect = (idx, path, time.monotonic() + 8)
-                self.browser_page.show_load_status(f'Loading {picked.title} on deck {idx + 1}, as picked here…')
+            if picked is not None:
+                track, source = picked, page.source_path
+            elif before[idx]:
+                track, source = None, ''
+            else:
+                page.show_load_status('Highlight a track first: turn the knob in a playlist, then LOAD.')
+                return False
+            if track is None:
+                # Nothing picked in Wave: the deck gets back what it had before the stray LOAD.
+                self.redirect = (idx, path, time.monotonic() + 10)
+
+                def restore(found, deck=idx, old=before[idx]):
+                    old_track = found.get(old)
+                    if old_track and old_track.identifier:
+                        self.session.load_track(deck, *page.for_loading(old_track))
+                page.run(tracks_for_paths, restore, [before[idx]])
+                page.show_load_status('Nothing was picked here: putting the deck back as it was.')
+                log.info('Controller LOAD on deck %d with nothing picked in Wave: restoring its track', idx + 1)
+                return True
+            if self.session.load_track(idx, track, source):
+                self.redirect = (idx, path, time.monotonic() + 10)
+                page.show_load_status(f'Loading {track.title} on deck {idx + 1}, as picked here…')
                 log.info('Controller LOAD on deck %d: loading the track picked in Wave instead', idx + 1)
                 return True
         return False
@@ -1298,6 +1385,12 @@ class MainWindow(QMainWindow):
             QWidget#browser QFrame#browserNav { background:#0d0d0d; border-right:1px solid #000; }
             QWidget#browser QFrame#browserTop { background:#141414; border-bottom:1px solid #1d1d1d; }
             QWidget#browser QLabel#heading { color:#b8b8b8; font-size:22px; background:transparent; }
+            QWidget#browser QWidget#crumbs { background:transparent; }
+            QWidget#browser QPushButton#crumb { background:transparent; border:0; border-radius:6px; color:#8fb8ff;
+                                                font-size:19px; font-weight:600; padding:6px 8px; min-height:30px; }
+            QWidget#browser QPushButton#crumb:pressed { background:#1d2a3b; }
+            QWidget#browser QLabel#crumbArrow { color:#5b636d; font-size:22px; background:transparent; padding:0 2px; }
+            QWidget#browser QLabel#crumbHere { color:#f2f4f6; font-size:19px; font-weight:700; background:transparent; padding:0 6px; }
             QWidget#browser QPushButton#back { font-size:34px; padding:0 0 6px 0; border:1px solid #2c2c2c; border-radius:4px; background:#1b1b1b; }
             QWidget#browser QPushButton#back:disabled { color:#3a3a3a; border-color:#1d1d1d; background:#141414; }
             QWidget#browser QPushButton#keys { font-size:17px; font-weight:600; padding:0; border:1px solid #2c2c2c; border-radius:4px; background:#1b1b1b; }
@@ -1680,11 +1773,15 @@ class MainWindow(QMainWindow):
         self.activateWindow()
         self.pace_frames()
 
-    def toggle_browser(self):
+    def toggle_browser(self, by_knob=False):
         opening = self.pages.currentWidget() is not self.browser_page
         self.pages.setCurrentWidget(self.browser_page if opening else self.canvas)
         self.sync_nav()
-        if opening:
+        if opening and by_knob:
+            # Opened from the controller: focus stays off the search box, so no on-screen keyboard pops up.
+            page = self.browser_page
+            (page.list if page.stack.currentWidget() is page.list else page.table).setFocus()
+        elif opening:
             self.browser_page.search.setFocus()
         else:
             self.pace_frames()
