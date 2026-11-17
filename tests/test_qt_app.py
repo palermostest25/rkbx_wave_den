@@ -247,6 +247,45 @@ class QtAppTests(unittest.TestCase):
         page.open_category('PLAYLIST')
         self.assertEqual(page.search.text(), '')
 
+    def test_the_knob_scrolls_waves_playlists_through_rekordbox(self):
+        from rb_waveform_core.mac_bridge import Browser
+        from rb_waveform_core.catalog import Category
+        page = self.window.browser_page
+        state = dict(rows=300, cursor=10, first=0, focus='', tree_path='', tracks=((1, '/a'),))
+        reader = Mock(bridged=True, devices=(), browser=Browser(**state))
+        self.session.reader = reader
+        self.session.midi = Mock(browses=True)  # a controller that never says anything must not stop the knob
+        self.window.follow_rekordbox_browser()
+        self.window.toggle_browser()
+        with patch.object(page, 'run'):
+            page.navigate(('list', 'PLAYLIST', None), 'PLAYLIST')
+        page.list_ready(page.view, [Category(str(i), f'List {i}', 3) for i in range(6)])
+        reader.browser = Browser(**{**state, 'cursor': 13})
+        self.window.follow_rekordbox_browser()
+        self.assertEqual(page.list.currentIndex().row(), 2)  # three clicks, from nothing highlighted
+        self.assertEqual(page.view, ('list', 'PLAYLIST', None))  # still the playlists: nothing opened by itself
+
+    def test_double_tap_opens_a_playlist_and_a_single_tap_only_picks_it(self):
+        from rb_waveform_core.catalog import Category
+        page = self.window.browser_page
+        self.assertEqual(page.open_on, 'double')
+        with patch.object(page, 'run'):
+            page.navigate(('list', 'PLAYLIST', None), 'PLAYLIST')
+        page.list_ready(page.view, [Category('a', 'Warm up', 3), Category('b', 'Peak', 5)])
+        index = page.categories.index(1, 0)
+        with patch.object(page, 'request'):
+            page.tapped_item(index)
+            self.assertEqual((page.view[0], page.list.currentIndex().row()), ('list', 1))
+            page.tapped_item(index)
+        self.assertEqual(page.view, ('tracks', ('PLAYLIST', 'b')))
+        self.window.set_view('tap_to_open', 'single')
+        with patch.object(page, 'run'):
+            page.navigate(('list', 'PLAYLIST', None), 'PLAYLIST')
+        page.list_ready(page.view, [Category('a', 'Warm up', 3)])
+        with patch.object(page, 'request'):
+            page.tapped_item(page.categories.index(0, 0))
+        self.assertEqual(page.view, ('tracks', ('PLAYLIST', 'a')))
+
     def test_touching_the_overview_previews_that_part_and_glides_back(self):
         self.session.preview_hold(0, 120.0)
         self.assertEqual(self.session.preview_position(0), 120.0)

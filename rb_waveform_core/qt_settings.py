@@ -342,6 +342,8 @@ def build(window):
     window.browser_segment = segmented('browser', [("Wave's touch browser", 'wave'), ("Rekordbox's browser", 'rekordbox')])
     p.row('BROWSE opens', window.browser_segment,
           "Wave's touch browser: your collection or a USB stick, made for fingers. Rekordbox's: its own browser, over Wave.")
+    p.row('Open a playlist with', segmented('tap_to_open', [('Double tap', 'double'), ('Single tap', 'single')]),
+          'Double tap lets a finger scroll the list and pick without opening anything by accident.')
     p.row("The knob drives Wave's browser", switch('knob_loads_wave'),
           "Turning the browse knob moves Wave's highlight, and LOAD on the controller loads the track picked here.")
 

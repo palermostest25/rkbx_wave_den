@@ -2,6 +2,7 @@
 bar and search across the top, drill-down lists and tracks in the middle, and a load bar below.
 Queries run on one worker so the waveforms never wait for the library."""
 from collections import OrderedDict
+import time
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -9,7 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, QAbstractTableModel, QAbstractListModel, QModelIndex, QRectF, QPointF, QSize, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPainterPath
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QAbstractButton, QLineEdit, QLabel, QTableView,
-    QListView, QHeaderView, QAbstractItemView, QScroller, QStackedWidget, QStyledItemDelegate, QFrame, QGridLayout, QStyle)
+    QListView, QHeaderView, QAbstractItemView, QScroller, QScrollerProperties, QStackedWidget, QStyledItemDelegate, QFrame, QGridLayout, QStyle)
 
 from .catalog import SORTS, ORDER, CatalogTrack, sources, source_stats, categories, browse, tracks_for_paths
 
@@ -520,6 +521,21 @@ class LoadBar(QFrame):
         return self.layout().itemAt(1).geometry().left() - 16 if self.layout() and self.layout().count() > 1 else self.width() / 2
 
 
+def kinetic(view):
+    """Drag to scroll, with momentum, for a finger or a mouse alike. A press becomes a tap only if the finger
+    stays put, so a scroll never opens or picks what it started on."""
+    viewport = view.viewport()
+    QScroller.grabGesture(viewport, QScroller.ScrollerGestureType.LeftMouseButtonGesture)
+    scroller = QScroller.scroller(viewport)
+    metrics = scroller.scrollerProperties()
+    Metric = QScrollerProperties.ScrollMetric
+    metrics.setScrollMetric(Metric.DragStartDistance, .003)        # metres: about 3 mm before it scrolls
+    metrics.setScrollMetric(Metric.MousePressEventDelay, .1)       # a tap is still a tap, promptly
+    metrics.setScrollMetric(Metric.VerticalOvershootPolicy, QScrollerProperties.OvershootPolicy.OvershootAlwaysOff)
+    metrics.setScrollMetric(Metric.HorizontalOvershootPolicy, QScrollerProperties.OvershootPolicy.OvershootAlwaysOff)
+    scroller.setScrollerProperties(metrics)
+
+
 class BrowserPage(QWidget):
     loadRequested = Signal(int, object, str)  # deck index, CatalogTrack, its source ('' for the collection)
 
@@ -550,7 +566,8 @@ class BrowserPage(QWidget):
         self.resolving = False
         self.device_roots = ()
         self.pending_item = None     # a list item to highlight once its list arrives
-        self.pending_track = ''      # a track id to highlight once its rows arrive
+        self.open_on = 'double'      # 'single' or 'double' tap opens a playlist (Settings › Browser)
+        self.last_tap = None         # (row, when) of the last tap on a list
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -632,8 +649,8 @@ class BrowserPage(QWidget):
         self.list.setUniformItemSizes(True)
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.list.setAccessibleName('Browse list')
-        self.list.clicked.connect(self.open_item)
-        QScroller.grabGesture(self.list.viewport(), QScroller.ScrollerGestureType.TouchGesture)
+        self.list.clicked.connect(self.tapped_item)
+        kinetic(self.list)
         self.stack.addWidget(self.list)
         # Tracks
         self.model = TrackModel(self)
@@ -663,7 +680,7 @@ class BrowserPage(QWidget):
         header.setSortIndicator(1, Qt.SortOrder.AscendingOrder)
         header.setSortIndicatorShown(True)
         header.sectionClicked.connect(self.sort_by)
-        QScroller.grabGesture(self.table.viewport(), QScroller.ScrollerGestureType.TouchGesture)
+        kinetic(self.table)
         self.table.selectionModel().selectionChanged.connect(lambda *_: self.selection_changed())
         self.stack.addWidget(self.table)
 
@@ -793,6 +810,19 @@ class BrowserPage(QWidget):
         else:
             self.navigate(('list', kind, None), kind)
 
+    DOUBLE_TAP = .5  # seconds between the two taps that open a playlist
+
+    def tapped_item(self, index):
+        """A tap on a playlist or folder: opens it, or with double tap set (the default), highlights it and
+        a second tap on it opens it, so a finger can scroll and pick without opening by accident."""
+        now = time.monotonic()
+        first, self.last_tap = self.last_tap, (index.row(), now)
+        if self.open_on == 'single' or (first and first[0] == index.row() and now - first[1] < self.DOUBLE_TAP):
+            self.last_tap = None
+            self.open_item(index)
+        else:
+            self.list.setCurrentIndex(index)
+
     def open_item(self, index):
         item = index.data(Qt.ItemDataRole.UserRole)
         if item is None:
@@ -892,18 +922,17 @@ class BrowserPage(QWidget):
             self.trail = []
             self.navigate(('list', root, None), root)
 
-    def enter_located(self, located, track_id=''):
-        """Open the playlist Rekordbox is on, with Rekordbox's own cursor track highlighted."""
-        if located.kind not in ('PLAYLIST', 'HISTORY'):
-            return
-        if self.view != ('tracks', (located.kind, located.identifier)):
-            root = located.kind
-            self.kind = root
-            self.trail = [(root, ('list', root, None))] + [(name, ('list', root, ident)) for ident, name in located.trail]
-            self.navigate(('tracks', (root, located.identifier)), located.name)
-        self.pending_track = str(track_id or '')
+    def highlight_item(self, identifier):
+        """Highlight one item of the list shown now, when it is there."""
+        for row in range(self.categories.rowCount()):
+            index = self.categories.index(row, 0)
+            item = index.data(Qt.ItemDataRole.UserRole)
+            if item is not None and item.identifier == identifier:
+                self.list.setCurrentIndex(index)
+                self.list.scrollTo(index, QAbstractItemView.ScrollHint.EnsureVisible)
+                return True
+        return False
 
-    # Track queries ---------------------------------------------------------------------------
     def scope(self):
         return self.view[1] if self.view[0] == 'tracks' else None
 
@@ -971,12 +1000,6 @@ class BrowserPage(QWidget):
             self.model.replace(tracks, total)
             self.selection_changed()  # a reset drops the selection without signalling it
             self.table.scrollToTop()
-        wanted, self.pending_track = self.pending_track, ''
-        if wanted:
-            row = next((n for n, t in enumerate(self.model.tracks) if str(t.identifier) == wanted), -1)
-            if row >= 0:
-                self.table.selectRow(row)
-                self.table.scrollTo(self.model.index(row, 1), QAbstractItemView.ScrollHint.PositionAtCenter)
         self.appending = False
         if self.message.text() in ('Searching…', 'Opening…') or not self.message.text() or self.view[0] == 'tracks':
             self.message.setText(f'{total:,} tracks' if total else 'No matching tracks')

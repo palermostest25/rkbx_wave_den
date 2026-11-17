@@ -394,6 +394,8 @@ class MidiLoopListener:
                         handles.append(handle)
                         winmm.midiInStart(handle)
                     self.status = f'{", ".join(busy)} MIDI is held by rekordbox' if busy else ''
+                    log.info('MIDI ports %s; reading %s; held by another app %s', [n for _, n in caps],
+                             sorted(self.devices.values()) or 'none', busy or 'none')
                 self._stop.wait(2)
         finally:
             for handle in handles:
