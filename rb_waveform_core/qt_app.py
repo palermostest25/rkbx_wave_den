@@ -115,7 +115,7 @@ class Session(QObject):
                          source='Native', settings_scale=1.0, always_on_top=True,
                          refresh_hz=60, style='Rekordbox', browser='wave', knob_loads_wave=True,
                          auto_connect=True, keep_rekordbox_running=True, quit_rekordbox=True,
-                         close_popups=True, keep_awake=True, settings_version=SETTINGS_VERSION, tap_to_open='double',
+                         close_popups=True, keep_awake=True, settings_version=SETTINGS_VERSION, tap_to_open='double', touch_keyboard_off=True, touch_keyboard_restore=None,
                          dim=1.0, battery=True, master_bpm=True)
         self.decks = {i: DeckController() for i in range(4)}
         self.previews = {}    # deck -> (seconds, held until) while its overview is touched
@@ -834,9 +834,12 @@ class MainWindow(QMainWindow):
         self._zoom_keys_down = [False, False]
         self.session.changed.connect(self.poll_global_zoom)
         from .gig import KeepAwake
+        from .touch_keyboard import Guard
         self.awake = KeepAwake()
+        self.touch = Guard(session.view, self.persist)
         if not session.demo:
             self.awake.set(bool(session.view.get('keep_awake', True)))
+            self.touch.start()  # Windows' touch keyboard off while Wave runs: Wave has its own
         self.apply_theme()
         self.sync_count()
         self.sync_nav()
@@ -1881,6 +1884,8 @@ class MainWindow(QMainWindow):
             self.awake.set(bool(value))
         if key == 'tap_to_open':
             self.browser_page.open_on = value
+        if key == 'touch_keyboard_off':
+            self.touch.start() if value else self.touch.stop()
         if key == 'dim':
             self.dimmer.refresh()
         self.canvas.update()
@@ -2009,6 +2014,7 @@ class MainWindow(QMainWindow):
         if host and self.session.view.get('quit_rekordbox', True) and not self.updating:
             host.quit(playing=any(self.session.deck_playing(i) for i in range(4)))
         self.awake.set(False)
+        self.touch.stop()  # Windows' touch keyboard as it was
         self.screen_check.stop()
         self.deck_watch.stop()
         self.browse_watch.stop()

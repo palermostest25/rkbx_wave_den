@@ -268,6 +268,20 @@ def build(window):
     p.row('Booth dimmer', segmented('dim', [('100%', 1.0), ('80%', .8), ('60%', .6), ('40%', .4)],
                                     lambda v: window.set_view('dim', v)),
           'Darken the whole screen in a dark booth.')
+    from . import touch_keyboard
+    if touch_keyboard.available():
+        p.card('Windows touch keyboard')
+        try:
+            current = touch_keyboard.mode()
+        except OSError:
+            current = touch_keyboard.NO_KEYBOARD
+        keyboard = Segmented([('Never', touch_keyboard.NEVER), ('When no keyboard is attached', touch_keyboard.NO_KEYBOARD)],
+                             current)
+        keyboard.changed.connect(window.touch.choose)
+        window.touch_segment = keyboard
+        p.row('Show the touch keyboard', keyboard, "Windows' own keyboard, for typing in other apps. Wave has its own.")
+        p.row('Turn it off while Wave runs', switch('touch_keyboard_off'),
+              'Off when Wave starts, back as it was when Wave closes.')
     p.card('Decks')
     count = Segmented([('2 decks', 2), ('4 decks', 4)], render.deck_count)
     count.changed.connect(window.set_count)
