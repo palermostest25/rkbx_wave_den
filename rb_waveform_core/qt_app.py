@@ -99,6 +99,7 @@ class Session(QObject):
     PREVIEW_RETURN = .35  # and the glide back to the playhead
     changed = Signal()
     zoomRequested = Signal(float)  # multiply the visible beats
+    knobZoom = Signal(int)         # the sampler knob's position, 0-127: sets the zoom
     analysisChanged = Signal()
     statusChanged = Signal(str)
     loadStatus = Signal(str)
@@ -115,10 +116,11 @@ class Session(QObject):
                          source='Native', settings_scale=1.0, always_on_top=True,
                          refresh_hz=60, style='Rekordbox', browser='wave', knob_loads_wave=True,
                          auto_connect=True, keep_rekordbox_running=True, quit_rekordbox=True,
-                         close_popups=True, keep_awake=True, settings_version=SETTINGS_VERSION, tap_to_open='double', touch_keyboard_off=True, touch_keyboard_restore=None,
+                         close_popups=True, keep_awake=True, settings_version=SETTINGS_VERSION, tap_to_open='double', sampler_zoom=True, sampler_zoom_reverse=False, touch_keyboard_off=True, touch_keyboard_restore=None,
                          dim=1.0, battery=True, master_bpm=True)
         self.decks = {i: DeckController() for i in range(4)}
         self.previews = {}    # deck -> (seconds, held until) while its overview is touched
+        self.knob_beats = None  # the sampler knob's zoom, while it is in use
         self.timelines = {i: PlaybackTimeline(infer_loops=demo) for i in range(4)}
         self.errors = {}
         self.reader = None
@@ -452,6 +454,9 @@ class Session(QObject):
         if kind in ('browse_press', 'back', 'view', 'load'):
             self.controllerBrowse.emit(kind, 0, -1 if idx is None else idx)
             return
+        if kind == 'sampler_zoom':
+            self.knobZoom.emit(int(beats[1]))
+            return
         if kind == 'zoom':
             # rekordbox's own waveform zoom (SHIFT + BROWSE on most controllers), an endless
             # encoder: 1 = one step clockwise, 127 = one step back.
@@ -530,6 +535,23 @@ class Session(QObject):
             cues = cues + [cue] if added else [c for c in cues if not same(c)]
         self.cue_edits[idx] = pending
         self.decks[idx].cues = sorted(cues, key=lambda c: (c.time_sec, c.number))
+
+    # The sampler knob as a zoom: its middle is the zoom set in Settings, its ends 1 bar and 32 bars.
+    KNOB_NEAR, KNOB_FAR = 4.0, 128.0  # beats across the lane at the knob's ends
+
+    def zoom_beats(self):
+        """Beats across a lane now: the sampler knob's zoom while it is in use, else the zoom setting."""
+        return self.knob_beats or self.view['zoom_beats']
+
+    def knob_zoom(self, value, reverse=False):
+        """Map the knob (0-127, 64 the middle) onto 1-32 bars, through the zoom setting at the middle."""
+        base = min(self.KNOB_FAR, max(self.KNOB_NEAR, float(self.view['zoom_beats'])))
+        x = max(-1.0, min(1.0, (value - 64) / (63 if value > 64 else 64)))  # 0 and 127 both reach the ends
+        if not reverse:
+            x = -x  # clockwise zooms in: fewer beats, a bigger waveform
+        end = self.KNOB_FAR if x > 0 else self.KNOB_NEAR
+        self.knob_beats = base * (end / base) ** abs(x)  # even steps in octaves, each side
+        return self.knob_beats
 
     def preview_hold(self, idx, seconds):
         """A finger on deck ``idx``'s overview: its lane shows ``seconds`` until the finger lifts."""
@@ -686,6 +708,12 @@ class MainWindow(QMainWindow):
         self.browse_button = self.button('BROWSE', self.browse)
         self.browse_button.setAccessibleName('Browse Rekordbox collection')
         top.addWidget(self.browse_button)
+        # Rekordbox itself, for anything only it can do: Wave steps aside; tap Wave to come back.
+        self.rekordbox_button = self.button('REKORDBOX', self.show_rekordbox)
+        self.rekordbox_button.setAccessibleName('Show Rekordbox')
+        self.rekordbox_button.setToolTip('Show Rekordbox in front of Wave. Tap Wave to come back.')
+        self.rekordbox_button.setVisible(sys.platform in ('win32', 'darwin') and not session.demo)
+        top.addWidget(self.rekordbox_button)
         top.addStretch()
         # Starts Rekordbox with Wave's bridge: shown while Wave could connect directly but isn't.
         self.connect_button = self.button('CONNECT', self.connect_rekordbox)
@@ -767,6 +795,7 @@ class MainWindow(QMainWindow):
         self.canvas.settingsRequested.connect(self.toggle_settings)
         self.canvas.zoomBy.connect(self.zoom_by)
         session.zoomRequested.connect(self.zoom_by)
+        session.knobZoom.connect(self.on_knob_zoom)
         # A pinch or knob turn zooms many times a second; save the result once it settles.
         self.save_zoom = QTimer(self)
         self.save_zoom.setSingleShot(True)
@@ -1860,10 +1889,17 @@ class MainWindow(QMainWindow):
     def zoom(self, direction):
         self.zoom_by(2 if direction > 0 else .5)
 
+    def on_knob_zoom(self, value):
+        if not self.session.view.get('sampler_zoom', True):
+            return
+        self.session.knob_zoom(value, reverse=self.session.view.get('sampler_zoom_reverse', False))
+        self.canvas.update()
+
     def zoom_by(self, factor):
         """Smooth zoom from a trackpad, wheel, controller or key: 4 to 512 beats across the lane."""
-        beats = max(4.0, min(512.0, self.session.view['zoom_beats'] * factor))
+        beats = max(4.0, min(512.0, self.session.zoom_beats() * factor))
         self.session.view['zoom_beats'] = beats
+        self.session.knob_beats = None  # a pinch or the keys take over from the knob until it moves again
         nearest = min(range(self.zoom_combo.count()), key=lambda i: abs(math.log2(self.zoom_combo.itemData(i) / beats)))
         self.zoom_combo.blockSignals(True)
         self.zoom_combo.setCurrentIndex(nearest)
@@ -1873,6 +1909,8 @@ class MainWindow(QMainWindow):
 
     def set_view(self, key, value):
         self.session.view[key] = value
+        if key == 'zoom_beats':
+            self.session.knob_beats = None  # a zoom picked in Settings takes over from the sampler knob
         self.session.configure_host()
         if key == 'keep_awake':
             self.awake.set(bool(value))

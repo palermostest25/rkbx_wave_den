@@ -112,7 +112,8 @@ use **Settings → Rekordbox → SHOW REKORDBOX**. Every one of these behaviours
 | Preview another part of a track | Touch or drag the deck's overview, at the bottom of its panel. |
 | Remaining or elapsed time | Tap the big time on a deck. |
 | Toggle key lock | Tap **MT** on a deck. |
-| Zoom the waveforms | Pinch, scroll over them, press **+ / −**, or (macOS) **SHIFT + BROWSE** on the controller. |
+| Zoom the waveforms | Pinch, scroll over them, press **+ / −**, turn the controller's **sampler volume** knob (its middle is your zoom, its ends 1 and 32 bars), or **SHIFT + BROWSE**. The controller ones need Wave to read the controller itself. |
+| Use Rekordbox itself | **REKORDBOX** at the top: Rekordbox comes in front. Tap Wave to come back. |
 | Two or four decks | **2 DECKS / 4 DECKS** at the top. Change the order in Settings → Display. |
 | Use a second monitor | Settings → Display → **Monitor**. Wave fills it whenever it is connected. |
 | Settings | **SETTINGS** or **F2**. **Escape** goes back; **F11** toggles full screen. |

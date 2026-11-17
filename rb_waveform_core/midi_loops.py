@@ -88,6 +88,8 @@ def browse_action(name, status):
     note, control = status & 0xF0 == 0x90, status & 0xF0 == 0xB0
     if 'shift' in key or 'zoom' in key or 'preview' in key:
         return None
+    if control and 'sampler' in key and any(word in key for word in ('vol', 'level', 'gain')):
+        return 'sampler_zoom', 'absolute'  # the sampler volume knob zooms the waveforms
     if ('brows' in key or 'rotary' in key or 'selector' in key) and control:
         return 'browse', 'relative'
     if ('brows' in key or 'rotary' in key or 'selector' in key) and note and \
@@ -236,7 +238,7 @@ class MidiLoopListener:
             if not table or (status, data1) not in table:
                 continue
             deck, (kind, extra) = table[status, data1]
-            if kind in ('zoom', 'browse'):
+            if kind in ('zoom', 'browse', 'sampler_zoom'):
                 self._queue.put((None, kind, (extra, value), stamp))
             elif value:  # presses only: note-on velocity or button CC value above zero
                 self._queue.put((deck, kind, extra, stamp))

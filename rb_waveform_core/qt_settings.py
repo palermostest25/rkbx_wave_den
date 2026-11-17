@@ -312,6 +312,11 @@ def build(window):
                                           key=lambda i: abs(math.log2(window.zoom_combo.itemData(i) / beats))))
     window.zoom_combo.currentIndexChanged.connect(lambda _: window.set_view('zoom_beats', window.zoom_combo.currentData()))
     p.row('Zoom', window.zoom_combo, 'Also: pinch, scroll, or + and − on the keyboard.')
+    p.row('Sampler knob zooms', switch('sampler_zoom'),
+          'The controller\u2019s sampler volume knob: its middle is the zoom above, its ends 1 bar and 32 bars. '
+          'Rekordbox still hears it too, unless you unmap it in Rekordbox.')
+    p.row('Sampler knob direction', segmented('sampler_zoom_reverse', [('Clockwise zooms in', False),
+                                                                         ('Clockwise zooms out', True)]))
     window.position_combo = Segmented([('AZ · 32%', .32), ('Centre', .5), ('Left · 20%', .2)], view['playhead'])
     window.position_combo.changed.connect(lambda v: window.set_view('playhead', v))
     p.row('Playhead', window.position_combo, 'Where the playing point sits across the lane.')

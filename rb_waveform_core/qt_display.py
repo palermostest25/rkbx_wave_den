@@ -298,7 +298,7 @@ class WaveformCanvas(QWidget):
                        Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, text)
             return
         bpm = deck.original_bpm or deck.current_bpm or 120.0
-        visible = s.view['zoom_beats'] * 60 / bpm
+        visible = s.zoom_beats() * 60 / bpm
         fraction = s.view['playhead']
         start = position - visible * fraction
         end = start + visible

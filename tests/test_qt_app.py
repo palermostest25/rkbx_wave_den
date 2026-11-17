@@ -320,6 +320,20 @@ class QtAppTests(unittest.TestCase):
         self.session.controllerBrowse.emit('view', 0, -1)
         self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
 
+    def test_the_sampler_knob_zooms_around_the_zoom_setting(self):
+        self.session.view['zoom_beats'] = 32
+        self.assertAlmostEqual(self.session.knob_zoom(64), 32, delta=.5)     # the middle: as set
+        self.assertAlmostEqual(self.session.knob_zoom(127), 4)               # clockwise: in, to 1 bar
+        self.assertAlmostEqual(self.session.knob_zoom(0), 128, delta=1)      # anticlockwise: out, to 32 bars
+        self.assertAlmostEqual(self.session.knob_zoom(127, reverse=True), 128)
+        self.session.knob_zoom(96)
+        self.assertLess(self.session.zoom_beats(), 32)  # the lanes show what the knob says
+        self.window.zoom_by(2)  # a pinch takes over until the knob moves again
+        self.assertIsNone(self.session.knob_beats)
+        self.window.set_view('sampler_zoom', False)
+        self.session.knobZoom.emit(127)
+        self.assertIsNone(self.session.knob_beats)  # switched off: the knob does nothing
+
     def test_touching_the_overview_previews_that_part_and_glides_back(self):
         self.session.preview_hold(0, 120.0)
         self.assertEqual(self.session.preview_position(0), 120.0)
