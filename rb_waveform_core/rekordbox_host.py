@@ -23,6 +23,7 @@ LAUNCH, ATTACH, RESTART = 'launch', 'attach', 'restart'
 ASK_START = 'Rekordbox is not running'
 ASK_CONNECT = 'Rekordbox runs without Wave: CONNECT restarts it with Wave (stop the decks first)'
 ASK_GAVE_UP = 'Rekordbox keeps closing: CONNECT starts it again'
+ASK_UPDATE = "Rekordbox runs an earlier Wave's bridge: CONNECT restarts it to finish updating (stop the decks first)"
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,8 @@ class HostPolicy:
                 log.info('Rekordbox runs an earlier Wave bridge and is idle: restarting it to finish updating')
                 self.stale_restarted = True  # once: if that didn't help, the earlier bridge still works
                 return self._restart(seen, now)
+            if seen.state == LIVE and seen.stale and not self.stale_restarted:
+                self.ask = ASK_UPDATE  # everything works; the newest abilities wait for a restart
             return None
         if seen.state in (UNSUPPORTED, FAILED):
             self.ask = None  # nothing Wave can do; the status says why

@@ -205,6 +205,9 @@ class MacPopups:
 
     def scan(self, pid, exclude):
         if not self.ax.trusted():
+            if not getattr(self, 'asked', False):
+                self.asked = True
+                self.ax.request_permission()  # macOS shows its own prompt, once
             raise PermissionError('Allow Rekordbox Wave in Accessibility to handle Rekordbox popups')
         self.ax.clear_elements()
         app = self.ax.application(pid)

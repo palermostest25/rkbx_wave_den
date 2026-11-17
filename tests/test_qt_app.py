@@ -177,7 +177,7 @@ class QtAppTests(unittest.TestCase):
 
     def test_a_rekordbox_popup_wave_could_not_close_is_put_in_front_until_answered(self):
         from rb_waveform_core.popups import Popup
-        watcher = Mock(popups=[], closed=[])
+        watcher = Mock(popups=[], closed=[], error='')
         self.session.popups = watcher
         self.session.reader = Mock(state='live', status='REKORDBOX · direct', pid=42)
         with patch('rb_waveform_core.mac_bridge.show') as show, patch('rb_waveform_core.qt_app.sys.platform', 'darwin'), \
@@ -199,7 +199,7 @@ class QtAppTests(unittest.TestCase):
             self.assertFalse(self.window.banner.isVisibleTo(self.window))
 
     def test_notices_wave_closed_are_told_in_the_banner(self):
-        self.session.popups = Mock(popups=[], closed=[(50.0, "What's new in rekordbox")])
+        self.session.popups = Mock(popups=[], closed=[(50.0, "What's new in rekordbox")], error='')
         self.window.watch_rekordbox(51)
         self.assertIn("Closed a Rekordbox notice: What's new", self.window.banner_text.text())
 

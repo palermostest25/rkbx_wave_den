@@ -81,6 +81,7 @@ class HostPolicyTests(unittest.TestCase):
         self.assertIsNone(policy.decide(Seen(8, 'live', stale=True, known=True, age=5), 30))  # not again and again
         policy = mac()
         self.assertIsNone(policy.decide(Seen(7, 'live', stale=True, known=True, loaded=True, age=900), 0))
+        self.assertIn('earlier Wave', policy.ask)  # works meanwhile; CONNECT finishes the update
 
     def test_rekordbox_closing_under_wave_is_started_again_with_a_limit(self):
         policy = mac()

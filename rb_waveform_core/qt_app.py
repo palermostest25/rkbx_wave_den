@@ -725,6 +725,7 @@ class MainWindow(QMainWindow):
         self.aside = None         # why Wave stepped aside for Rekordbox, while it has
         self.presented = []       # Rekordbox windows Wave put over itself (Windows)
         self.closed_seen = 0.0    # the newest popup Wave closed that the banner has told
+        self.told_popups = False  # told the DJ how to let Wave read Rekordbox's popups (macOS)
         # While Rekordbox's own browser is up: dict(kind='mac'|'window'|'whole', tracks=deck tracks when it
         # opened, hwnd=its window and main=whether that is Rekordbox's main window (Windows), state=Wave's).
         self.rekordbox_browsing = None
@@ -870,6 +871,12 @@ class MainWindow(QMainWindow):
             watcher.auto_close = bool(session.view.get('close_popups', True)) and not self.rekordbox_browsing
             hwnd = self.rekordbox_browsing.get('hwnd') if self.rekordbox_browsing else None
             watcher.exclude = {hwnd} if hwnd else set()
+            if watcher.error and not self.told_popups and sys.platform == 'darwin' and 'Accessibility' in watcher.error:
+                self.told_popups = True
+                self.show_banner("Allow Rekordbox Wave in Accessibility so it can close Rekordbox's popups for you", 'info',
+                                 action=('OPEN SETTINGS', lambda: QDesktopServices.openUrl(QUrl(
+                                     'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'))),
+                                 timeout=20000, key='accessibility')
             fresh = [(t, text) for t, text in watcher.closed if t > self.closed_seen]
             if fresh:
                 self.closed_seen = fresh[-1][0]
