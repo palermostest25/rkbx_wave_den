@@ -66,23 +66,43 @@ class QtAppTests(unittest.TestCase):
         self.window.sync_load_targets()
         self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
 
-    def test_rekordbox_browser_setting_opens_rekordbox_and_returns_after_a_load(self):
-        reader = Mock(bridged=True, deck_paths={0: '/a.mp3', 1: ''})
+    def test_windows_rekordbox_browser_is_laid_over_wave_and_put_away_after_a_load(self):
+        from rb_waveform_core.win_windows import Win
+        main = Win(11, 'rekordbox', False, True, (0, 0, 1600, 900), False, True, False)
+        reader = Mock(bridged=True, pid=42, deck_paths={0: '/a.mp3', 1: ''})
         self.session.reader = reader
-        self.session.view['browser'] = 'rekordbox'
-        with patch('rb_waveform_core.mac_bridge.show') as show, patch('rb_waveform_core.mac_bridge.hide') as hide, \
+        self.assertEqual(self.session.view['browser'], 'rekordbox')  # the default
+        with patch('rb_waveform_core.win_windows.windows_of', return_value=[main]), \
+                patch('rb_waveform_core.win_windows.split_screen_from_menu', return_value=False), \
+                patch('rb_waveform_core.win_windows.window_rect', return_value=(0, 0, 1920, 1080)), \
+                patch('rb_waveform_core.win_windows.alive', return_value=True), \
+                patch('rb_waveform_core.win_windows.present') as present, \
+                patch('rb_waveform_core.win_windows.put_back') as put_back, \
+                patch.object(self.window, 'pace_frames'), \
                 patch('rb_waveform_core.qt_app.sys.platform', 'win32'):
             self.window.browse()
-            show.assert_called_once_with(maximize=True)
-            self.assertTrue(self.window.isMinimized())
-            self.assertIsNot(self.window.pages.currentWidget(), self.window.browser_page)
+            hwnd, = present.call_args.args
+            left, top, right, bottom = present.call_args.kwargs['rect']
+            self.assertEqual((hwnd, left, right, bottom), (11, 0, 1920, 1080))
+            self.assertGreater(top, 0)  # below Wave's toolbar, which stays usable
+            self.assertFalse(self.window.isMinimized())
+            self.assertTrue(self.window.browse_button.property('selected'))
             self.window.sync_load_targets()  # nothing loaded yet: Rekordbox stays up
-            hide.assert_not_called()
+            put_back.assert_not_called()
             reader.deck_paths = {0: '/a.mp3', 1: '/b.mp3'}  # picked in Rekordbox, loaded on deck 2
             self.window.sync_load_targets()
-            hide.assert_called_once()
-            self.assertFalse(self.window.isMinimized())
+            put_back.assert_called_once_with(11, minimize=True)
             self.assertIsNone(self.window.rekordbox_browsing)
+            self.window.browse()  # BROWSE again opens it again; and again puts it away
+            self.window.browse()
+            self.assertEqual(put_back.call_count, 2)
+
+    def test_rekordbox_browser_falls_back_to_waves_without_rekordbox(self):
+        self.session.reader = Mock(bridged=False, pid=None, deck_paths={})
+        with patch('rb_waveform_core.mac_bridge.rekordbox_pid', return_value=None), \
+                patch('rb_waveform_core.qt_app.sys.platform', 'win32'):
+            self.window.browse()
+        self.assertIs(self.window.pages.currentWidget(), self.window.browser_page)
 
     def test_mac_rekordbox_browser_opens_its_split_screen_window_over_wave(self):
         reader = Mock(bridged=True, deck_paths={0: '/a.mp3', 1: ''})
@@ -105,6 +125,7 @@ class QtAppTests(unittest.TestCase):
         from rb_waveform_core.mac_bridge import Browser
         state = dict(rows=10, cursor=2, first=0, focus='list', tree_path='Collection', tracks=((1, '/a'),))
         reader = Mock(bridged=True, devices=(), browser=Browser(**state))
+        self.session.view['browser'] = 'wave'
         self.session.reader = reader
         self.window.follow_rekordbox_browser()
         self.window.toggle_browser()
@@ -138,18 +159,68 @@ class QtAppTests(unittest.TestCase):
             self.window.watch_rekordbox_start(100)
             self.window.watch_rekordbox_start(105)
             show.assert_not_called()  # an ordinary start
-            self.window.watch_rekordbox_start(109)
-            self.window.watch_rekordbox_start(120)
+            self.window.watch_rekordbox_start(115)
+            show.assert_not_called()  # a cold start takes a while
+            self.window.watch_rekordbox_start(121)
             show.assert_called_once()  # waiting on its own questions
             self.assertIn('answer its questions', self.window.status.toolTip())
             self.session.reader.status = 'REKORDBOX · direct'
-            self.window.watch_rekordbox_start(121)
+            self.session.reader.state = 'live'
+            self.window.watch_rekordbox_start(122)
             back.assert_called_once()
+            self.session.reader.state = 'busy'
             self.session.reader.status = 'REKORDBOX · busy'  # stuck later: a question on load, a drive that hangs
             self.window.watch_rekordbox_start(200)
             self.window.watch_rekordbox_start(209)
             self.assertEqual(show.call_count, 2)
             self.assertIn('check your music drive', self.window.status.toolTip())
+
+    def test_a_rekordbox_popup_wave_could_not_close_is_put_in_front_until_answered(self):
+        from rb_waveform_core.popups import Popup
+        watcher = Mock(popups=[], closed=[])
+        self.session.popups = watcher
+        self.session.reader = Mock(state='live', status='REKORDBOX · direct', pid=42)
+        with patch('rb_waveform_core.mac_bridge.show') as show, patch('rb_waveform_core.qt_app.sys.platform', 'darwin'), \
+                patch.object(self.window, 'set_on_top') as on_top:
+            watcher.popups = [Popup('w', 'Library', ('Sync your library now?',), ('Sync', 'Cancel'), first_seen=100)]
+            self.window.watch_rekordbox(100.5)
+            show.assert_not_called()  # a moment's grace, in case Wave closes it
+            self.window.watch_rekordbox(102)
+            show.assert_called_once()
+            on_top.assert_called_with(False)
+            self.assertTrue(self.window.banner.isVisibleTo(self.window))
+            self.assertIn('Sync your library now?', self.window.banner_text.text())
+            self.window.watch_rekordbox(103)
+            show.assert_called_once()  # once, not every check
+            watcher.popups = []  # answered
+            self.window.watch_rekordbox(104)
+            on_top.assert_called_with(True)
+            self.assertIsNone(self.window.aside)
+            self.assertFalse(self.window.banner.isVisibleTo(self.window))
+
+    def test_notices_wave_closed_are_told_in_the_banner(self):
+        self.session.popups = Mock(popups=[], closed=[(50.0, "What's new in rekordbox")])
+        self.window.watch_rekordbox(51)
+        self.assertIn("Closed a Rekordbox notice: What's new", self.window.banner_text.text())
+
+    def test_the_status_light_says_how_rekordbox_is(self):
+        self.session.demo = False
+        self.session.reader = Mock(state='live', connected=True)
+        self.assertIn('REKORDBOX', self.window.pill('REKORDBOX · direct'))
+        self.assertIn('#2fd16b', self.window.pill(''))
+        self.session.reader.state = 'absent'
+        self.assertIn('REKORDBOX OFF', self.window.pill(''))
+        self.session.host = Mock(doing='Starting Rekordbox')
+        self.assertIn('STARTING REKORDBOX…', self.window.pill(''))
+
+    def test_settings_from_before_2_5_move_to_rekordboxs_browser(self):
+        path = Path(self.temp.name) / 'old.json'
+        path.write_text(json.dumps({'view': {'browser': 'wave'}}))
+        self.session.load_config(path)
+        self.assertEqual(self.session.view['browser'], 'rekordbox')
+        path.write_text(json.dumps({'view': {'browser': 'wave', 'settings_version': 2}}))
+        self.session.load_config(path)
+        self.assertEqual(self.session.view['browser'], 'wave')  # chosen since: kept
 
     def test_two_and_four_decks_reuse_the_same_window(self):
         handle = self.window.winId()

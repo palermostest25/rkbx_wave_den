@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import os
 import sys
@@ -25,6 +26,10 @@ from .deck_controller import DeckController
 from .displays import deck_order
 from .live_state import PlaybackTimeline
 from .qt_display import WaveformCanvas, screen_key, find_screen, bind_fullscreen
+from .mac_bridge import BUSY, STARTING_TEXT
+
+log = logging.getLogger(__name__)
+SETTINGS_VERSION = 2
 
 
 def config_directory():
@@ -104,7 +109,9 @@ class Session(QObject):
                          artwork=True, end_warning=30, start_rekordbox=True, hide_rekordbox=True, check_updates=True,
                          grid=True, cues=True, loops=True, bar_numbers=True,
                          source='Native', settings_scale=1.0, always_on_top=True,
-                         refresh_hz=60, style='Rekordbox', browser='wave')
+                         refresh_hz=60, style='Rekordbox', browser='rekordbox',
+                         auto_connect=True, keep_rekordbox_running=True, quit_rekordbox=True,
+                         close_popups=True, keep_awake=True, settings_version=SETTINGS_VERSION)
         self.decks = {i: DeckController() for i in range(4)}
         self.timelines = {i: PlaybackTimeline(infer_loops=demo) for i in range(4)}
         self.errors = {}
@@ -126,6 +133,10 @@ class Session(QObject):
         self.loader = ThreadPoolExecutor(max_workers=1, thread_name_prefix='deck-loader')
         self.loading = None  # (deck, track, request, deadline) until Rekordbox's engine has the file
         self.vsync_wait = None
+        self.host = None      # keeps Rekordbox started and connected behind Wave (Native)
+        self.popups = None    # watches Rekordbox's popups (Native)
+        self.next_host = 0.0
+        self.facts = {}       # pid -> (age at, started, bridge libraries) for the host
         self.status = ''
         self.load_config(self.path, initial=True)
         if demo:
@@ -225,7 +236,12 @@ class Session(QObject):
                 raise ValueError("Profile sections must be JSON objects")
             colors, render = dict_to_config(data)
             view = dict(self.view)
-            view.update(data.get('view', {}))
+            saved_view = data.get('view', {})
+            view.update(saved_view)
+            if int(saved_view.get('settings_version', 1) or 1) < 2:
+                # 2.5: Rekordbox's own browser is BROWSE, as on the AZ; Wave's stays in Settings.
+                view['browser'] = 'rekordbox'
+            view['settings_version'] = SETTINGS_VERSION
             if view.get('source') not in ('Native', 'OSC', 'Offline'):
                 raise ValueError('Invalid playback source')
             if view.get('time_mode') not in ('remain', 'elapsed'):
@@ -272,6 +288,12 @@ class Session(QObject):
         if self.reader:
             self.reader.stop()
             self.reader = None
+        if self.host:
+            self.host.close()
+            self.host = None
+        if self.popups:
+            self.popups.stop()
+            self.popups = None
         self.reader_error = ''
         source = self.view['source']
         if source == 'Offline':
@@ -282,11 +304,16 @@ class Session(QObject):
                 from .rkbx_link_listener import RekordboxLinkListener
                 self.reader = RekordboxLinkListener(decks=range(4))
             elif sys.platform in ('win32', 'darwin'):
-                from .mac_bridge import RekordboxBridgeReader, launch, rekordbox_pid
+                from .mac_bridge import RekordboxBridgeReader
+                from .popups import PopupWatcher
+                from .rekordbox_host import RekordboxHost
                 self.reader = RekordboxBridgeReader(deck_count=4)
-                # Rekordbox is the engine behind Wave: start it, out of sight, when it isn't running.
-                if self.view.get('start_rekordbox', True) and not rekordbox_pid():
-                    launch(hidden=self.view.get('hide_rekordbox', True))
+                # Rekordbox is the engine behind Wave: started, connected and kept running out of sight.
+                self.host = RekordboxHost(hidden=lambda: self.view.get('hide_rekordbox', True))
+                self.configure_host()
+                self.popups = PopupWatcher()
+                self.popups.auto_close = bool(self.view.get('close_popups', True))
+                self.popups.start()
             else:
                 raise RuntimeError('Native Rekordbox connection requires Windows or macOS')
             self.reader.start()
@@ -295,6 +322,42 @@ class Session(QObject):
             self.reader = None
             self.reader_error = str(exc)
             self.set_status(self.reader_error)
+
+    def configure_host(self):
+        if self.host:
+            policy = self.host.policy
+            policy.auto_start = bool(self.view.get('start_rekordbox', True))
+            policy.auto_connect = bool(self.view.get('auto_connect', True))
+            policy.keep_running = bool(self.view.get('keep_rekordbox_running', True))
+        if self.popups:
+            self.popups.auto_close = bool(self.view.get('close_popups', True))
+
+    def seen(self):
+        """What Wave sees of Rekordbox, for the host."""
+        from .rekordbox_host import Seen
+        from .mac_bridge import bridge_modules, process_age
+        reader = self.reader
+        pid = getattr(reader, 'pid', None)
+        state = getattr(reader, 'state', 'absent')
+        if pid and pid not in self.facts:
+            self.facts = {pid: dict(age=process_age(pid), at=time.monotonic(), modules=None)}
+        facts = self.facts.get(pid, {})
+        age = facts['age'] + time.monotonic() - facts['at'] if pid and facts.get('age') is not None else None
+        if pid and state == 'none' and sys.platform == 'win32' and facts.get('modules') is None:
+            facts['modules'] = bridge_modules(pid)
+        playing = any(t.playing for t in self.timelines.values()) or any(
+            d.playing for d in getattr(reader, 'deck_status', {}).values())
+        loaded = bool(self.requested) or any(getattr(reader, 'deck_paths', {}).values())
+        return Seen(pid, state, bool(getattr(reader, 'stale', False)), playing, loaded,
+                    bool(getattr(reader, 'connected', False)), age, bool(facts.get('modules')))
+
+    def poll_host(self, now):
+        if not self.host or now < self.next_host:
+            return
+        self.next_host = now + .5
+        self.host.poll(self.seen(), now)
+        if self.popups:
+            self.popups.pid = getattr(self.reader, 'pid', None)
 
     def open_track(self, idx, folder):
         path = Path(folder)
@@ -473,6 +536,10 @@ class Session(QObject):
             timeline.controller = self.demo and bool(self.midi and self.midi.controllers)
         self.poll_cues(now := time.monotonic())
         self.poll_loading(now)
+        try:
+            self.poll_host(now)
+        except Exception:
+            log.exception('Rekordbox host check failed')
         for idx, future in list(self.jobs.items()):
             if not future.done():
                 continue
@@ -491,10 +558,15 @@ class Session(QObject):
                 self.errors[idx] = f'Analysis unavailable: {exc}'
         if self.reader and now >= self.next_status:
             self.next_status = now + .5
-            if self.reader.connected:
+            doing = self.host.doing if self.host else ''
+            if doing:
+                self.set_status(f'{doing}…')
+            elif self.reader.connected:
                 controllers = ' · '.join(self.midi.controllers or [self.midi.status]) if self.midi else ''
                 detail = getattr(self.reader, 'status', '') or 'REKORDBOX · connected'
                 self.set_status(detail + (f' · {controllers}' if controllers else ''))
+            elif self.host and self.host.error and getattr(self.reader, 'state', '') in ('absent', 'none'):
+                self.set_status(self.host.error)
             else:
                 self.set_status(getattr(self.reader, 'status', 'Waiting for Rekordbox'))
         if self.vsync_wait:
@@ -516,6 +588,10 @@ class Session(QObject):
 
     def close(self):
         self.timer.stop()
+        if self.popups:
+            self.popups.stop()
+        if self.host:
+            self.host.close()
         if self.reader:
             self.reader.stop()
         if self.midi:
@@ -571,6 +647,7 @@ class MainWindow(QMainWindow):
         self.update_button.hide()
         top.addWidget(self.update_button)
         self.update = self.update_job = None
+        self.updating = False   # quitting to install an update: Rekordbox keeps running
         self.update_progress = 0
         self.updates = ThreadPoolExecutor(max_workers=1, thread_name_prefix='updates')
         self.update_watch = QTimer(self)
@@ -582,6 +659,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(5000, self.check_for_update)
         self.status = QLabel(session.status)
         self.status.setObjectName('connection')
+        self.status.setTextFormat(Qt.TextFormat.RichText)
         self.status.setMaximumWidth(510)
         top.addWidget(self.status)
         self.clock = QLabel()
@@ -596,6 +674,31 @@ class MainWindow(QMainWindow):
         self.settings_button.setAccessibleName('Open display settings')
         top.addWidget(self.settings_button)
         self.layout.addWidget(self.toolbar)
+        # One line under the toolbar for what the DJ should know now: Rekordbox wants an answer,
+        # a notice Wave closed, a step to take. Never a modal box during a set.
+        self.banner = QFrame()
+        self.banner.setObjectName('banner')
+        line = QHBoxLayout(self.banner)
+        line.setContentsMargins(16, 6, 10, 6)
+        line.setSpacing(12)
+        self.banner_text = QLabel()
+        self.banner_text.setObjectName('bannerText')
+        self.banner_text.setWordWrap(True)
+        line.addWidget(self.banner_text, 1)
+        self.banner_action = self.button('', lambda: self.banner_callback and self.banner_callback())
+        self.banner_action.setObjectName('bannerAction')
+        line.addWidget(self.banner_action)
+        self.banner_close = self.button('✕', lambda: self.hide_banner())
+        self.banner_close.setObjectName('bannerClose')
+        self.banner_close.setAccessibleName('Dismiss message')
+        line.addWidget(self.banner_close)
+        self.banner_callback = None
+        self.banner_key = None
+        self.banner_timer = QTimer(self)
+        self.banner_timer.setSingleShot(True)
+        self.banner_timer.timeout.connect(lambda: self.hide_banner())
+        self.banner.hide()
+        self.layout.addWidget(self.banner)
         self.pages = QStackedWidget()
         self.canvas = WaveformCanvas(session)
         self.canvas.settingsRequested.connect(self.toggle_settings)
@@ -618,12 +721,15 @@ class MainWindow(QMainWindow):
         self.deck_paths = {}
         self.deck_watch = QTimer(self)
         self.deck_watch.timeout.connect(self.sync_load_targets)
-        self.starting_since = None
-        self.rekordbox_shown = False
-        # (Wave's window state, deck tracks) while Rekordbox's browser is up; the state is None when
-        # Wave stayed on screen under Rekordbox's own browser window (macOS).
+        self.stuck_since = None
+        self.aside = None         # why Wave stepped aside for Rekordbox, while it has
+        self.presented = []       # Rekordbox windows Wave put over itself (Windows)
+        self.closed_seen = 0.0    # the newest popup Wave closed that the banner has told
+        # While Rekordbox's own browser is up: dict(kind='mac'|'window'|'whole', tracks=deck tracks when it
+        # opened, hwnd=its window and main=whether that is Rekordbox's main window (Windows), state=Wave's).
         self.rekordbox_browsing = None
-        self.deck_watch.timeout.connect(self.watch_rekordbox_start)
+        self.split_asked = False
+        self.deck_watch.timeout.connect(lambda: self.watch_rekordbox())
         self.deck_watch.start(250)
         # Follows Rekordbox's own browser as the controller's knob moves it, as the AZ's screen does.
         self.mirrored = None
@@ -651,6 +757,10 @@ class MainWindow(QMainWindow):
         self._settings_dirty = False
         self._zoom_keys_down = [False, False]
         self.session.changed.connect(self.poll_global_zoom)
+        from .gig import KeepAwake
+        self.awake = KeepAwake()
+        if not session.demo:
+            self.awake.set(bool(session.view.get('keep_awake', True)))
         self.apply_theme()
         self.sync_count()
         self.sync_nav()
@@ -722,15 +832,19 @@ class MainWindow(QMainWindow):
 
     def sync_load_targets(self):
         reader = self.session.reader
-        self.connect_button.setVisible(bool(reader and hasattr(reader, 'load') and (not reader.bridged or getattr(reader, 'stale', False))))
+        host = self.session.host
+        self.connect_button.setVisible(bool(host.policy.ask) if host else
+                                       bool(reader and hasattr(reader, 'load') and (not reader.bridged or getattr(reader, 'stale', False))))
         paths, before = getattr(reader, 'deck_paths', {}), self.deck_paths
         self.deck_paths = paths
         if self.rekordbox_browsing:
-            state, tracks = self.rekordbox_browsing
-            if track_loaded(tracks, self.deck_tracks()):
-                self.leave_rekordbox(state)
-            elif state is not None and not self.isMinimized():
+            browsing = self.rekordbox_browsing
+            if track_loaded(browsing['tracks'], self.deck_tracks()):
+                self.leave_rekordbox()
+            elif browsing['kind'] == 'whole' and not self.isMinimized():
                 self.rekordbox_browsing = None  # the user came back to Wave by hand
+            elif browsing['kind'] == 'window' and not self.rekordbox_window_alive(browsing['hwnd']):
+                self.leave_rekordbox()  # closed or minimised in Rekordbox
         if self.pages.currentWidget() is self.browser_page and track_loaded(before, paths):
             self.mirror_opened = False
             self.toggle_browser()  # a track landed on a deck, from the screen or the controller: back to the waveforms
@@ -741,28 +855,152 @@ class MainWindow(QMainWindow):
             self.browser_page.set_decks(self.session.order(), locked, self.session.load_unavailable(),
                                         getattr(reader, 'deck_paths', {}))
 
-    def watch_rekordbox_start(self, now=None):
-        """Rekordbox behind Wave can stop at its own questions (library sync, My Tag and so on) when it starts
-        or loads, or hang on a music drive that stopped answering: bring it forward so it can be seen, then come back."""
-        from .mac_bridge import BUSY, STARTING_TEXT, show
-        status = getattr(self.session.reader, 'status', '') or ''
+    def watch_rekordbox(self, now=None):
+        """Rekordbox behind Wave can stop at its own questions (library sync, My Tag, sign-in…) when it starts or
+        loads, show a popup Wave could not close for the DJ, or hang on a music drive that stopped answering. Then
+        Wave steps aside and puts Rekordbox in front, and comes back once Rekordbox is running again."""
+        session = self.session
+        reader, watcher = session.reader, session.popups
+        state = getattr(reader, 'state', '') or ''
+        status = getattr(reader, 'status', '') or ''
+        if not isinstance(state, str):
+            state = ''
         now = time.monotonic() if now is None else now
-        if status not in (STARTING_TEXT, BUSY):
-            self.starting_since = None
-            if self.rekordbox_shown and status.startswith('REKORDBOX · direct'):
-                self.rekordbox_shown = False
-                self.raise_()
-                self.activateWindow()
-            return
-        self.starting_since = self.starting_since or now
-        if not self.rekordbox_shown and now - self.starting_since > 8:
-            self.rekordbox_shown = True
-            try:
+        if watcher:
+            watcher.auto_close = bool(session.view.get('close_popups', True)) and not self.rekordbox_browsing
+            hwnd = self.rekordbox_browsing.get('hwnd') if self.rekordbox_browsing else None
+            watcher.exclude = {hwnd} if hwnd else set()
+            fresh = [(t, text) for t, text in watcher.closed if t > self.closed_seen]
+            if fresh:
+                self.closed_seen = fresh[-1][0]
+                self.show_banner(f'Closed a Rekordbox notice: {fresh[-1][1]}', 'info', timeout=6000, key='closed')
+        stuck = state in ('starting', 'busy') or status in (STARTING_TEXT, BUSY)
+        self.stuck_since = (self.stuck_since or now) if stuck else None
+        # A popup with buttons wants an answer; one without (Rekordbox's splash) only counts once it is stuck.
+        popups = [] if self.rekordbox_browsing or not watcher else \
+            [p for p in watcher.popups if p.buttons and now - p.first_seen > 1.5]
+        patience = 20 if state == 'starting' or status == STARTING_TEXT else 8  # a cold start takes a while
+        waiting = self.stuck_since is not None and now - self.stuck_since > patience
+        if popups or waiting:
+            why = (f'Rekordbox asks: {popups[0].summary}' if popups else
+                   'Rekordbox is waiting: answer its questions, then Wave connects'
+                   if state == 'starting' or status == STARTING_TEXT else
+                   'Rekordbox is not responding: answer it if it asks something, or check your music drive')
+            self.step_aside(why, popups)
+        elif self.aside and not stuck:
+            self.come_back()
+        pill = self.pill(self.session.status)
+        if pill != self.status.text():
+            self.status.setText(pill)
+
+    def watch_rekordbox_start(self, now=None):
+        self.watch_rekordbox(now)
+
+    def step_aside(self, why, popups=()):
+        """Put Rekordbox, or just its popups, in front of Wave until it is answered."""
+        first = self.aside is None
+        if why != self.aside:
+            self.aside = why
+            self.update_status(why)
+            self.show_banner(why + ' · Wave comes back by itself', 'warn', key='aside')
+        try:
+            if sys.platform == 'win32':
+                self.present_rekordbox(popups)
+            elif first:
+                from .mac_bridge import show
+                self.set_on_top(False)
                 show()
-            except Exception:
-                return  # Rekordbox went away; the status says what to do
-            self.update_status('Rekordbox is waiting: answer its questions, then Wave connects' if status == STARTING_TEXT else
-                               'Rekordbox is not responding: answer it if it asks something, or check your music drive')
+                log.info('Brought Rekordbox in front of Wave: %s', why)
+        except Exception as exc:
+            log.warning('Could not bring Rekordbox forward: %s', exc)
+
+    def present_rekordbox(self, popups):
+        """Windows: Rekordbox's popups - or, with none to see, its main window - over Wave, centred on Wave."""
+        from . import win_windows as ww
+        pid = getattr(self.session.reader, 'pid', None)
+        if not pid:
+            return
+        handles = [p.key for p in popups if isinstance(p.key, int)]
+        if not handles:
+            main, _, shown = ww.classify(ww.windows_of(pid))
+            handles = [w.hwnd for w in shown] or ([main.hwnd] if main else [])
+        centre = self.physical_centre()
+        for hwnd in handles:
+            if hwnd not in self.presented:
+                ww.present(hwnd, centre=centre)
+                self.presented.append(hwnd)
+                log.info('Brought a Rekordbox window over Wave: %s', self.aside)
+
+    def come_back(self):
+        """Rekordbox is answered: Wave on top again, Rekordbox out of sight."""
+        self.aside = None
+        self.hide_banner('aside')
+        if sys.platform == 'win32':
+            try:
+                from . import win_windows as ww
+                for hwnd in self.presented:
+                    ww.put_back(hwnd, minimize=self.session.view.get('hide_rekordbox', True))
+            except Exception as exc:
+                log.warning('Could not put Rekordbox back: %s', exc)
+        self.presented = []
+        self.set_on_top(bool(self.session.view.get('always_on_top', True)))
+        self.raise_()
+        self.activateWindow()
+        log.info('Rekordbox answered: Wave is back in front')
+
+    def set_on_top(self, on):
+        """Wave above other windows, or not, without leaving full screen."""
+        if sys.platform == 'win32':
+            try:
+                from . import win_windows as ww
+                ww.user32.SetWindowPos(int(self.winId()), ww.HWND_TOPMOST if on else ww.HWND_NOTOPMOST, 0, 0, 0, 0,
+                                       ww.SWP_NOMOVE | ww.SWP_NOSIZE | ww.SWP_NOACTIVATE)
+            except Exception as exc:
+                log.warning('Could not change Wave on top: %s', exc)
+        elif self.windowHandle() is not None:
+            self.windowHandle().setFlag(Qt.WindowType.WindowStaysOnTopHint, on)
+
+    def physical_centre(self):
+        """Wave's window centre in the physical pixels Win32 uses."""
+        from .win_windows import window_rect
+        left, top, right, bottom = window_rect(int(self.winId()))
+        return (left + right) // 2, (top + bottom) // 2
+
+    def page_rect(self):
+        """The part of Wave below its toolbar, in physical pixels (Windows)."""
+        from .win_windows import window_rect
+        left, top, right, bottom = window_rect(int(self.winId()))
+        offset = round(self.pages.mapTo(self, self.pages.rect().topLeft()).y() * self.devicePixelRatioF())
+        return left, top + offset, right, bottom
+
+    @staticmethod
+    def rekordbox_window_alive(hwnd):
+        try:
+            from .win_windows import alive
+            return alive(hwnd)
+        except Exception:
+            return False
+
+    def show_banner(self, text, tone='info', action=None, timeout=None, key=None):
+        """A one-line message under the toolbar; ``action`` is (label, callable)."""
+        self.banner_key = key
+        self.banner_text.setText(text)
+        self.banner.setProperty('tone', tone)
+        self.banner.style().unpolish(self.banner)
+        self.banner.style().polish(self.banner)
+        self.banner_callback = action[1] if action else None
+        self.banner_action.setText(action[0] if action else '')
+        self.banner_action.setVisible(bool(action))
+        self.banner.show()
+        if timeout:
+            self.banner_timer.start(timeout)
+        else:
+            self.banner_timer.stop()
+
+    def hide_banner(self, key=None):
+        if key is None or key == self.banner_key:
+            self.banner.hide()
+            self.banner_key = None
 
     def check_for_update(self, asked=False):
         if self.update_job or not asked and (self.session.demo or not self.session.view.get('check_updates', True)):
@@ -825,6 +1063,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, 'Check for updates', f'Rekordbox Wave {result.version} is ready: press UPDATE at the top.'
                                         if result else f'Rekordbox Wave {__version__} is the latest version.')
         else:
+            self.updating = True
             self.update_button.setText('RESTARTING…')
             self.close()
             QApplication.quit()
@@ -845,6 +1084,9 @@ class MainWindow(QMainWindow):
                 'Playback stops while it restarts. Rekordbox asks first if a deck is playing.') != QMessageBox.StandardButton.Yes:
             return
         self.update_status('Restarting Rekordbox with Wave…' if rekordbox_pid() else 'Starting Rekordbox with Wave…')
+        if self.session.host:
+            self.session.host.connect_now()
+            return
         job = self.session.loader.submit(restart, self.session.view.get('hide_rekordbox', True))
         def finished():
             if job.done():
@@ -860,8 +1102,34 @@ class MainWindow(QMainWindow):
         button.clicked.connect(action)
         return button
 
+    def pill(self, text):
+        """The toolbar's connection light and a few words; the whole story is in its tooltip and Settings."""
+        session = self.session
+        state = getattr(session.reader, 'state', None)
+        state = state if isinstance(state, str) else None
+        doing = session.host.doing if session.host else ''
+        if session.demo:
+            colour, words = '#8d96a0', 'DEMO'
+        elif getattr(self, 'aside', None):
+            colour, words = '#ff9f1a', 'REKORDBOX NEEDS YOU'
+        elif doing:
+            colour, words = '#ff9f1a', doing.upper() + '…'
+        elif state == 'live':
+            colour, words = '#2fd16b', 'REKORDBOX'
+        elif state in ('starting', 'busy'):
+            colour, words = '#ff9f1a', 'REKORDBOX STARTING' if state == 'starting' else 'REKORDBOX BUSY'
+        elif state in ('unsupported', 'failed'):
+            colour, words = '#ff4d4d', 'REKORDBOX · READ ONLY' if getattr(session.reader, 'connected', False) else 'UNSUPPORTED REKORDBOX'
+        elif state in ('none', 'older'):
+            colour, words = '#ff9f1a', 'CONNECTING'
+        elif state == 'absent':
+            colour, words = '#ff4d4d', 'REKORDBOX OFF'
+        else:
+            return text if len(text) < 70 else text[:67] + '…'
+        return f'<span style="color:{colour}; font-size:15px;">●</span>&nbsp; {words}'
+
     def update_status(self, text):
-        self.status.setText(text if len(text) < 70 else text[:67] + '…')
+        self.status.setText(self.pill(text))
         self.status.setToolTip(text)
         if hasattr(self, 'connection_detail'):
             self.connection_detail.setText(text)
@@ -927,6 +1195,13 @@ class MainWindow(QMainWindow):
             QWidget#browser QScrollBar:vertical { width:10px; background:#0a0a0a; }
             QWidget#browser QScrollBar::handle:vertical { background:#3a3a3a; min-height:40px; border-radius:5px; }
             QPushButton#connect { color:#000; background:#ff9f1a; border-color:#ff9f1a; }
+            QLabel#connection { color:#d9dde2; font-size:13px; font-weight:600; letter-spacing:1px; }
+            QFrame#banner { background:#14304f; border-bottom:1px solid #1d4a7a; }
+            QFrame#banner[tone="warn"] { background:#4a3108; border-bottom:1px solid #8a5a0c; }
+            QFrame#banner QLabel#bannerText { color:#f2f4f6; font-size:16px; font-weight:600; background:transparent; }
+            QFrame#banner QPushButton { padding:4px 14px; min-height:24px; font-size:14px; }
+            QFrame#banner QPushButton#bannerClose { background:transparent; border:0; color:#c9ced4; font-size:18px; padding:2px 8px; }
+            QFrame#banner QPushButton#bannerAction { color:#000; background:#ff9f1a; border-color:#ff9f1a; }
         ''' + f'QCheckBox::indicator:checked {{ image:url("{check_icon}"); }}\nQWidget#settings, QWidget#settings * {{ font-size:{size}px; }}\nQWidget#settings QPushButton {{ min-height:30px; }}\nQWidget#settings QLabel#pageTitle {{ font-size:{round(size * 1.45)}px; font-weight:700; }}')
 
     def build_settings(self):
@@ -1089,19 +1364,26 @@ class MainWindow(QMainWindow):
             state_help.setWordWrap(True)
             state_help.setObjectName('help')
             form.addRow('Rekordbox', state_help)
-            for label, key in [('Start Rekordbox with Wave', 'start_rekordbox'), ('Keep Rekordbox hidden behind Wave', 'hide_rekordbox'),
+            for label, key in [('Start Rekordbox with Wave', 'start_rekordbox'),
+                               ('Connect to a Rekordbox started without Wave, by itself', 'auto_connect'),
+                               ('Start Rekordbox again if it closes', 'keep_rekordbox_running'),
+                               ('Quit Rekordbox when Wave quits', 'quit_rekordbox'),
+                               ('Keep Rekordbox hidden behind Wave', 'hide_rekordbox'),
+                               ("Close Rekordbox's notices and offers by itself", 'close_popups'),
+                               ('Keep the screen awake', 'keep_awake'),
                                ('Check GitHub for Wave updates', 'check_updates')]:
                 box = QCheckBox(label)
                 box.setChecked(bool(self.session.view.get(key, True)))
                 box.toggled.connect(lambda value, k=key: self.set_view(k, value))
                 form.addRow('', box)
-            choice('Browser', 'browser', [("Wave's browser", 'wave'),
-                                          ("Rekordbox's browser · opens Rekordbox, closes it after a load", 'rekordbox')])
+            choice('Browser', 'browser', [("Rekordbox's browser · over Wave, put away after a load", 'rekordbox'),
+                                          ("Wave's touch browser", 'wave')])
             rekordbox_row = QWidget()
             rekordbox_layout = QHBoxLayout(rekordbox_row)
             rekordbox_layout.setContentsMargins(0, 0, 0, 0)
             rekordbox_layout.addWidget(self.button('SHOW REKORDBOX', self.show_rekordbox))
             rekordbox_layout.addWidget(self.button('CHECK FOR UPDATES', lambda: self.check_for_update(asked=True)))
+            rekordbox_layout.addWidget(self.button('OPEN LOG', self.open_log))
             if sys.platform == 'darwin':
                 rekordbox_layout.addWidget(self.button('ACCESSIBILITY SETTINGS', lambda:
                     QDesktopServices.openUrl(QUrl('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'))))
@@ -1231,8 +1513,10 @@ class MainWindow(QMainWindow):
             self.pace_frames()
 
     def browse(self):
-        """BROWSE: Wave's own browser, or Rekordbox's when Settings picks it."""
-        if self.session.view.get('browser') == 'rekordbox' and self.pages.currentWidget() is not self.browser_page:
+        """BROWSE: Rekordbox's own browser over Wave, as Settings picks by default, or Wave's touch browser."""
+        if self.rekordbox_browsing:
+            self.leave_rekordbox()
+        elif self.session.view.get('browser') == 'rekordbox' and self.pages.currentWidget() is not self.browser_page:
             self.browse_in_rekordbox()
         else:
             self.toggle_browser()
@@ -1242,38 +1526,95 @@ class MainWindow(QMainWindow):
         return dict(paths) if paths else {i: getattr(deck, 'song_name', '') for i, deck in self.session.decks.items()}
 
     def browse_in_rekordbox(self):
-        """Rekordbox's browser in front until a track is loaded. macOS, through the bridge: only its
-        Split Screen browser window, over Wave. Otherwise Rekordbox's whole window, and Wave steps aside."""
-        from .mac_bridge import show
+        """Rekordbox's browser in front until a track is loaded. macOS, through the bridge: its Split Screen
+        browser window, over Wave. Windows: its browser window - or its main window - laid over Wave below
+        Wave's toolbar. Without Rekordbox to show, Wave's own browser."""
         reader = self.session.reader
         if sys.platform == 'darwin' and getattr(reader, 'bridged', False) and hasattr(reader, 'show_browser'):
             centre = self.frameGeometry().center()
             shown, why = reader.show_browser(True, (centre.x(), centre.y()))
             if shown:
-                self.rekordbox_browsing = (None, self.deck_tracks())
+                self.rekordbox_browsing = dict(kind='mac', tracks=self.deck_tracks())
+                self.sync_nav()
             else:
                 self.update_status(why)
+                self.toggle_browser()
             return
-        try:
-            show(maximize=True)  # while Wave is still in front, so Windows lets it take the focus
-        except Exception:
-            self.update_status('Rekordbox is not running: start it, or switch Settings › Browser to Wave')
-            return
-        self.rekordbox_browsing = (self.windowState(), self.deck_tracks())
-        self.showMinimized()  # Wave stays on top otherwise
+        if sys.platform == 'win32':
+            try:
+                if self.browse_in_rekordbox_window():
+                    return
+            except Exception as exc:
+                log.warning("Could not show Rekordbox's browser: %s", exc)
+        elif sys.platform != 'darwin':
+            from .mac_bridge import show
+            try:
+                show(maximize=True)  # while Wave is still in front, so the system lets it take the focus
+                self.rekordbox_browsing = dict(kind='whole', tracks=self.deck_tracks(), state=self.windowState())
+                self.showMinimized()
+                return
+            except Exception:
+                pass
+        self.show_banner("Rekordbox's browser needs Rekordbox running with Wave: here is Wave's browser meanwhile",
+                         'info', timeout=5000, key='browser')
+        self.toggle_browser()
 
-    def leave_rekordbox(self, state):
-        from .mac_bridge import hide
-        self.rekordbox_browsing = None
-        if state is None:
-            self.session.reader.show_browser(False)
+    def browse_in_rekordbox_window(self):
+        """Windows: True once Rekordbox's browser is up over Wave."""
+        from . import win_windows as ww
+        pid = getattr(self.session.reader, 'pid', None)
+        if not pid:
+            from .mac_bridge import rekordbox_pid
+            pid = rekordbox_pid()
+        if not pid:
+            return False
+        main, panels, _ = ww.classify(ww.windows_of(pid))
+        target = next((w for w in panels if w.resizable), None)
+        if target is None and main and not self.split_asked:
+            # Only the browser, as Split Screen shows it, when Rekordbox's View menu can be reached.
+            self.split_asked = True
+            if ww.split_screen_from_menu(main.hwnd):
+                QTimer.singleShot(900, self.browse_in_rekordbox)
+                return True
+        target = target or main
+        if target is None:
+            return False
+        ww.present(target.hwnd, rect=self.page_rect())
+        self.rekordbox_browsing = dict(kind='window', tracks=self.deck_tracks(), hwnd=target.hwnd,
+                                       main=target is main)
+        self.sync_nav()
+        log.info("Rekordbox's %s is up over Wave for browsing", 'window' if target is main else 'browser')
+        return True
+
+    def leave_rekordbox(self, state=None):
+        """Put Rekordbox's browser away and come back to the waveforms."""
+        browsing, self.rekordbox_browsing = self.rekordbox_browsing, None
+        self.sync_nav()
+        if not browsing:
+            return
+        if browsing['kind'] == 'mac':
+            try:
+                self.session.reader.show_browser(False)
+            except Exception as exc:
+                log.warning("Could not close Rekordbox's browser: %s", exc)
             self.activateWindow()
             return
+        if browsing['kind'] == 'window':
+            try:
+                from .win_windows import put_back
+                put_back(browsing['hwnd'], minimize=not browsing['main'] or self.session.view.get('hide_rekordbox', True))
+            except Exception as exc:
+                log.warning("Could not put Rekordbox's browser away: %s", exc)
+            self.raise_()
+            self.activateWindow()
+            self.pace_frames()
+            return
+        from .mac_bridge import hide
         try:
             hide()
         except Exception:
             pass  # Wave on top covers it anyway
-        self.setWindowState(state & ~Qt.WindowState.WindowMinimized)
+        self.setWindowState(browsing['state'] & ~Qt.WindowState.WindowMinimized)
         self.show()
         self.raise_()
         self.activateWindow()
@@ -1311,7 +1652,7 @@ class MainWindow(QMainWindow):
     def sync_nav(self):
         """One visual language for the toolbar: the active view glows, like the deck buttons."""
         current = self.pages.currentWidget()
-        self.mark(self.browse_button, current is self.browser_page)
+        self.mark(self.browse_button, current is self.browser_page or bool(getattr(self, 'rekordbox_browsing', None)))
         self.mark(self.settings_button, current is self.settings_page)
 
     def set_count(self, count):
@@ -1356,8 +1697,16 @@ class MainWindow(QMainWindow):
 
     def set_view(self, key, value):
         self.session.view[key] = value
+        self.session.configure_host()
+        if key == 'keep_awake':
+            self.awake.set(bool(value))
         self.canvas.update()
         self.persist()
+
+    def open_log(self):
+        folder = config_directory() / 'logs'
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def set_render(self, key, value, invalidate=False):
         setattr(self.session.render, key, value)
@@ -1438,6 +1787,13 @@ class MainWindow(QMainWindow):
             self.update_status(f'Settings could not be saved: {exc}')
 
     def closeEvent(self, event):
+        log.info('Wave is closing')
+        if self.rekordbox_browsing:
+            self.leave_rekordbox()
+        host = self.session.host
+        if host and self.session.view.get('quit_rekordbox', True) and not self.updating:
+            host.quit(playing=any(self.session.deck_playing(i) for i in range(4)))
+        self.awake.set(False)
         self.screen_check.stop()
         self.deck_watch.stop()
         self.browse_watch.stop()
@@ -1459,6 +1815,15 @@ def main():
     app.setApplicationName('Rekordbox Wave')
     app.setOrganizationName('Rekordbox Wave')
     app.setStyle('Fusion')
+    from .gig import SingleInstance, setup_logging
+    logged = setup_logging(config_directory() / 'logs')
+    log.info('Rekordbox Wave %s starting on %s (%s)', __version__, sys.platform, 'demo' if args.demo else 'live')
+    instance = None
+    if not args.smoke_test and not args.demo:
+        instance = SingleInstance()
+        if not instance.primary:
+            log.info('Wave is already running: brought it forward')
+            return 0
     from .updater import clean_up
     try:
         clean_up()
@@ -1467,6 +1832,14 @@ def main():
     session = Session(demo=args.demo, config_path=args.config)
     window = MainWindow(session)
     window.show()
+    if instance:
+        def forward():
+            window.showNormal() if window.isMinimized() else None
+            window.raise_()
+            window.activateWindow()
+        instance.listen(forward)
+    if not logged:
+        log.warning('No log file: the settings folder is not writable')
     if args.smoke_test:
         def capture_and_close():
             try:
