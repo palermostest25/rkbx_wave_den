@@ -84,10 +84,11 @@ class SingleInstance:
             return
 
         def connected():
+            # Any knock is "come forward": what it says may arrive before it could be read.
             while self.server.hasPendingConnections():
                 client = self.server.nextPendingConnection()
-                client.readyRead.connect(lambda c=client: (c.readAll(), on_show()))
                 client.disconnected.connect(client.deleteLater)
+                on_show()
         self.server.newConnection.connect(connected)
 
 

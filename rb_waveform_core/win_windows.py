@@ -59,6 +59,7 @@ if sys.platform == 'win32':
     user32.GetWindowThreadProcessId.argtypes = [HWND, ctypes.POINTER(wintypes.DWORD)]
     user32.GetWindowTextW.argtypes = [HWND, wintypes.LPWSTR, ctypes.c_int]
     user32.IsWindowVisible.argtypes = user32.IsIconic.argtypes = user32.IsWindow.argtypes = [HWND]
+    user32.IsZoomed.argtypes = [HWND]
     user32.GetWindow.argtypes = [HWND, wintypes.UINT]
     user32.GetWindow.restype = HWND
     user32.GetWindowLongW.argtypes = [HWND, ctypes.c_int]
@@ -118,7 +119,8 @@ def alive(hwnd):
 def present(hwnd, rect=None, centre=None, activate=True):
     """Put a Rekordbox window above Wave's always-on-top window: into ``rect`` (left, top, right,
     bottom, physical pixels), or centred at ``centre``, or where it is."""
-    if user32.IsIconic(hwnd):
+    if user32.IsIconic(hwnd) or (rect and user32.IsZoomed(hwnd)):
+        # Minimised or maximised windows ignore a new rectangle: restore it first.
         user32.ShowWindow(hwnd, SW_RESTORE if activate else SW_SHOWNOACTIVATE)
     flags = SWP_SHOWWINDOW | (0 if activate else SWP_NOACTIVATE)
     if rect:

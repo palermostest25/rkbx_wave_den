@@ -155,7 +155,8 @@ class QtAppTests(unittest.TestCase):
 
     def test_rekordbox_stuck_starting_is_brought_forward_once_then_wave_returns(self):
         self.session.reader = Mock(status='Rekordbox is starting')
-        with patch('rb_waveform_core.mac_bridge.show') as show, patch.object(self.window, 'activateWindow') as back:
+        with patch('rb_waveform_core.mac_bridge.show') as show, patch.object(self.window, 'activateWindow') as back, \
+                patch('rb_waveform_core.qt_app.sys.platform', 'darwin'):
             self.window.watch_rekordbox_start(100)
             self.window.watch_rekordbox_start(105)
             show.assert_not_called()  # an ordinary start
