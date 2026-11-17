@@ -275,3 +275,46 @@ class StaleBridgeTests(unittest.TestCase):
         self.assertFalse(mb.stale_bridge(1, self.NEW, [r'C:\x\rkbx_wave\bridge\\' + self.NEW]))
         self.assertFalse(mb.stale_bridge(1, self.NEW, [r'C:\Windows\System32\kernel32.dll']))  # nothing to compare
         self.assertFalse(mb.stale_bridge(1, self.NEW, None) if not mb.WINDOWS else False)    # macOS: not checked
+
+
+class FakeFallback:
+    def __init__(self, deck_count=4):
+        self.connected, self.status = False, 'fallback'
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def get_event(self, timeout=None):
+        return None
+
+
+class ReaderStateTests(unittest.TestCase):
+    """What Wave's Rekordbox host sees of the bridge in the running Rekordbox."""
+    def state_of(self, pid, status=None, note=b''):
+        with tempfile.TemporaryDirectory() as folder:
+            if status is not None:
+                buffer = state(status=status)
+                mb.HEADER.pack_into(buffer, 0, mb.MAGIC, mb.VERSION, 2, 4242, status, 0, -1, 7, 123, note)
+                path = Path(folder) / 'state.bin'
+                path.write_bytes(bytes(buffer))
+                os.chmod(path, 0o600)
+            with patch.object(mb, 'bridge_dir', return_value=Path(folder)), \
+                    patch.object(mb, 'rekordbox_pid', return_value=pid), \
+                    patch.object(mb, 'uptime_ns', return_value=10**12):  # long after the file's heartbeat
+                reader = mb.RekordboxBridgeReader(fallback=FakeFallback)
+                reader.start()
+                time.sleep(.4)
+                reader.stop()
+                return reader.state, reader.pid
+
+    def test_each_bridge_state(self):
+        self.assertEqual(self.state_of(None), ('absent', None))
+        self.assertEqual(self.state_of(4242), ('none', 4242))  # Rekordbox, no bridge file
+        self.assertEqual(self.state_of(999, mb.STARTING)[0], 'none')  # a file from another Rekordbox
+        self.assertEqual(self.state_of(4242, mb.STARTING)[0], 'starting')
+        self.assertEqual(self.state_of(4242, mb.UNSUPPORTED, b'Unsupported Rekordbox build')[0], 'unsupported')
+        self.assertEqual(self.state_of(4242, mb.UNSUPPORTED, mb.OLDER.encode())[0], 'older')
+        self.assertEqual(self.state_of(4242, mb.FAILED, b'failed')[0], 'failed')

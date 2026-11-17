@@ -1,9 +1,9 @@
 # Rekordbox Wave
 
 **A full-screen, touch-friendly deck screen for Rekordbox, in the style of the XDJ-AZ.**
-Big three-band waveforms for two or four decks, an AZ-style info bar, and a touch browser that loads
-tracks straight into Rekordbox. Rekordbox stays the audio engine and keeps your controller; Wave is
-the screen.
+Big three-band waveforms for two or four decks, an AZ-style info bar, and Rekordbox's own browser over
+Wave. Open Wave and nothing else: it starts Rekordbox behind itself, connects to it, keeps it running
+and handles its popups. Rekordbox stays the audio engine and keeps your controller; Wave is the screen.
 
 [**Download the latest release**](https://github.com/palermostest25/rkbx_wave_den/releases/latest) ·
 Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
@@ -17,11 +17,18 @@ Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
 - **Deck info bar:** artwork, title and artist, time remaining or elapsed, BPM, key and key shift,
   tempo and tempo range (±6 / ±10 / ±16 / WIDE), MASTER, SYNC and MT (tap MT to toggle key lock),
   loop state, a bar countdown and a track overview that warns near the end.
-- **Touch browser:** your collection or a USB stick, by playlist, history, artist, album or key, with
-  search, an on-screen keyboard and sorting. Tap a deck to load the selected track.
+- **Rekordbox's browser, over Wave:** BROWSE (or turning the browse knob) puts Rekordbox's own browser
+  over Wave's waveforms; load a track and it goes away by itself. Wave's touch browser (collection or USB
+  stick, search, on-screen keyboard) is still there in Settings › Connection › Browser.
+- **Hands-off Rekordbox:** Wave starts Rekordbox hidden behind it, connects to one you started yourself
+  (on Windows without restarting it), starts it again if it ever closes, and quits it when Wave quits.
+- **Popups handled:** Rekordbox's notices, update prompts and offers are closed for you. A real question
+  is put in front of Wave, and Wave comes back by itself once it is answered.
 - **Works with your controller:** turn the browse knob and Wave's browser follows Rekordbox's cursor;
   LOAD, BACK and everything else work as they always do. Tested with a DDJ-FLX10.
 - **Made for a second screen:** pick a monitor and Wave fills it, every time it is plugged in.
+- **Built for gigs:** the screen never sleeps while Wave runs, a second Wave just brings the first one
+  forward, and everything Wave does is logged (Settings › Connection › OPEN LOG).
 
 ![The touch browser](docs/images/browser.png)
 
@@ -65,21 +72,27 @@ Earlier versions need one manual download. Wave's version is in its window title
 
 ## First run
 
-1. **Quit Rekordbox** if it is open (Wave needs to start it).
-2. Open **Rekordbox Wave**. It starts Rekordbox for you, minimised behind Wave, with Wave's bridge.
-   After a few seconds the status at the top shows **REKORDBOX · direct**.
-3. Load and play tracks as usual. Wave follows every deck.
+1. Open **Rekordbox Wave**. That's all: Wave starts Rekordbox out of sight behind it, with Wave's
+   bridge. After a few seconds the light at the top turns green: **● REKORDBOX**.
+2. Load and play tracks as usual. Wave follows every deck.
 
-If Rekordbox was already running, Wave shows a **CONNECT** button: press it and Wave restarts
-Rekordbox with the bridge (it asks first; Rekordbox asks too if a deck is playing).
-To see Rekordbox itself (for its preferences, for example), use **Settings → Connection → SHOW REKORDBOX**.
+If Rekordbox was already running when Wave opened:
+
+- **Windows:** Wave connects to it as it is, with no restart.
+- **macOS:** Wave restarts it with the bridge if no deck has a track; otherwise a **CONNECT** button
+  appears for when you are ready (Rekordbox still asks first if a deck is playing).
+
+The first time on macOS, allow Wave in **System Settings → Privacy & Security → Accessibility**: Wave
+uses it to read and close Rekordbox's popups. To see Rekordbox itself (for its preferences, for example),
+use **Settings → Connection → SHOW REKORDBOX**. Every one of these behaviours can be switched off there.
 
 ## Using Wave
 
 | To | Do this |
 | --- | --- |
-| Browse and load | **BROWSE**, pick a source and category, tap a track, then tap a deck's **LOAD** button. Once the track is on the deck, Wave goes back to the waveforms. Wave never loads onto a playing deck. |
-| Browse from the controller | Turn the **browse knob**: Wave's browser opens and follows Rekordbox. Press **LOAD** on the controller as usual. |
+| Browse and load | **BROWSE**: Rekordbox's browser comes up over the waveforms. Load a track as you always do (controller LOAD, drag, or double-click) and it goes away again. **BROWSE** again puts it away without loading. |
+| Browse from the controller | Turn the **browse knob**: Rekordbox's browser comes up over Wave. Press **LOAD** on the controller as usual. |
+| Wave's touch browser | Settings › Connection › Browser › **Wave's touch browser**: pick a source, tap a track, tap a deck's **LOAD**. Wave never loads onto a playing deck. |
 | Toggle key lock | Tap **MT** on a deck. |
 | Zoom the waveforms | Pinch, scroll over them, press **+ / −**, or (macOS) **SHIFT + BROWSE** on the controller. |
 | Two or four decks | **2 DECKS / 4 DECKS** at the top. Change the order in Settings → Display. |
@@ -105,18 +118,23 @@ Settings are saved automatically in `%APPDATA%\rkbx_wave` (Windows) or
 | You see | Do this |
 | --- | --- |
 | *Unsupported Rekordbox build* | Install Rekordbox 7.2.19. Wave's bridge supports that build only. |
-| *Rekordbox is waiting: answer its questions* | Rekordbox stopped at one of its own startup questions (library sync, My Tag and so on). Wave brings it forward: answer it, and Wave connects and comes back. |
-| *Quit Rekordbox and press CONNECT* | Rekordbox was started without Wave. Press **CONNECT**, or quit Rekordbox and reopen Wave. |
+| *Rekordbox asks: …* (orange line) | Rekordbox asked something Wave won't answer for you (library sync, sign-in and so on). Wave has put it in front: answer it, and Wave comes back by itself. |
+| *Closed a Rekordbox notice: …* | Wave closed a notice or offer for you. To answer these yourself, turn off Settings › Connection › *Close Rekordbox's notices and offers by itself*. |
+| **CONNECT** button | Rekordbox was started without Wave and has tracks loaded, so Wave won't restart it alone (macOS, or Windows if connecting live failed). Stop the decks and press **CONNECT**. |
 | *Rekordbox was not found* (Windows) | Wave looks in `C:\Program Files\rekordbox`. Start Rekordbox yourself once, then press **CONNECT**: Wave restarts it from wherever it is installed. |
 | Load buttons greyed out | The deck is playing, or Rekordbox isn't connected through the bridge (see above). |
 | A track shows no waveform | Analyse it in Rekordbox first. Wave draws Rekordbox's own analysis. |
+| Something else | Settings › Connection › **OPEN LOG**, and attach `wave.log` to an issue. |
 
 Still stuck? [Open an issue](https://github.com/palermostest25/rkbx_wave_den/issues/new/choose) with your
 OS, Rekordbox version and the status text Wave shows.
 
 ## Current limits
 
-- **Windows:** the bridge is new in 2.3 and still being tested on hardware. Try it at home before a gig.
+- **Windows:** the bridge is new in 2.3 and still being tested on hardware, and connecting live to a running
+  Rekordbox is new in 2.5. Try it at home before a gig.
+- **Windows:** Rekordbox's browser is its Split Screen window when it is open (View › Show Split Screen,
+  once), otherwise Rekordbox's main window, laid over Wave below Wave's toolbar.
 - **Windows:** SHIFT + BROWSE zoom isn't available, because Windows lets only one app use the controller.
 - Wave shows Rekordbox; it doesn't replace it. Playback, effects and the mixer stay in Rekordbox.
 

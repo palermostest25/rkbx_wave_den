@@ -182,3 +182,24 @@ class ExportTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@unittest.skipUnless(__import__('sys').platform == 'win32', 'Windows live connecting')
+class LiveAttachOnWindowsTests(unittest.TestCase):
+    """The whole live connect - open the process, load the bridge, find and run its entry - on a stand-in
+    process: the bridge looks, sees it is not Rekordbox, and says so without doing anything else."""
+    def test_the_bridge_is_loaded_and_answers_in_another_process(self):
+        import subprocess, sys
+        from pathlib import Path
+        from rb_waveform_core.win_attach import attach, module_base
+        library = Path(__file__).resolve().parents[1] / 'rb_waveform_core' / 'data' / 'wave-bridge.dll'
+        if not library.exists():
+            self.skipTest('the Windows bridge is not built here')
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+        try:
+            time.sleep(1)
+            self.assertEqual(attach(child.pid, library), (False, 'That process is not Rekordbox'))
+            self.assertTrue(module_base(child.pid, library))
+            self.assertIsNone(child.poll())  # and the process carries on
+        finally:
+            child.kill()

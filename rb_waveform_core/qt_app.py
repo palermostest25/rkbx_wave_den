@@ -1069,11 +1069,23 @@ class MainWindow(QMainWindow):
             QApplication.quit()
 
     def show_rekordbox(self):
+        """Rekordbox itself, for its preferences and so on: Wave steps out of the way until it is used again."""
         from .mac_bridge import show
         try:
+            self.set_on_top(False)
             show()
+            if sys.platform == 'win32':
+                self.showMinimized()
         except Exception as exc:
+            self.set_on_top(bool(self.session.view.get('always_on_top', True)))
             QMessageBox.information(self, 'Rekordbox', str(exc))
+
+    def changeEvent(self, event):
+        # Back in Wave after Rekordbox was shown: on top again, unless Wave is stepping aside for a question.
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow() and not getattr(self, 'aside', None) \
+                and not getattr(self, 'rekordbox_browsing', None) and hasattr(self, 'session'):
+            self.set_on_top(bool(self.session.view.get('always_on_top', True)))
+        super().changeEvent(event)
 
     def connect_rekordbox(self):
         from .mac_bridge import rekordbox_pid, restart
@@ -1126,7 +1138,7 @@ class MainWindow(QMainWindow):
             colour, words = '#ff4d4d', 'REKORDBOX OFF'
         else:
             return text if len(text) < 70 else text[:67] + '…'
-        return f'<span style="color:{colour}; font-size:15px;">●</span>&nbsp; {words}'
+        return f'<span style="color:{colour}; font-size:20px;">●</span>&nbsp;{words}'
 
     def update_status(self, text):
         self.status.setText(self.pill(text))

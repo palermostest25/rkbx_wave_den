@@ -229,7 +229,9 @@ class WaveformCanvas(QWidget):
             if not s.demo and not (s.reader and s.reader.connected):
                 waiting = s.status or waiting
             text = s.errors.get(idx, waiting)
-            p.drawText(signal.adjusted(24, 0, -24, 0), Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap, text)
+            p.setPen(QColor('#7d858f'))
+            p.drawText(signal.adjusted(24, 0, -24, 0),
+                       Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, text)
             return
         bpm = deck.original_bpm or deck.current_bpm or 120.0
         visible = s.view['zoom_beats'] * 60 / bpm
