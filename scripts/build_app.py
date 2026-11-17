@@ -6,6 +6,8 @@ root = Path(__file__).resolve().parents[1]
 sep = ';' if sys.platform == 'win32' else ':'
 manifest = ['--manifest', str(root / 'rb_waveform_core/data/windows.manifest')] if sys.platform == 'win32' else []
 mac_signing = ['--osx-bundle-identifier', 'io.github.palermostest25.rekordbox-wave'] if sys.platform == 'darwin' else []
+# PyInstaller turns the PNG into the Mac's .icns (with Pillow); Windows takes the .ico.
+icon = ['--icon', str(root / 'rb_waveform_core/data' / ('icon.ico' if sys.platform == 'win32' else 'icon.png'))]
 subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
                 '--onefile' if sys.platform == 'win32' else '--onedir',
                 '--windowed', '--name', 'Rekordbox Wave',
@@ -13,4 +15,5 @@ subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
                 '--exclude-module', 'tkinter', '--exclude-module', 'pygame',
                 '--add-data', f'{root / "rb_waveform_core/data"}{sep}rb_waveform_core/data',
                 '--hidden-import', 'PySide6.QtSvg',
-                *manifest, *mac_signing, str(root / 'rkbx_wave.py')], cwd=root, check=True)
+                '--hidden-import', 'PySide6.QtNetwork',
+                *manifest, *mac_signing, *icon, str(root / 'rkbx_wave.py')], cwd=root, check=True)

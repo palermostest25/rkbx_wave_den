@@ -1376,6 +1376,34 @@ class MainWindow(QMainWindow):
             self.count_segment.set_value(self.session.render.deck_count)
         self.refresh_rekordbox_summary()
 
+    def open_settings_page(self, name):
+        if self.pages.currentWidget() is not self.settings_page:
+            self.toggle_settings()
+        for row in range(self.settings_menu.count()):
+            if self.settings_menu.item(row).text() == name:
+                self.settings_menu.setCurrentRow(row)
+
+    def first_run(self, install=False, setup=False):
+        """Wave without the Rekordbox it supports can't do its job: say so, and offer to fix it."""
+        if sys.platform not in ('win32', 'darwin') or self.session.view.get('source') != 'Native':
+            return
+        from .rekordbox_setup import SUPPORTED_TEXT, summary, supported_install
+        try:
+            if supported_install() is not None:
+                return
+        except Exception as exc:
+            log.warning('Could not check Rekordbox: %s', exc)
+            return
+        log.info('Supported Rekordbox missing: %s', summary())
+        if install and getattr(self, 'install_button', None) is not None:
+            self.open_settings_page('REKORDBOX')
+            self.install_rekordbox()
+            return
+        if setup:
+            self.open_settings_page('REKORDBOX')
+        self.show_banner(f'{summary()}', 'warn', action=(f'INSTALL REKORDBOX {SUPPORTED_TEXT}', lambda: (
+            self.open_settings_page('REKORDBOX'), self.install_rekordbox())), key='rekordbox')
+
     def refresh_rekordbox_summary(self):
         label = getattr(self, 'rekordbox_summary', None)
         if label is None:
@@ -1878,11 +1906,15 @@ def main():
     parser.add_argument('--demo', action='store_true', help='Use labelled synthetic waveform analysis')
     parser.add_argument('--config', type=Path, help='Use a specific settings file')
     parser.add_argument('--smoke-test', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--setup', action='store_true', help='Open Rekordbox setup if the supported Rekordbox is missing')
+    parser.add_argument('--install-rekordbox', action='store_true', help='Install the supported Rekordbox now if it is missing')
     args = parser.parse_args()
     app = QApplication(sys.argv[:1])
     app.setApplicationName('Rekordbox Wave')
     app.setOrganizationName('Rekordbox Wave')
     app.setStyle('Fusion')
+    from PySide6.QtGui import QIcon
+    app.setWindowIcon(QIcon(str(Path(__file__).parent / 'data' / 'icon.png')))
     from .gig import SingleInstance, setup_logging
     logged = setup_logging(config_directory() / 'logs')
     log.info('Rekordbox Wave %s starting on %s (%s)', __version__, sys.platform, 'demo' if args.demo else 'live')
@@ -1908,6 +1940,8 @@ def main():
         instance.listen(forward)
     if not logged:
         log.warning('No log file: the settings folder is not writable')
+    if not args.demo and not args.smoke_test:
+        QTimer.singleShot(1200, lambda: window.first_run(install=args.install_rekordbox, setup=args.setup))
     if args.smoke_test:
         def capture_and_close():
             try:

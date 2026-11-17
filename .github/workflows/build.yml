@@ -95,6 +95,28 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: cp "dist/Rekordbox Wave.exe" dist/Rekordbox-Wave-Windows-x64.exe
+      - name: Build the Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = python -c "import rb_waveform_core; print(rb_waveform_core.__version__)"
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc /Q "/DAppVersion=$version" installer\windows\RekordboxWave.iss
+          if ($LASTEXITCODE) { throw "The installer did not build" }
+      - name: Install, start and uninstall with the Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Start-Process dist\Rekordbox-Wave-Setup-Windows-x64.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=desktopicon' -Wait
+          $folder = "$env:LOCALAPPDATA\Programs\Rekordbox Wave"
+          if (-not (Test-Path "$folder\Rekordbox Wave.exe")) { throw "Wave was not installed" }
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Rekordbox Wave.lnk")) { throw "No Start menu shortcut" }
+          $run = Start-Process "$folder\Rekordbox Wave.exe" -ArgumentList '--demo','--config','validation\installed-profile.json','--smoke-test','validation\installed.png' -Wait -PassThru
+          if ($run.ExitCode) { throw "The installed Wave did not start" }
+          Start-Process "$folder\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait
+          Start-Sleep -Seconds 3
+          if (Test-Path "$folder\Rekordbox Wave.exe") { throw "Wave was not uninstalled" }
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
