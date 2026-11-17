@@ -130,9 +130,7 @@ class QtAppTests(unittest.TestCase):
         self.assertEqual(self.session.view['browser'], 'wave')
         page = self.window.browser_page
         self.window.follow_rekordbox_browser()  # first look: no move
-        self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
-        reader.browser = Browser(**{**state, 'cursor': 21})
-        self.window.follow_rekordbox_browser()  # the first turn opens Wave's browser where it was left
+        self.window.toggle_browser()  # opened (VIEW or BROWSE)
         self.assertIs(self.window.pages.currentWidget(), page)
         rows = [CatalogTrack(str(i), f'Track {i}', 'Artist', 120.0, '', 200.0, f'/music/{i}.mp3') for i in range(30)]
         page.stack.setCurrentWidget(page.table)
@@ -146,7 +144,7 @@ class QtAppTests(unittest.TestCase):
             reader.browser = Browser(**{**state, 'cursor': 23, 'rows': 501})  # Rekordbox refreshed: not a turn
             self.window.follow_rekordbox_browser()
         mirror.assert_not_called()
-        self.assertEqual(page.selected_track().title, 'Track 7')
+        self.assertEqual(page.selected_track().title, 'Track 8')  # row 5, four clicks on, one back
         self.assertNotEqual(page.view, ('rekordbox',))
 
     def test_controller_load_loads_the_track_picked_in_waves_browser(self):
@@ -174,9 +172,12 @@ class QtAppTests(unittest.TestCase):
             self.window.sync_load_targets()
         self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
 
-    def test_the_controllers_knob_push_opens_the_browser_and_back_closes_it(self):
+    def test_view_opens_the_browser_the_knob_browses_it_and_back_closes_it(self):
         page = self.window.browser_page
-        self.session.controllerBrowse.emit('browse_press', 0, -1)  # pushed on the waveforms
+        self.session.controllerBrowse.emit('browse_press', 0, -1)  # the knob on the waveforms: nothing
+        self.session.controllerBrowse.emit('browse', 3, -1)
+        self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
+        self.session.controllerBrowse.emit('view', 0, -1)  # VIEW opens it
         self.assertIs(self.window.pages.currentWidget(), page)
         from rb_waveform_core.catalog import Category
         page.navigate(('list', 'PLAYLIST', None), 'PLAYLIST')
@@ -191,7 +192,7 @@ class QtAppTests(unittest.TestCase):
         self.session.controllerBrowse.emit('back', 0, -1)  # BACK at the top: the waveforms again
         self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
 
-    def test_without_the_controller_a_change_in_rekordboxs_list_opens_the_browser(self):
+    def test_without_the_controller_the_knob_never_opens_the_browser(self):
         from rb_waveform_core.mac_bridge import Browser
         state = dict(rows=10, cursor=0, first=0, focus='', tree_path='', tracks=((1, '/a'),))
         reader = Mock(bridged=True, devices=(), browser=Browser(**state))
@@ -201,8 +202,10 @@ class QtAppTests(unittest.TestCase):
         with patch.object(self.window.browser_page, 'run') as run:
             reader.browser = Browser(**{**state, 'rows': 4, 'tracks': ((9, '/b'),)})  # the knob pressed in its tree
             self.window.follow_rekordbox_browser()
-        self.assertIs(self.window.pages.currentWidget(), self.window.browser_page)
-        run.assert_called_once()  # and Wave looks up which playlist that is, to show the same one
+            reader.browser = Browser(**{**state, 'rows': 4, 'cursor': 2, 'tracks': ((9, '/b'),)})  # and turned
+            self.window.follow_rekordbox_browser()
+        self.assertIs(self.window.pages.currentWidget(), self.window.canvas)  # VIEW or BROWSE opens it
+        run.assert_not_called()
 
     def test_a_stray_controller_load_with_nothing_picked_puts_the_deck_back(self):
         from rb_waveform_core.catalog import CatalogTrack
@@ -312,7 +315,7 @@ class QtAppTests(unittest.TestCase):
         self.assertEqual(page.view, ('tracks', ('PLAYLIST', 'p')))  # and the playlist opened, as the push meant
 
     def test_view_on_the_controller_closes_the_browser(self):
-        self.session.controllerBrowse.emit('browse', 1, -1)
+        self.session.controllerBrowse.emit('view', 0, -1)
         self.assertIs(self.window.pages.currentWidget(), self.window.browser_page)
         self.session.controllerBrowse.emit('view', 0, -1)
         self.assertIs(self.window.pages.currentWidget(), self.window.canvas)

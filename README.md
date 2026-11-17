@@ -106,7 +106,7 @@ use **Settings → Rekordbox → SHOW REKORDBOX**. Every one of these behaviours
 | To | Do this |
 | --- | --- |
 | Browse and load | **BROWSE**, pick a source and category, double-tap a playlist to open it (single tap in Settings › Browser), tap a track, tap a deck's **LOAD**. Drag to scroll. Once the track is on the deck, Wave goes back to the waveforms. Wave never loads onto a playing deck. |
-| Browse from the controller | Turn or push the **browse knob** on the waveforms: Wave's browser opens where you left it. Turn to move the highlight, push to open a playlist, **BACK** to go up a level (at the top it closes the browser), **VIEW** to close it, **LOAD** to load the highlighted track. With nothing highlighted, a stray LOAD is undone: the deck gets its track back. |
+| Browse from the controller | **VIEW** opens the browser where you left it, and closes it again. In the open browser, turn the **browse knob** to move the highlight, push it to open a playlist, **BACK** to go up a level (at the top it closes the browser), **LOAD** to load the highlighted track. VIEW, BACK and the push need Wave to read the controller itself: Settings › Browser › *Controller* says whether it can. With nothing highlighted, a stray LOAD is undone: the deck gets its track back. |
 | Go back several levels | Tap any level in the path at the top of the browser (COLLECTION › PLAYLIST › Gigs › …). |
 | Use Rekordbox's own browser | Settings › Browser › **Rekordbox's browser**: BROWSE (or the knob) then brings Rekordbox's browser over Wave, and it goes away after a load. |
 | Preview another part of a track | Touch or drag the deck's overview, at the bottom of its panel. |
