@@ -1,6 +1,11 @@
 name: Test and build desktop viewers
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Draft a release with this tag (for example v2.5.0) from the commit this run builds'
+        required: false
+        default: ''
   push:
     branches: [main, 'overhaul/**', 'complete/**']
     tags: ['v*']
@@ -96,7 +101,7 @@ jobs:
           path: validation/packaged-native.png
   release:
     # A pushed v* tag drafts a release with every download; publish it from GitHub after checking it.
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(inputs.release_tag, 'v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -109,6 +114,8 @@ jobs:
           path: downloads
       - env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
+        # From a tag push the tag exists; from a manual run with release_tag, GitHub creates it at this commit.
         run: >-
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --generate-notes
-          --title "Rekordbox Wave ${GITHUB_REF_NAME#v}" downloads/*
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --generate-notes
+          --title "Rekordbox Wave ${TAG#v}" downloads/*
