@@ -15,6 +15,26 @@ import sys
 import threading
 import time
 from queue import Queue, Empty
+import logging
+
+log = logging.getLogger(__name__)
+BROWSER_KINDS = ('browse', 'browse_press', 'back', 'load')
+
+
+def shared_midi():
+    """True where the controller's MIDI can be read alongside Rekordbox: always on macOS; on Windows only
+    with Windows MIDI Services (Windows 11), which shares ports between apps. Classic Windows MIDI gives a
+    port to one app, and taking the controller from Rekordbox would stop its decks."""
+    if sys.platform == 'darwin':
+        return True
+    if sys.platform != 'win32':
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Services\MidiSrv'):
+            return True
+    except OSError:
+        return False
 
 
 def mapping_dirs():
@@ -60,6 +80,27 @@ def action(name):
     return None
 
 
+def browse_action(name, status):
+    """The browser controls, by their function's name and the message they send: the browse knob turning
+    (a control change) or pressed (a note), BACK, and each deck's LOAD. Rekordbox's maps name these a
+    little differently between controllers, so names are matched loosely; Wave logs what it found."""
+    key = re.sub(r'[^a-z0-9]', '', name.casefold())
+    note, control = status & 0xF0 == 0x90, status & 0xF0 == 0xB0
+    if 'shift' in key or 'zoom' in key or 'preview' in key:
+        return None
+    if ('brows' in key or 'rotary' in key or 'selector' in key) and control:
+        return 'browse', 'relative'
+    if ('brows' in key or 'rotary' in key or 'selector' in key) and note and \
+            any(word in key for word in ('press', 'push', 'click', 'focus', 'enter', 'select')) or key in ('browse', 'browser') and note:
+        return 'browse_press', None
+    if note and key in ('back', 'browseback', 'browserback', 'browsebackward', 'backbutton'):
+        return 'back', None
+    match = re.fullmatch(r'load(?:track|deck|todeck)?(\d?)', key)
+    if note and match:
+        return 'load', int(match[1]) - 1 if match[1] else None
+    return None
+
+
 def load_map(path):
     """(controller name, {(status, data1): (deck, action)}) from a rekordbox .midi.csv."""
     rows = list(csv.reader(Path(path).read_text(encoding='utf-8-sig', errors='replace').splitlines()))
@@ -81,6 +122,9 @@ def load_map(path):
         if len(row) < 8 or not re.fullmatch(r'[9Bb][0-9A-Fa-f]{3}', row[3]):
             continue
         kind = action(label)
+        status_byte = int(row[3][:2], 16)
+        if kind is None:
+            kind = browse_action(row[0], status_byte)
         if kind is None:
             continue
         if kind[0] == 'pad':
@@ -91,7 +135,8 @@ def load_map(path):
         for deck, offset in offsets:
             table.setdefault((status + offset, data1), (deck, kind))
         if not offsets:  # a control for all decks, such as waveform zoom
-            table.setdefault((status, data1), (None, kind))
+            deck = kind[1] if kind[0] == 'load' else None  # LoadDeck3 names its deck itself
+            table.setdefault((status, data1), (deck, kind))
     return name, table
 
 
@@ -189,8 +234,8 @@ class MidiLoopListener:
             if not table or (status, data1) not in table:
                 continue
             deck, (kind, extra) = table[status, data1]
-            if kind == 'zoom':
-                self._queue.put((None, 'zoom', (extra, value), stamp))
+            if kind in ('zoom', 'browse'):
+                self._queue.put((None, kind, (extra, value), stamp))
             elif value:  # presses only: note-on velocity or button CC value above zero
                 self._queue.put((deck, kind, extra, stamp))
 
@@ -199,7 +244,14 @@ class MidiLoopListener:
         if found:
             self.devices[port] = found[0]
             self._tables[port] = found[1]
+            browser = sorted({kind[0] for _, kind in found[1].values() if kind[0] in BROWSER_KINDS})
+            log.info('Controller %s on %s: browser controls %s', found[0], name, ', '.join(browser) or 'none found')
         return found is not None
+
+    @property
+    def browses(self):
+        """True when a connected controller's map has its browse knob: Wave then follows it directly."""
+        return any(kind[0] == 'browse' for table in self._tables.values() for _, kind in table.values())
 
     def _run_mac(self):
         import ctypes as C

@@ -237,3 +237,57 @@ def browse(source='', search='', sort='Title', descending=False, offset=0, limit
                        for i, t, a, b, k, d, p, img in rows]
     finally:
         library.close()
+
+
+@dataclass(frozen=True)
+class Located:
+    """Where Rekordbox's own list is, as Wave's browser names it."""
+    kind: str               # 'PLAYLIST' or 'HISTORY', or 'TRACK' for the whole collection
+    identifier: str = ''    # the list's id ('' for the collection)
+    name: str = ''
+    trail: tuple = ()       # (id, name) of the folders above it, outermost first
+
+
+def locate(source, ids, rows):
+    """Which list Rekordbox's browser shows, from track ids around its cursor and its row count: a playlist
+    or history holding exactly those rows, or the collection. None when it can't tell."""
+    ids = sorted({int(i) for i in ids if i})[:40]
+    if not ids or rows <= 0:
+        return None
+    library, schema = _open(source)
+    try:
+        connection = library.connection
+        marks = ','.join('?' * len(ids))
+        for kind in ('PLAYLIST', 'HISTORY'):
+            tree, members = schema.tree(kind), schema.members(kind)
+            if not tree or not members:
+                continue
+            table, ident, name, parent_col, _, _ = tree
+            mtable, mlist, mcontent, _ = members
+            candidates = connection.execute(
+                f'SELECT m.{mlist} FROM {mtable} m WHERE CAST(m.{mcontent} AS INTEGER) IN ({marks}) '
+                f'GROUP BY m.{mlist} HAVING count(DISTINCT CAST(m.{mcontent} AS INTEGER))=? '
+                f'AND (SELECT count(*) FROM {mtable} n WHERE n.{mlist}=m.{mlist})=?',
+                (*ids, len(ids), rows)).fetchall()
+            if len(candidates) != 1:
+                continue  # none, or several lists alike: don't guess
+            identifier = candidates[0][0]
+            found = connection.execute(f'SELECT {name},{parent_col} FROM {table} WHERE {ident}=?', (identifier,)).fetchone()
+            if not found:
+                continue
+            trail, parent, seen = [], found[1], set()
+            while parent not in (None, '', 'root', '0', 0) and parent not in seen:
+                seen.add(parent)
+                above = connection.execute(f'SELECT {name},{parent_col} FROM {table} WHERE {ident}=?', (parent,)).fetchone()
+                if not above:
+                    break
+                trail.insert(0, (str(parent), above[0] or 'Untitled'))
+                parent = above[1]
+            return Located(kind, str(identifier), found[0] or 'Untitled', tuple(trail))
+        fields, tables, condition = schema.track_query()
+        total = connection.execute(f'SELECT count(*) FROM {tables} WHERE {condition}').fetchone()[0]
+        if abs(total - rows) <= rows // 50:  # the collection, give or take the streaming tracks Wave leaves out
+            return Located('TRACK')
+        return None
+    finally:
+        library.close()

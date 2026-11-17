@@ -60,6 +60,18 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual([c.name for c in catalog.categories('','KEY')],['8A'])
         with self.assertRaises(ValueError): catalog.browse(sort=catalog.ORDER)  # no order outside a list
 
+    def test_rekordboxs_list_is_found_by_its_tracks(self):
+        found = catalog.locate('', [2, 1], 2)
+        self.assertEqual(found, catalog.Located('PLAYLIST', 'p', 'Friday', (('f', 'Gigs'),)))
+        self.assertEqual(catalog.locate('', [1, 2, 3], 3), catalog.Located('TRACK'))  # the whole collection
+        self.assertIsNone(catalog.locate('', [1], 1))     # no list is just that track
+        self.assertIsNone(catalog.locate('', [], 5))
+
+    def test_search_within_a_playlist_and_across_the_collection(self):
+        self.assertEqual([r.title for r in catalog.browse(search='nine', scope=('PLAYLIST', 'p'))[1]], ['Nine'])
+        self.assertEqual(catalog.browse(search='artist')[0], 3)
+        self.assertEqual(catalog.browse(search='no such track')[0], 0)
+
     def test_encrypted_streaming_entries_are_never_listed(self):
         self.assertNotIn('$A7',' '.join(r.title for r in catalog.browse()[1]))
 

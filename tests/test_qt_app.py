@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 from PySide6.QtCore import QPoint, QRectF, Qt
-from PySide6.QtWidgets import QApplication, QCheckBox
+from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
 from PySide6.QtTest import QTest
 from rb_waveform_core.qt_app import Session, MainWindow
 from rb_waveform_core.qt_display import screen_key, flag_positions
@@ -173,6 +173,79 @@ class QtAppTests(unittest.TestCase):
             self.session.loading = None
             self.window.sync_load_targets()
         self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
+
+    def test_the_controllers_knob_push_opens_the_browser_and_back_closes_it(self):
+        page = self.window.browser_page
+        self.session.controllerBrowse.emit('browse_press', 0, -1)  # pushed on the waveforms
+        self.assertIs(self.window.pages.currentWidget(), page)
+        from rb_waveform_core.catalog import Category
+        page.navigate(('list', 'PLAYLIST', None), 'PLAYLIST')
+        page.list_ready(page.view, [Category('a', 'Warm up', 3), Category('b', 'Peak', 5)])
+        self.session.controllerBrowse.emit('browse', 2, -1)
+        self.assertEqual(page.list.currentIndex().row(), 1)
+        with patch.object(page, 'request'):
+            self.session.controllerBrowse.emit('browse_press', 0, -1)  # into the highlighted playlist
+        self.assertEqual(page.view, ('tracks', ('PLAYLIST', 'b')))
+        self.session.controllerBrowse.emit('back', 0, -1)
+        self.assertEqual(page.view[0], 'list')
+        self.session.controllerBrowse.emit('back', 0, -1)  # BACK at the top: the waveforms again
+        self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
+
+    def test_without_the_controller_a_change_in_rekordboxs_list_opens_the_browser(self):
+        from rb_waveform_core.mac_bridge import Browser
+        state = dict(rows=10, cursor=0, first=0, focus='', tree_path='', tracks=((1, '/a'),))
+        reader = Mock(bridged=True, devices=(), browser=Browser(**state))
+        self.session.reader = reader
+        self.session.midi = None
+        self.window.follow_rekordbox_browser()
+        with patch.object(self.window.browser_page, 'run') as run:
+            reader.browser = Browser(**{**state, 'rows': 4, 'tracks': ((9, '/b'),)})  # the knob pressed in its tree
+            self.window.follow_rekordbox_browser()
+        self.assertIs(self.window.pages.currentWidget(), self.window.browser_page)
+        run.assert_called_once()  # and Wave looks up which playlist that is, to show the same one
+
+    def test_a_stray_controller_load_with_nothing_picked_puts_the_deck_back(self):
+        from rb_waveform_core.catalog import CatalogTrack
+        reader = Mock(bridged=True, devices=(), browser=None, deck_paths={0: '/music/mine.mp3'})
+        self.session.reader = reader
+        self.window.sync_load_targets()
+        self.window.toggle_browser()
+        page = self.window.browser_page
+        page.model.replace([], 0)
+        old = CatalogTrack('42', 'Mine', 'Me', 124.0, '', 300.0, '/music/mine.mp3')
+        with patch.object(page, 'run', lambda f, callback, *a: callback({'/music/mine.mp3': old})), \
+                patch.object(self.session, 'load_track', return_value=True) as load:
+            reader.deck_paths = {0: '/rekordbox/Sampler/Crash.wav'}  # LOAD on the controller
+            self.window.sync_load_targets()
+        load.assert_called_once()
+        self.assertEqual((load.call_args.args[0], load.call_args.args[1].identifier), (0, '42'))
+        self.assertIs(self.window.pages.currentWidget(), page)
+
+    def test_waves_own_loads_are_never_mistaken_for_the_controllers(self):
+        self.session.wave_loads[1] = ('/music/b.mp3', time.monotonic() + 15)
+        self.assertTrue(self.session.loaded_by_wave(1, '/music/b.mp3'))
+        self.assertFalse(self.session.loaded_by_wave(1, '/music/crash.wav'))
+        self.assertFalse(self.session.loaded_by_wave(0, '/music/b.mp3'))
+
+    def test_breadcrumbs_go_back_to_any_level(self):
+        page = self.window.browser_page
+        with patch.object(page, 'run'):
+            page.open_category('PLAYLIST')
+            page.trail = [('PLAYLIST', ('list', 'PLAYLIST', None)), ('Gigs', ('list', 'PLAYLIST', 'f'))]
+            page.navigate(('tracks', ('PLAYLIST', 'p')), 'Friday')
+            crumbs = [w.text() for w in page.crumbs.findChildren(QPushButton)]
+            self.assertEqual(crumbs, ['COLLECTION', 'PLAYLIST', 'Gigs'])
+            page.crumbs.findChildren(QPushButton)[2].click()  # the folder just left
+            self.assertEqual((page.view, page.trail), (('list', 'PLAYLIST', 'f'), [('PLAYLIST', ('list', 'PLAYLIST', None))]))
+            page.crumbs.findChildren(QPushButton)[0].click()  # the source
+            self.assertEqual(page.view, ('sources',))
+
+    def test_a_new_category_starts_without_the_last_search(self):
+        page = self.window.browser_page
+        page.search.setText('nine')
+        self.assertEqual(page.view, ('tracks', None))
+        page.open_category('PLAYLIST')
+        self.assertEqual(page.search.text(), '')
 
     def test_touching_the_overview_previews_that_part_and_glides_back(self):
         self.session.preview_hold(0, 120.0)
