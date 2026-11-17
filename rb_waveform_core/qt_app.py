@@ -679,6 +679,8 @@ class MainWindow(QMainWindow):
     def __init__(self, session):
         super().__init__()
         self.session = session
+        from .touch_keyboard import Guard
+        self.touch = Guard(session.view, self.persist)  # before Settings, which offers its own control
         self.setWindowTitle(f'Rekordbox Wave {__version__}')
         self.setMinimumSize(640, 400)
         self.resize(1280, 800)
@@ -861,9 +863,7 @@ class MainWindow(QMainWindow):
         self._zoom_keys_down = [False, False]
         self.session.changed.connect(self.poll_global_zoom)
         from .gig import KeepAwake
-        from .touch_keyboard import Guard
         self.awake = KeepAwake()
-        self.touch = Guard(session.view, self.persist)
         if not session.demo:
             self.awake.set(bool(session.view.get('keep_awake', True)))
             self.touch.start()  # Windows' touch keyboard off while Wave runs: Wave has its own
