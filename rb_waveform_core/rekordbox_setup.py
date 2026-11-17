@@ -130,22 +130,24 @@ def download(url, folder, progress=None, sha256='', fetch=_fetch):
     target = Path(folder) / url.rsplit('/', 1)[-1].split('?')[0]
     part = target.with_name(target.name + '.part')
     digest, done = hashlib.sha256(), 0
-    with fetch(url, timeout=60) as answer, open(part, 'wb') as out:
-        if not answer.geturl().startswith(OFFICIAL_HOSTS):
-            part.unlink(missing_ok=True)
-            raise OSError('The download was redirected away from rekordbox.com')
-        total = int(answer.headers.get('Content-Length') or 0)
-        while chunk := answer.read(1 << 20):
-            out.write(chunk)
-            digest.update(chunk)
-            done += len(chunk)
-            if progress:
-                progress(done, total)
-    if sha256 and digest.hexdigest() != sha256:
-        part.unlink(missing_ok=True)
-        raise OSError('The Rekordbox download did not match its checksum')
-    part.replace(target)
-    return target
+    try:
+        with fetch(url, timeout=60) as answer:
+            if not answer.geturl().startswith(OFFICIAL_HOSTS):
+                raise OSError('The download was redirected away from rekordbox.com')
+            total = int(answer.headers.get('Content-Length') or 0)
+            with open(part, 'wb') as out:
+                while chunk := answer.read(1 << 20):
+                    out.write(chunk)
+                    digest.update(chunk)
+                    done += len(chunk)
+                    if progress:
+                        progress(done, total)
+        if sha256 and digest.hexdigest() != sha256:
+            raise OSError('The Rekordbox download did not match its checksum')
+        part.replace(target)
+        return target
+    finally:
+        part.unlink(missing_ok=True)  # only ever a leftover here: the file is closed by now
 
 
 def installer_in(archive, folder):
