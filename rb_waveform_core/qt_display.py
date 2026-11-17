@@ -125,9 +125,40 @@ def flag_positions(anchors, width, maximum):
     return result
 
 
+class Dimmer(QWidget):
+    """The booth dimmer: a black veil over the whole window that touches pass straight through."""
+    def __init__(self, parent, level):
+        super().__init__(parent)
+        self.level = level
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setGeometry(parent.rect())
+        parent.installEventFilter(self)
+        self.refresh()
+
+    def refresh(self):
+        # Hidden at full brightness, so it costs nothing while it isn't wanted.
+        self.setVisible(self.level() < .999)
+        self.raise_()
+        self.update()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Resize:
+            self.setGeometry(obj.rect())
+            self.raise_()
+        return False
+
+    def paintEvent(self, event):
+        level = self.level()
+        if level < .999:
+            p = QPainter(self)
+            p.fillRect(self.rect(), QColor(0, 0, 0, round(255 * (1 - max(.2, level)))))
+
+
 class WaveformCanvas(QWidget):
     settingsRequested = Signal()
     masterTempoToggled = Signal(int)  # deck whose MT was tapped
+    timeModeToggled = Signal()        # the big time readout was tapped: remaining <-> elapsed
     zoomBy = Signal(float)  # multiply the visible beats
 
     def __init__(self, session, parent=None):
@@ -136,19 +167,50 @@ class WaveformCanvas(QWidget):
         self.tiles = WaveformTiles()
         self.info = DeckInfoBar(session)
         self.upcoming = []
+        self.previewing = None   # deck whose overview is being touched
         self.setMinimumSize(560, 280)
         self.setMouseTracking(True)
         self.setAccessibleName('Stacked deck waveforms')
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def mousePressEvent(self, event):
+        at = event.position()
         for idx, box in self.info.taps.items():
-            if box.adjusted(-8, -8, 8, 8).contains(event.position()):  # a fingertip, not a cursor
+            if box.adjusted(-8, -8, 8, 8).contains(at):  # a fingertip, not a cursor
                 self.masterTempoToggled.emit(idx)
                 return
+        if self.preview_at(at, held=True):
+            return
+        if any(box.contains(at) for box in self.info.clocks.values()):
+            self.timeModeToggled.emit()
+            return
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event):
+        if event.buttons() and self.previewing is not None:
+            self.preview_at(event.position(), held=True, deck=self.previewing)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self.previewing is not None:
+            self.session.preview_release(self.previewing)
+            self.previewing = None
+        super().mouseReleaseEvent(event)
+
+    def preview_at(self, at, held, deck=None):
+        """A touch on a deck's whole-track overview: show that part of the track in its lane."""
+        for idx, (box, duration) in self.info.overviews_at.items():
+            if (deck is None and box.adjusted(0, -6, 0, 6).contains(at)) or deck == idx:
+                fraction = max(0.0, min(1.0, (at.x() - box.left()) / max(1.0, box.width())))
+                self.session.preview_hold(idx, fraction * duration)
+                self.previewing = idx
+                self.update()
+                return True
+        return False
+
     def mouseDoubleClickEvent(self, event):
+        if self.previewing is not None or any(box.contains(event.position()) for box, _ in self.info.overviews_at.values()):
+            return  # a quick second tap on the overview is another look, not settings
         self.settingsRequested.emit()
 
     def wheelEvent(self, event):
@@ -222,14 +284,18 @@ class WaveformCanvas(QWidget):
         signal = QRectF(rail, bounds.top() + flag_h + 3,
                         max(1, bounds.width() - rail - 8),
                         max(1, bounds.height() - 2 * flag_h - 14))
-        position = s.position(idx)
+        live = s.position(idx)
+        preview = s.preview_position(idx) if live is not None else None
+        position = preview if preview is not None else live
         if deck.analysis is None or position is None:
             p.setPen(QColor('#aab0b8'))
             waiting = 'Waiting for a track in Rekordbox'
             if not s.demo and not (s.reader and s.reader.connected):
                 waiting = s.status or waiting
             text = s.errors.get(idx, waiting)
-            p.drawText(signal.adjusted(24, 0, -24, 0), Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap, text)
+            p.setPen(QColor('#7d858f'))
+            p.drawText(signal.adjusted(24, 0, -24, 0),
+                       Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, text)
             return
         bpm = deck.original_bpm or deck.current_bpm or 120.0
         visible = s.view['zoom_beats'] * 60 / bpm
@@ -351,12 +417,22 @@ class WaveformCanvas(QWidget):
                     p.drawLine(QPointF(left, y), QPointF(right, y))
                     p.drawLine(QPointF(left, y - 4), QPointF(left, y + 5))
                     p.drawLine(QPointF(right, y - 4), QPointF(right, y + 5))
-        # A white playhead is distinct from red first-beat ticks.
+        # A white playhead is distinct from red first-beat ticks; previewing, a blue one marks the look.
         x = x_at(position)
         p.setPen(QPen(QColor('#060606'), 5))
         p.drawLine(QPointF(x, bounds.top() + 2), QPointF(x, bounds.bottom() - 4))
-        p.setPen(QPen(QColor('#f8f8f8'), 2.2))
+        p.setPen(QPen(QColor(DECK_BLUE if preview is not None else '#f8f8f8'), 2.2))
         p.drawLine(QPointF(x, bounds.top() + 2), QPointF(x, bounds.bottom() - 4))
+        if preview is not None:
+            if start <= live <= end:  # the deck's real position, when it is in view
+                p.setPen(QPen(QColor('#f8f8f8'), 2.2))
+                p.drawLine(QPointF(x_at(live), bounds.top() + 2), QPointF(x_at(live), bounds.bottom() - 4))
+            tag = QRectF(signal.left() + 8, bounds.top() + 6, font_size * 9.5, flag_h + 2)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(DECK_BLUE))
+            rounded(p, tag, 4)
+            p.setPen(QColor('white'))
+            p.drawText(tag, Qt.AlignmentFlag.AlignCenter, f'PREVIEW  {clock(preview, False)}')
 
 
 def rounded(p, rect, radius):
@@ -391,9 +467,13 @@ class DeckInfoBar:
         self.overviews = OrderedDict()  # id(analysis) -> (analysis, colours, image)
         self.artwork = OrderedDict()    # path -> image (None when unreadable)
         self.taps = {}                  # deck -> its MT chip, where a tap toggles key lock
+        self.clocks = {}                # deck -> its big time readout, where a tap flips remaining/elapsed
+        self.overviews_at = {}          # deck -> (overview rectangle, track length), for touch preview
 
     def draw(self, p, bounds, order):
         self.taps = {}
+        self.clocks = {}
+        self.overviews_at = {}
         p.fillRect(bounds, QColor('#0b0c0e'))
         p.setPen(QColor('#2a2e33'))
         p.drawLine(bounds.topLeft(), bounds.topRight())
@@ -557,6 +637,7 @@ class DeckInfoBar:
             time_x = art.right() + gap * 1.5
             elapsed_mode = s.view.get('time_mode') == 'elapsed'
             self.text(p, QRectF(time_x, row, inner.width(), label), 'ELAPSED' if elapsed_mode else 'REMAIN', label * .8, '#7d858e')
+            self.clocks[idx] = QRectF(time_x, row, inner.right() - bpm_w - time_x, big)
             self.text(p, QRectF(time_x, row + label, inner.right() - bpm_w - time_x, big - label),
                       clock(position) if elapsed_mode else '-' + clock(remaining),
                       min((big - label) * .9, (inner.right() - bpm_w - time_x) / 4.3),
@@ -600,6 +681,7 @@ class DeckInfoBar:
         # Whole-track overview: played part dimmed, cues above and below, the playhead white.
         p.fillRect(overview, QColor('#050506'))
         if loaded and duration > 0:
+            self.overviews_at[idx] = (overview, duration)
             p.drawImage(overview, self.overview(deck.analysis))
             def x_at(t):
                 return overview.left() + max(0.0, min(1.0, t / duration)) * overview.width()
@@ -635,6 +717,11 @@ class DeckInfoBar:
             p.drawLine(QPointF(x, overview.top()), QPointF(x, overview.bottom()))
             p.setPen(QPen(QColor('#ffffff'), 2))
             p.drawLine(QPointF(x, overview.top()), QPointF(x, overview.bottom()))
+            looking = s.preview_position(idx)
+            if looking is not None:  # where the lane above is showing, while previewing
+                x = x_at(looking)
+                p.setPen(QPen(QColor(DECK_BLUE), 2, Qt.PenStyle.DashLine))
+                p.drawLine(QPointF(x, overview.top()), QPointF(x, overview.bottom()))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.setPen(QPen(QColor('#ff3b30' if blink else '#2a2e33'), 2 if blink else 1))
         p.drawRect(overview)

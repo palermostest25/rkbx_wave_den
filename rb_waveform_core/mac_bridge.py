@@ -63,11 +63,12 @@ def uptime_ns():
 
 
 def windows_executable(root=None):
-    """The newest installed rekordbox: Program Files\\rekordbox\\rekordbox 7.x.y\\rekordbox.exe."""
-    root = Path(root or Path(os.environ.get('ProgramFiles', r'C:\Program Files'))/'rekordbox')
-    found = sorted(root.glob('rekordbox */rekordbox.exe'),
-                   key=lambda path: tuple(int(n) for n in re.findall(r'\d+', path.parent.name)))
-    return found[-1] if found else None
+    """The Rekordbox Wave supports when it is installed - versions sit side by side in Program Files\\rekordbox\\
+    rekordbox 7.x.y - otherwise the newest installed."""
+    from .rekordbox_setup import installed
+    found = installed(root, 'win32')
+    supported = [i for i in found if i.supported]
+    return (supported or found)[-1].executable if found else None
 
 
 def fnv(data):
@@ -325,6 +326,38 @@ def launch(hidden=False, executable=None):
                     '--env', f'OPENSSL_CONF={config}', '--env', 'RKBX_WAVE_BRIDGE=1'], check=True, timeout=15)
 
 
+def ask_to_quit(wait=False):
+    """Quit Rekordbox the way its own close button does: it asks first if a deck is playing."""
+    command = (['taskkill', '/IM', 'rekordbox.exe'] if WINDOWS else
+               ['/usr/bin/osascript', '-e', 'tell application id "com.pioneerdj.rekordboxdj" to quit'])
+    flags = subprocess.CREATE_NO_WINDOW if WINDOWS else 0
+    if wait:
+        subprocess.run(command, timeout=60, capture_output=True, creationflags=flags)
+    else:
+        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+
+
+def process_age(pid):
+    """Seconds since process ``pid`` started, or None."""
+    try:
+        import psutil
+        return max(0.0, time.time() - psutil.Process(pid).create_time())
+    except Exception:
+        return None
+
+
+def bridge_modules(pid):
+    """Windows: the Wave bridge libraries loaded in process ``pid`` (empty when it can't tell)."""
+    if not WINDOWS or not pid:
+        return []
+    try:
+        import psutil
+        return [Path(m.path.replace('\\', '/')).name for m in psutil.Process(pid).memory_maps(grouped=True)
+                if 'wave-bridge-' in m.path]
+    except Exception:
+        return []
+
+
 def restart(hidden=False):
     """Quit Rekordbox the way its own menu does - it asks first if a deck is playing - then start it
     with the bridge."""
@@ -333,10 +366,7 @@ def restart(hidden=False):
         if WINDOWS:  # start the same install again, wherever it lives
             import psutil
             executable = Path(psutil.Process(pid).exe())
-        # As its close button does (Windows: taskkill without /F asks the window to close).
-        subprocess.run(['taskkill', '/IM', 'rekordbox.exe'] if WINDOWS else
-                       ['/usr/bin/osascript', '-e', 'tell application id "com.pioneerdj.rekordboxdj" to quit'],
-                       timeout=60, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if WINDOWS else 0)
+        ask_to_quit(wait=True)
         deadline = time.monotonic() + 30
         while rekordbox_pid() and time.monotonic() < deadline:
             time.sleep(.5)
@@ -413,6 +443,9 @@ class RekordboxBridgeReader:
         self.bridged = False
         self.stale = False     # Rekordbox runs a bridge from an earlier Wave build
         self.status = 'Waiting for Rekordbox'
+        self.state = 'absent'  # rekordbox_host's view: absent, none, starting, live, busy, older, unsupported, failed
+        self.pid = None        # the running Rekordbox
+        self.checked = False   # looked for Rekordbox at least once
         self.bridge = None
         self.deck_paths = {}  # deck -> audio file Rekordbox's engine has loaded, while bridged
         self.deck_status = {}  # deck -> BridgeDeck: master, sync, key lock... while bridged
@@ -498,7 +531,8 @@ class RekordboxBridgeReader:
                 try:
                     if started >= next_pid:
                         next_pid = started + 1
-                        pid = rekordbox_pid()
+                        pid = self.pid = rekordbox_pid()
+                        self.checked = True
                     state_file = bridge_dir()/'state.bin'
                     if self.bridge and not self.bridged and state_file.exists() and \
                             state_file.stat().st_ino != os.fstat(self.bridge.file.fileno()).st_ino:
@@ -521,6 +555,7 @@ class RekordboxBridgeReader:
                         # Rekordbox's main thread is busy (a heavy load, a dialog): its bridge is still
                         # there and resumes with it, so hold every deck as it is rather than start over.
                         self.status = BUSY
+                        self.state = 'busy'
                         self._stop_event.wait(.05)
                         continue
                     if not live(snapshot, pid):
@@ -533,6 +568,13 @@ class RekordboxBridgeReader:
                         self.deck_paths = {}
                         self.deck_status = {}
                         self.browser = None
+                        if not pid:
+                            self.state = 'absent'
+                        elif snapshot and snapshot.pid == pid:
+                            self.state = ('older' if snapshot.note == OLDER else 'unsupported') if snapshot.status == UNSUPPORTED \
+                                else 'failed' if snapshot.status == FAILED else 'busy' if snapshot.status == LIVE else 'starting'
+                        else:
+                            self.state = 'none'
                         if pid and snapshot and snapshot.pid == pid and snapshot.status in (UNSUPPORTED, FAILED):
                             reason = snapshot.note
                         elif pid and snapshot and snapshot.pid == pid:
@@ -557,6 +599,7 @@ class RekordboxBridgeReader:
                         self.bridged = True
                         self.stale = stale_bridge(pid)
                     self.connected = True
+                    self.state = 'live'
                     self.status = STALE if self.stale else DIRECT
                     if snapshot.ticks == last_tick:
                         self._stop_event.wait(max(0, self.interval - (time.monotonic() - started)))
@@ -602,6 +645,7 @@ class RekordboxBridgeReader:
                         self._queue.put(state.snapshot('bridge', when=when))
                 except Exception as exc:
                     self.connected = self.bridged = False
+                    self.state = 'none' if self.pid else 'absent'
                     self.status = f'Rekordbox bridge: {exc}'
                     if self.bridge:
                         self.bridge.close()

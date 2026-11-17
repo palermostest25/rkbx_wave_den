@@ -5,6 +5,9 @@
 // another build, changed code - and it does nothing but report why. A fault inside the bridge
 // stops the bridge, never Rekordbox.
 //
+// Two ways in: Rekordbox loads it as an OpenSSL provider when Wave starts Rekordbox, or Wave loads it
+// into a Rekordbox that is already running and calls wave_bridge_attach. Either way it runs once.
+//
 // Addresses come from rekordbox.exe 7.2.19.0342 x64 (no symbols): each function was matched to its
 // macOS counterpart by its code, and every one is hash-checked before use. MSVC x64 differs from the
 // macOS build in three ways that matter here: a returned class comes back through a hidden pointer
@@ -567,16 +570,19 @@ void CALLBACK on_timer(HWND, UINT, UINT_PTR, DWORD) {
     if (!failed) guarded_tick();
 }
 
-HHOOK hook = nullptr;
+HHOOK volatile hook = nullptr;
+volatile LONG timer_started = 0;  // set on the UI thread once the tick timer runs there
 
 // Runs on Rekordbox's UI thread the first time it takes a message: start the tick timer there,
 // where Rekordbox's own UI reads the same engine, then let go of the hook.
 LRESULT CALLBACK on_message(int code, WPARAM wparam, LPARAM lparam) {
-    HHOOK self = hook;
+    HHOOK self = reinterpret_cast<HHOOK>(InterlockedExchangePointer(reinterpret_cast<PVOID volatile *>(&hook), nullptr));
     if (self && code >= 0) {
-        hook = nullptr;
         SetTimer(nullptr, 0, 10, on_timer);
+        InterlockedExchange(&timer_started, 1);
         UnhookWindowsHookEx(self);
+    } else if (self) {
+        InterlockedExchangePointer(reinterpret_cast<PVOID volatile *>(&hook), self);  // not a message yet: keep waiting
     }
     return CallNextHookEx(nullptr, code, wparam, lparam);
 }
@@ -603,7 +609,9 @@ DWORD ui_thread() {
     return best;
 }
 
-bool start() {
+// wait_ms: how long to wait for the UI thread to take the hook (0: don't wait). Rekordbox may load
+// OpenSSL on a thread its UI thread waits for, so that path never waits; Wave attaching does.
+bool start(DWORD wait_ms = 0) {
     HMODULE self;  // never unloaded while the timer can still run its code
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                        reinterpret_cast<LPCWSTR>(&start), &self);
@@ -611,10 +619,23 @@ bool start() {
     if (!thread) return false;
     if (thread == GetCurrentThreadId()) {
         SetTimer(nullptr, 0, 10, on_timer);
+        InterlockedExchange(&timer_started, 1);
         return true;
     }
-    hook = SetWindowsHookExW(WH_GETMESSAGE, on_message, nullptr, thread);
-    return hook != nullptr;
+    HHOOK installed = SetWindowsHookExW(WH_GETMESSAGE, on_message, nullptr, thread);
+    if (!installed) return false;
+    InterlockedExchangePointer(reinterpret_cast<PVOID volatile *>(&hook), installed);
+    PostThreadMessageW(thread, WM_NULL, 0, 0);  // a message to take, even while Rekordbox sits idle
+    if (!wait_ms) return true;
+    for (DWORD waited = 0; waited < wait_ms && !timer_started; waited += 20) {
+        Sleep(20);
+        if (waited % 500 == 0) PostThreadMessageW(thread, WM_NULL, 0, 0);
+    }
+    if (timer_started) return true;
+    // The UI thread never took a message: take the hook back so it can't start later, unseen.
+    if (HHOOK left = reinterpret_cast<HHOOK>(InterlockedExchangePointer(reinterpret_cast<PVOID volatile *>(&hook), nullptr)))
+        UnhookWindowsHookEx(left);
+    return timer_started != 0;
 }
 
 bool is_rekordbox() {
@@ -647,24 +668,44 @@ const OsslDispatch provider_dispatch[] = {
     {kGetParams, reinterpret_cast<void (*)(void)>(get_params)},
     {0, nullptr}};
 
+volatile LONG once = 0;  // one bridge per Rekordbox, however it arrived
+
+enum : DWORD { kAttached = 0, kAlreadyRunning = 1, kNotRekordbox = 2, kNoSharedFile = 3, kUnsupported = 4,
+               kNoUiThread = 5 };
+
+DWORD begin(DWORD wait_ms) {
+    if (!is_rekordbox()) return kNotRekordbox;
+    if (InterlockedExchange(&once, 1)) return kAlreadyRunning;
+    QueryPerformanceFrequency(&frequency);
+    if (!open_shared()) return kNoSharedFile;
+    if (const char *why = verify_build()) {
+        publish_status(kStatusUnsupported, why);
+        return kUnsupported;
+    }
+    if (!start(wait_ms)) {
+        publish_status(kStatusFailed, "Could not reach Rekordbox's UI thread");
+        return kNoUiThread;
+    }
+    return kAttached;
+}
+
 }  // namespace
 
 extern "C" __declspec(dllexport)
 int OSSL_provider_init(const void *, const void *, const OsslDispatch **out, void **ctx) {
     *out = provider_dispatch;
     *ctx = nullptr;
-    static LONG once = 0;
     char enabled[4] = {0};
     // Child processes inherit the environment; only Rekordbox's own process reads state.
-    if (GetEnvironmentVariableA("RKBX_WAVE_BRIDGE", enabled, sizeof enabled) != 1 || enabled[0] != '1' ||
-        !is_rekordbox() || InterlockedExchange(&once, 1))
-        return 1;
-    QueryPerformanceFrequency(&frequency);
-    if (!open_shared()) return 1;
-    if (const char *why = verify_build()) {
-        publish_status(kStatusUnsupported, why);
-        return 1;
-    }
-    if (!start()) publish_status(kStatusFailed, "Could not reach Rekordbox's UI thread");
+    if (GetEnvironmentVariableA("RKBX_WAVE_BRIDGE", enabled, sizeof enabled) == 1 && enabled[0] == '1')
+        begin(0);
     return 1;
+}
+
+// Wave attaching to a Rekordbox that was started some other way: Wave loads this library into
+// Rekordbox, then runs this on a thread of its own. The same checks as above; the answer is one of
+// the codes in `begin`, which Wave reads as the thread's exit code.
+extern "C" __declspec(dllexport)
+DWORD WINAPI wave_bridge_attach(LPVOID) {
+    return begin(15000);
 }

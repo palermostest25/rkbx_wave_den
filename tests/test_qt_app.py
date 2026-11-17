@@ -66,23 +66,43 @@ class QtAppTests(unittest.TestCase):
         self.window.sync_load_targets()
         self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
 
-    def test_rekordbox_browser_setting_opens_rekordbox_and_returns_after_a_load(self):
-        reader = Mock(bridged=True, deck_paths={0: '/a.mp3', 1: ''})
+    def test_windows_rekordbox_browser_is_laid_over_wave_and_put_away_after_a_load(self):
+        from rb_waveform_core.win_windows import Win
+        main = Win(11, 'rekordbox', False, True, (0, 0, 1600, 900), False, True, False)
+        reader = Mock(bridged=True, pid=42, deck_paths={0: '/a.mp3', 1: ''})
         self.session.reader = reader
         self.session.view['browser'] = 'rekordbox'
-        with patch('rb_waveform_core.mac_bridge.show') as show, patch('rb_waveform_core.mac_bridge.hide') as hide, \
+        with patch('rb_waveform_core.win_windows.windows_of', return_value=[main]), \
+                patch('rb_waveform_core.win_windows.split_screen_from_menu', return_value=False), \
+                patch('rb_waveform_core.win_windows.window_rect', return_value=(0, 0, 1920, 1080)), \
+                patch('rb_waveform_core.win_windows.alive', return_value=True), \
+                patch('rb_waveform_core.win_windows.present') as present, \
+                patch('rb_waveform_core.win_windows.put_back') as put_back, \
+                patch.object(self.window, 'pace_frames'), \
                 patch('rb_waveform_core.qt_app.sys.platform', 'win32'):
             self.window.browse()
-            show.assert_called_once_with(maximize=True)
-            self.assertTrue(self.window.isMinimized())
-            self.assertIsNot(self.window.pages.currentWidget(), self.window.browser_page)
+            hwnd, = present.call_args.args
+            left, top, right, bottom = present.call_args.kwargs['rect']
+            self.assertEqual((hwnd, left, right, bottom), (11, 0, 1920, 1080))
+            self.assertGreater(top, 0)  # below Wave's toolbar, which stays usable
+            self.assertFalse(self.window.isMinimized())
+            self.assertTrue(self.window.browse_button.property('selected'))
             self.window.sync_load_targets()  # nothing loaded yet: Rekordbox stays up
-            hide.assert_not_called()
+            put_back.assert_not_called()
             reader.deck_paths = {0: '/a.mp3', 1: '/b.mp3'}  # picked in Rekordbox, loaded on deck 2
             self.window.sync_load_targets()
-            hide.assert_called_once()
-            self.assertFalse(self.window.isMinimized())
+            put_back.assert_called_once_with(11, minimize=True)
             self.assertIsNone(self.window.rekordbox_browsing)
+            self.window.browse()  # BROWSE again opens it again; and again puts it away
+            self.window.browse()
+            self.assertEqual(put_back.call_count, 2)
+
+    def test_rekordbox_browser_falls_back_to_waves_without_rekordbox(self):
+        self.session.reader = Mock(bridged=False, pid=None, deck_paths={})
+        with patch('rb_waveform_core.mac_bridge.rekordbox_pid', return_value=None), \
+                patch('rb_waveform_core.qt_app.sys.platform', 'win32'):
+            self.window.browse()
+        self.assertIs(self.window.pages.currentWidget(), self.window.browser_page)
 
     def test_mac_rekordbox_browser_opens_its_split_screen_window_over_wave(self):
         reader = Mock(bridged=True, deck_paths={0: '/a.mp3', 1: ''})
@@ -101,23 +121,74 @@ class QtAppTests(unittest.TestCase):
             reader.show_browser.assert_called_with(False)
             self.assertIsNone(self.window.rekordbox_browsing)
 
-    def test_only_the_knob_moving_pulls_the_browser_to_rekordboxs_list(self):
+    def test_the_knob_moves_waves_own_browser_and_never_jumps_to_rekordboxs_list(self):
         from rb_waveform_core.mac_bridge import Browser
-        state = dict(rows=10, cursor=2, first=0, focus='list', tree_path='Collection', tracks=((1, '/a'),))
+        from rb_waveform_core.catalog import CatalogTrack
+        state = dict(rows=500, cursor=20, first=0, focus='list', tree_path='', tracks=((1, '/a'),))
         reader = Mock(bridged=True, devices=(), browser=Browser(**state))
         self.session.reader = reader
+        self.assertEqual(self.session.view['browser'], 'wave')
+        page = self.window.browser_page
+        self.window.follow_rekordbox_browser()  # first look: no move
+        self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
+        reader.browser = Browser(**{**state, 'cursor': 21})
+        self.window.follow_rekordbox_browser()  # the first turn opens Wave's browser where it was left
+        self.assertIs(self.window.pages.currentWidget(), page)
+        rows = [CatalogTrack(str(i), f'Track {i}', 'Artist', 120.0, '', 200.0, f'/music/{i}.mp3') for i in range(30)]
+        page.stack.setCurrentWidget(page.table)
+        page.model.replace(rows, len(rows))
+        page.table.selectRow(5)
+        with patch.object(page, 'mirror') as mirror:
+            reader.browser = Browser(**{**state, 'cursor': 24})  # three clicks clockwise
+            self.window.follow_rekordbox_browser()
+            reader.browser = Browser(**{**state, 'cursor': 23})  # one back
+            self.window.follow_rekordbox_browser()
+            reader.browser = Browser(**{**state, 'cursor': 23, 'rows': 501})  # Rekordbox refreshed: not a turn
+            self.window.follow_rekordbox_browser()
+        mirror.assert_not_called()
+        self.assertEqual(page.selected_track().title, 'Track 7')
+        self.assertNotEqual(page.view, ('rekordbox',))
+
+    def test_controller_load_loads_the_track_picked_in_waves_browser(self):
+        from rb_waveform_core.mac_bridge import Browser
+        from rb_waveform_core.catalog import CatalogTrack
+        reader = Mock(bridged=True, devices=(), deck_paths={0: '/music/old.mp3', 1: ''},
+                      browser=Browser(rows=9, cursor=0, first=0, focus='list', tree_path='', tracks=((7, '/music/rb.mp3'),)))
+        self.session.reader = reader
         self.window.follow_rekordbox_browser()
+        self.window.sync_load_targets()
         self.window.toggle_browser()
-        self.window.browser_page.view = ('device', '/Volumes/STICK')  # the user picked their stick
-        with patch.object(self.window.browser_page, 'mirror') as mirror:
-            reader.browser = Browser(**{**state, 'rows': 12, 'tracks': ((1, '/a'), (2, '/b'))})  # Rekordbox refreshed
-            self.window.follow_rekordbox_browser()
-            reader.browser = Browser(**{**state, 'rows': 12, 'focus': ''})  # Windows: Wave was touched, Rekordbox lost focus
-            self.window.follow_rekordbox_browser()
-            mirror.assert_not_called()
-            reader.browser = Browser(**{**state, 'rows': 12, 'cursor': 3})  # the knob turned
-            self.window.follow_rekordbox_browser()
-            mirror.assert_called_once()
+        page = self.window.browser_page
+        page.stack.setCurrentWidget(page.table)
+        page.model.replace([CatalogTrack('12', 'Mine', 'Me', 124.0, '', 300.0, '/music/mine.mp3')], 1)
+        page.table.selectRow(0)
+        with patch.object(self.session, 'load_track', return_value=True) as load:
+            reader.deck_paths = {0: '/music/old.mp3', 1: '/music/rb.mp3'}  # LOAD on the controller, deck 2
+            self.session.loading = ('busy',)
+            self.window.sync_load_targets()
+            load.assert_called_once()
+            self.assertEqual((load.call_args.args[0], load.call_args.args[1].title), (1, 'Mine'))
+            self.assertIs(self.window.pages.currentWidget(), page)  # waits for Wave's pick to land
+            reader.deck_paths = {0: '/music/old.mp3', 1: '/music/mine.mp3'}
+            self.session.loading = None
+            self.window.sync_load_targets()
+        self.assertIs(self.window.pages.currentWidget(), self.window.canvas)
+
+    def test_touching_the_overview_previews_that_part_and_glides_back(self):
+        self.session.preview_hold(0, 120.0)
+        self.assertEqual(self.session.preview_position(0), 120.0)
+        self.session.preview_release(0)
+        now = time.monotonic()
+        self.assertEqual(self.session.preview_position(0, now + 1), 120.0)  # held a moment after lifting
+        between = self.session.preview_position(0, now + 3.2)
+        self.assertIsNotNone(between)
+        self.assertIsNone(self.session.preview_position(0, now + 4))  # back on the playhead
+        self.assertIsNone(self.session.preview_position(1))
+
+    def test_tapping_the_time_flips_remaining_and_elapsed(self):
+        mode = self.session.view['time_mode']
+        self.window.canvas.timeModeToggled.emit()
+        self.assertNotEqual(self.session.view['time_mode'], mode)
 
     def test_the_version_is_in_the_title(self):
         from rb_waveform_core import __version__
@@ -134,22 +205,73 @@ class QtAppTests(unittest.TestCase):
 
     def test_rekordbox_stuck_starting_is_brought_forward_once_then_wave_returns(self):
         self.session.reader = Mock(status='Rekordbox is starting')
-        with patch('rb_waveform_core.mac_bridge.show') as show, patch.object(self.window, 'activateWindow') as back:
+        with patch('rb_waveform_core.mac_bridge.show') as show, patch.object(self.window, 'activateWindow') as back, \
+                patch('rb_waveform_core.qt_app.sys.platform', 'darwin'):
             self.window.watch_rekordbox_start(100)
             self.window.watch_rekordbox_start(105)
             show.assert_not_called()  # an ordinary start
-            self.window.watch_rekordbox_start(109)
-            self.window.watch_rekordbox_start(120)
+            self.window.watch_rekordbox_start(115)
+            show.assert_not_called()  # a cold start takes a while
+            self.window.watch_rekordbox_start(121)
             show.assert_called_once()  # waiting on its own questions
             self.assertIn('answer its questions', self.window.status.toolTip())
             self.session.reader.status = 'REKORDBOX · direct'
-            self.window.watch_rekordbox_start(121)
+            self.session.reader.state = 'live'
+            self.window.watch_rekordbox_start(122)
             back.assert_called_once()
+            self.session.reader.state = 'busy'
             self.session.reader.status = 'REKORDBOX · busy'  # stuck later: a question on load, a drive that hangs
             self.window.watch_rekordbox_start(200)
             self.window.watch_rekordbox_start(209)
             self.assertEqual(show.call_count, 2)
             self.assertIn('check your music drive', self.window.status.toolTip())
+
+    def test_a_rekordbox_popup_wave_could_not_close_is_put_in_front_until_answered(self):
+        from rb_waveform_core.popups import Popup
+        watcher = Mock(popups=[], closed=[], error='')
+        self.session.popups = watcher
+        self.session.reader = Mock(state='live', status='REKORDBOX · direct', pid=42)
+        with patch('rb_waveform_core.mac_bridge.show') as show, patch('rb_waveform_core.qt_app.sys.platform', 'darwin'), \
+                patch.object(self.window, 'set_on_top') as on_top:
+            watcher.popups = [Popup('w', 'Library', ('Sync your library now?',), ('Sync', 'Cancel'), first_seen=100)]
+            self.window.watch_rekordbox(100.5)
+            show.assert_not_called()  # a moment's grace, in case Wave closes it
+            self.window.watch_rekordbox(102)
+            show.assert_called_once()
+            on_top.assert_called_with(False)
+            self.assertTrue(self.window.banner.isVisibleTo(self.window))
+            self.assertIn('Sync your library now?', self.window.banner_text.text())
+            self.window.watch_rekordbox(103)
+            show.assert_called_once()  # once, not every check
+            watcher.popups = []  # answered
+            self.window.watch_rekordbox(104)
+            on_top.assert_called_with(True)
+            self.assertIsNone(self.window.aside)
+            self.assertFalse(self.window.banner.isVisibleTo(self.window))
+
+    def test_notices_wave_closed_are_told_in_the_banner(self):
+        self.session.popups = Mock(popups=[], closed=[(50.0, "What's new in rekordbox")], error='')
+        self.window.watch_rekordbox(51)
+        self.assertIn("Closed a Rekordbox notice: What's new", self.window.banner_text.text())
+
+    def test_the_status_light_says_how_rekordbox_is(self):
+        self.session.demo = False
+        self.session.reader = Mock(state='live', connected=True)
+        self.assertIn('REKORDBOX', self.window.pill('REKORDBOX · direct'))
+        self.assertIn('#2fd16b', self.window.pill(''))
+        self.session.reader.state = 'absent'
+        self.assertIn('REKORDBOX OFF', self.window.pill(''))
+        self.session.host = Mock(doing='Starting Rekordbox')
+        self.assertIn('STARTING REKORDBOX…', self.window.pill(''))
+
+    def test_settings_from_before_2_5_move_to_rekordboxs_browser(self):
+        path = Path(self.temp.name) / 'old.json'
+        path.write_text(json.dumps({'view': {'browser': 'wave'}}))
+        self.session.load_config(path)
+        self.assertEqual(self.session.view['browser'], 'rekordbox')
+        path.write_text(json.dumps({'view': {'browser': 'wave', 'settings_version': 2}}))
+        self.session.load_config(path)
+        self.assertEqual(self.session.view['browser'], 'wave')  # chosen since: kept
 
     def test_two_and_four_decks_reuse_the_same_window(self):
         handle = self.window.winId()

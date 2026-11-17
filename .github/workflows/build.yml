@@ -1,6 +1,15 @@
 name: Test and build desktop viewers
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Draft a release with this tag (for example v2.5.0) from the commit this run builds'
+        required: false
+        default: ''
+      publish_tag:
+        description: 'Only publish the drafted release with this tag (for example v2.5.0); nothing is built'
+        required: false
+        default: ''
   push:
     branches: [main, 'overhaul/**', 'complete/**']
     tags: ['v*']
@@ -8,7 +17,23 @@ on:
 permissions:
   contents: read
 jobs:
+  publish:
+    # Publishes a draft checked on GitHub: its tag is created at the commit the draft was built from,
+    # and Wave's updater offers it from then on.
+    if: startsWith(inputs.publish_tag, 'v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.publish_tag }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets --jq '{draft: .isDraft, files: [.assets[].name]}'
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,url
   build:
+    if: ${{ !startsWith(inputs.publish_tag, 'v') }}
     strategy:
       fail-fast: false
       matrix:
@@ -37,10 +62,13 @@ jobs:
           cl /nologo /std:c++17 /O2 /MT /EHsc /W4 /LD /Brepro /DWAVE_BRIDGE_VERSION=\"%BRIDGE_VERSION%\"
           native\win_bridge\wave_bridge_win.cpp /Fe:rb_waveform_core\data\wave-bridge.dll
           /link /Brepro user32.lib
-      - name: Check the bridge exports OpenSSL's provider entry
+      - name: Check the bridge exports OpenSSL's provider entry and Wave's attach entry
         if: runner.os == 'Windows'
         shell: cmd
-        run: dumpbin /exports rb_waveform_core\data\wave-bridge.dll | findstr OSSL_provider_init && del rb_waveform_core\data\wave-bridge.lib rb_waveform_core\data\wave-bridge.exp
+        run: >-
+          dumpbin /exports rb_waveform_core\data\wave-bridge.dll | findstr OSSL_provider_init &&
+          dumpbin /exports rb_waveform_core\data\wave-bridge.dll | findstr wave_bridge_attach &&
+          del rb_waveform_core\data\wave-bridge.lib rb_waveform_core\data\wave-bridge.exp
       - run: python -m pip install . pyinstaller
       - run: python -m unittest discover -s tests -v
       - name: Windows high-DPI native full-screen acceptance
@@ -67,6 +95,28 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: cp "dist/Rekordbox Wave.exe" dist/Rekordbox-Wave-Windows-x64.exe
+      - name: Build the Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = python -c "import rb_waveform_core; print(rb_waveform_core.__version__)"
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc /Q "/DAppVersion=$version" installer\windows\RekordboxWave.iss
+          if ($LASTEXITCODE) { throw "The installer did not build" }
+      - name: Install, start and uninstall with the Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Start-Process dist\Rekordbox-Wave-Setup-Windows-x64.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=desktopicon' -Wait
+          $folder = "$env:LOCALAPPDATA\Programs\Rekordbox Wave"
+          if (-not (Test-Path "$folder\Rekordbox Wave.exe")) { throw "Wave was not installed" }
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Rekordbox Wave.lnk")) { throw "No Start menu shortcut" }
+          $run = Start-Process "$folder\Rekordbox Wave.exe" -ArgumentList '--demo','--config','validation\installed-profile.json','--smoke-test','validation\installed.png' -Wait -PassThru
+          if ($run.ExitCode) { throw "The installed Wave did not start" }
+          Start-Process "$folder\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait
+          Start-Sleep -Seconds 3
+          if (Test-Path "$folder\Rekordbox Wave.exe") { throw "Wave was not uninstalled" }
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
@@ -93,7 +143,7 @@ jobs:
           path: validation/packaged-native.png
   release:
     # A pushed v* tag drafts a release with every download; publish it from GitHub after checking it.
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(inputs.release_tag, 'v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -106,6 +156,8 @@ jobs:
           path: downloads
       - env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
+        # From a tag push the tag exists; from a manual run with release_tag, GitHub creates it at this commit.
         run: >-
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --generate-notes
-          --title "Rekordbox Wave ${GITHUB_REF_NAME#v}" downloads/*
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --generate-notes
+          --title "Rekordbox Wave ${TAG#v}" downloads/*
