@@ -565,7 +565,6 @@ class BrowserPage(QWidget):
         self.known = {}              # file -> CatalogTrack, for the rows Rekordbox lists
         self.resolving = False
         self.device_roots = ()
-        self.pending_item = None     # a list item to highlight once its list arrives
         self.open_on = 'double'      # 'single' or 'double' tap opens a playlist (Settings › Browser)
         self.last_tap = None         # (row, when) of the last tap on a list
 
@@ -898,32 +897,8 @@ class BrowserPage(QWidget):
             return
         self.categories.replace(items)
         self.message.setText(f'{len(items):,} {self.title.lower()}' if items else 'Nothing here')
-        wanted, self.pending_item = self.pending_item, None
-        for row, item in enumerate(items):
-            if wanted is not None and item.identifier == wanted:
-                index = self.categories.index(row, 0)
-                self.list.setCurrentIndex(index)
-                self.list.scrollTo(index, QAbstractItemView.ScrollHint.PositionAtCenter)
 
     # Following Rekordbox's own browser, for a knob Wave can't read directly ------------------------
-    def show_located(self, located):
-        """Show the list holding the playlist Rekordbox is on, with that playlist highlighted."""
-        if located.kind not in ('PLAYLIST', 'HISTORY'):
-            return
-        if self.view == ('tracks', (located.kind, located.identifier)):
-            return  # already in it
-        root = 'PLAYLIST' if located.kind == 'PLAYLIST' else 'HISTORY'
-        self.kind = root
-        self.trail = [(root, ('list', root, None))] + \
-            [(name, ('list', root, ident)) for ident, name in located.trail[:-1]]
-        parent = located.trail[-1] if located.trail else None
-        self.pending_item = located.identifier
-        if parent:
-            self.navigate(('list', root, parent[0]), parent[1])
-        else:
-            self.trail = []
-            self.navigate(('list', root, None), root)
-
     def highlight_item(self, identifier):
         """Highlight one item of the list shown now, when it is there."""
         for row in range(self.categories.rowCount()):

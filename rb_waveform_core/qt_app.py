@@ -801,8 +801,6 @@ class MainWindow(QMainWindow):
         self.deck_watch.start(250)
         # Follows Rekordbox's own browser as the controller's knob moves it, as the AZ's screen does.
         self.mirrored = None
-        self.mirror_opened = False
-        self.mirror_moved = 0.0
         self.knob_focus = ''          # the last pane Rekordbox's knob was in: 'list' or 'tree'
         self.controller_seen = False  # the controller's own knob messages have arrived (MIDI)
         self.pressed_at = 0.0         # when the controller's knob was last pushed (MIDI)
@@ -872,13 +870,11 @@ class MainWindow(QMainWindow):
             self.session.timer.setInterval(interval)
 
     def follow_rekordbox_browser(self):
-        """The controller's browse knob, seen through Rekordbox's own browser (when Wave can't read the
-        controller directly). With Rekordbox's browser chosen it brings that browser over Wave. With Wave's
-        touch browser: a cursor move in Rekordbox's track list moves Wave's highlight; Rekordbox's list
-        changing (the knob in its playlist pane, or pressed) opens Wave's browser on the same playlist."""
+        """The controller's browse knob, seen through Rekordbox's own browser, for when Wave can't read the
+        controller itself. Only while Wave's touch browser is open (VIEW or BROWSE opens it): a cursor move in
+        Rekordbox's list moves Wave's highlight; Rekordbox moving to another playlist highlights that one."""
         reader = self.session.reader
         browser = getattr(reader, 'browser', None) if reader and getattr(reader, 'bridged', False) else None
-        now = time.monotonic()
         if browser is None:
             self.mirrored = None
             return
@@ -886,10 +882,6 @@ class MainWindow(QMainWindow):
         key = (browser.cursor, browser.focus, browser.tree_path, browser.rows, browser.first, ids)
         self.page_devices()
         if key == self.mirrored:
-            if self.mirror_opened and now - self.mirror_moved > 20 and self.pages.currentWidget() is self.browser_page:
-                # Opened by the knob and left alone: back to the waveforms, as the AZ does.
-                self.mirror_opened = False
-                self.toggle_browser()
             return
         previous, self.mirrored = self.mirrored, key
         self.rekordbox_cursor = self.cursor_track(browser)
@@ -900,29 +892,20 @@ class MainWindow(QMainWindow):
             not cursor_moved and key[4] == previous[4] and ids and previous[5] and not set(ids) & set(previous[5]))
         if not cursor_moved and not list_changed:
             return  # Rekordbox's rows refreshed by themselves (a stick mounting, a playlist updating)
-        if self.session.view.get('browser') == 'rekordbox':
-            if not self.rekordbox_browsing:
-                self.browse_in_rekordbox()  # the knob browses Rekordbox's own window
-            return
-        if self.controller_seen:
-            return  # the controller's own messages drive Wave's browser (on_controller): never twice
-        self.mirror_moved = now
+        if self.session.view.get('browser') == 'rekordbox' or self.controller_seen:
+            return  # Rekordbox's browser follows its own knob; or the controller's messages drive Wave's
         page = self.browser_page
         if self.pages.currentWidget() is not page:
-            self.toggle_browser(by_knob=True)  # the knob turned or pressed: the browser opens, as on the AZ
-            self.mirror_opened = True
-            if list_changed:
-                self.locate_rekordbox(browser, follow=True)  # pushed into a playlist: show that one
-            return
+            return  # the knob only browses once the browser is open (VIEW or BROWSE opens it)
         if cursor_moved:
             if not self.knob_logged:
                 self.knob_logged = True
                 log.info("The browse knob is followed through Rekordbox's browser")
             page.step(key[0] - previous[0])  # whatever Wave shows: playlists or tracks
         elif list_changed and page.stack.currentWidget() is page.list:
-            self.locate_rekordbox(browser, follow=False)  # the knob in Rekordbox's tree: highlight the same one
+            self.locate_rekordbox(browser)  # the knob in Rekordbox's tree: highlight the same one
 
-    def locate_rekordbox(self, browser, follow):
+    def locate_rekordbox(self, browser):
         page = self.browser_page
         paths = [path for _, path in browser.tracks if path]
         source = page.source_for(CatalogTrack('', '', '', 0.0, '', 0.0, paths[0])) if paths else ''
@@ -932,10 +915,7 @@ class MainWindow(QMainWindow):
                 return
             if source != page.source_path:
                 return  # Rekordbox is on another library than Wave's browser: leave Wave where the DJ put it
-            if follow:
-                page.show_located(located)
-            else:
-                page.highlight_item(located.identifier)
+            page.highlight_item(located.identifier)
         from .catalog import locate
         page.run(locate, found, source, [ident for ident, _ in browser.tracks], browser.rows)
 
@@ -951,25 +931,20 @@ class MainWindow(QMainWindow):
         if not self.controller_seen:
             self.controller_seen = True  # from now on the controller's own messages drive the browser
             log.info('The browse knob is read from the controller itself (%s)', kind)
+        if kind == 'view':
+            self.browse(by_knob=True)  # VIEW opens the browser, and closes it again
+            return
         if self.session.view.get('browser') == 'rekordbox' or kind == 'load':
             return  # Rekordbox's own browser follows its controller; LOAD is seen when the deck changes
         page = self.browser_page
-        self.mirror_moved = time.monotonic()
         if self.pages.currentWidget() is not page:
-            if kind in ('browse', 'browse_press'):
-                self.toggle_browser(by_knob=True)  # the knob turned or pressed on the waveforms: the browser opens
-                self.mirror_opened = True
-            return
+            return  # the knob only browses once the browser is open
         if kind == 'browse':
             page.step(steps)
         elif kind == 'browse_press':
             page.enter()
         elif kind == 'back' and not page.go_back():
-            self.mirror_opened = False
             self.toggle_browser()  # BACK at the top: back to the waveforms
-        elif kind == 'view':
-            self.mirror_opened = False
-            self.toggle_browser()  # VIEW: straight back to the waveforms
 
     @staticmethod
     def cursor_track(browser):
@@ -997,7 +972,6 @@ class MainWindow(QMainWindow):
         if self.pages.currentWidget() is self.browser_page and track_loaded(before, paths):
             if self.redirect_controller_load(before, paths):
                 return
-            self.mirror_opened = False
             self.toggle_browser()  # a track landed on a deck, from the screen or the controller: back to the waveforms
             return
         if self.pages.currentWidget() is self.browser_page:
@@ -1061,7 +1035,6 @@ class MainWindow(QMainWindow):
         self.redirect = None
         swapped = paths.get(idx) and paths.get(idx) != rekordbox_pick
         if swapped and self.pages.currentWidget() is self.browser_page:
-            self.mirror_opened = False
             self.toggle_browser()  # Wave's pick is on the deck: back to the waveforms
         return True  # if it didn't land, the browser stays, with Rekordbox's answer in its message line
 
@@ -1491,6 +1464,27 @@ class MainWindow(QMainWindow):
         if getattr(self, 'count_segment', None) is not None:
             self.count_segment.set_value(self.session.render.deck_count)
         self.refresh_rekordbox_summary()
+        label = getattr(self, 'controller_status', None)
+        if label is not None:
+            label.setText(self.controller_summary())
+
+    def controller_summary(self):
+        """Whether Wave reads the controller itself, which VIEW, BACK and the knob's push need."""
+        midi = self.session.midi
+        names = {'browse': 'the knob', 'browse_press': 'its push', 'back': 'BACK', 'view': 'VIEW', 'load': 'LOAD'}
+        if midi is None:
+            return ('Wave can\u2019t read the controller on this computer (Windows 11 with Windows MIDI Services can '
+                    'share it with Rekordbox), so VIEW and BACK can\u2019t reach Wave: tap BROWSE. In the open browser '
+                    'the knob still moves the highlight, through Rekordbox.')
+        if not midi.controllers:
+            return f'No controller with a Rekordbox map is connected yet. {midi.status}'.strip()
+        found = [names[k] for k in names if k in midi.browser_controls]
+        missing = [names[k] for k in names if k not in midi.browser_controls]
+        heard = 'and has heard from it' if self.controller_seen else 'and is waiting to hear from it'
+        text = f'Wave reads {", ".join(midi.controllers)} itself {heard}: {", ".join(found) or "no browser controls"}.'
+        if missing:
+            text += f' Not in its map: {", ".join(missing)} (OPEN LOG in System lists what was found).'
+        return text
 
     def open_settings_page(self, name):
         if self.pages.currentWidget() is not self.settings_page:
@@ -1688,14 +1682,14 @@ class MainWindow(QMainWindow):
             self.canvas.setFocus()
             self.pace_frames()
 
-    def browse(self):
-        """BROWSE: Rekordbox's own browser over Wave, as Settings picks by default, or Wave's touch browser."""
+    def browse(self, by_knob=False):
+        """BROWSE on screen, or VIEW on the controller: the browser chosen in Settings opens, or closes."""
         if self.rekordbox_browsing:
             self.leave_rekordbox()
         elif self.session.view.get('browser') == 'rekordbox' and self.pages.currentWidget() is not self.browser_page:
             self.browse_in_rekordbox()
         else:
-            self.toggle_browser()
+            self.toggle_browser(by_knob=by_knob)
 
     def deck_tracks(self):
         paths = getattr(self.session.reader, 'deck_paths', None)

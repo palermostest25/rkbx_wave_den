@@ -95,7 +95,7 @@ def browse_action(name, status):
         return 'browse_press', None
     if note and key in ('back', 'browseback', 'browserback', 'browsebackward', 'backbutton'):
         return 'back', None
-    if note and key in ('view', 'browseview', 'browserview', 'viewbutton', 'browserlayout', 'viewchange'):
+    if note and 'view' in key:  # VIEW, BrowserView, ViewChange…: opens and closes the browser
         return 'view', None
     match = re.fullmatch(r'load(?:track|deck|todeck)?(\d?)', key)
     if note and match:
@@ -249,6 +249,11 @@ class MidiLoopListener:
             browser = sorted({kind[0] for _, kind in found[1].values() if kind[0] in BROWSER_KINDS})
             log.info('Controller %s on %s: browser controls %s', found[0], name, ', '.join(browser) or 'none found')
         return found is not None
+
+    @property
+    def browser_controls(self):
+        """Which browser controls the connected controllers' maps have: browse, browse_press, back, view, load."""
+        return {kind[0] for table in self._tables.values() for _, kind in table.values() if kind[0] in BROWSER_KINDS}
 
     @property
     def browses(self):
