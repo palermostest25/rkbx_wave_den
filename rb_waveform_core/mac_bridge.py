@@ -444,6 +444,7 @@ class RekordboxBridgeReader:
         self.status = 'Waiting for Rekordbox'
         self.state = 'absent'  # rekordbox_host's view: absent, none, starting, live, busy, older, unsupported, failed
         self.pid = None        # the running Rekordbox
+        self.checked = False   # looked for Rekordbox at least once
         self.bridge = None
         self.deck_paths = {}  # deck -> audio file Rekordbox's engine has loaded, while bridged
         self.deck_status = {}  # deck -> BridgeDeck: master, sync, key lock... while bridged
@@ -530,6 +531,7 @@ class RekordboxBridgeReader:
                     if started >= next_pid:
                         next_pid = started + 1
                         pid = self.pid = rekordbox_pid()
+                        self.checked = True
                     state_file = bridge_dir()/'state.bin'
                     if self.bridge and not self.bridged and state_file.exists() and \
                             state_file.stat().st_ino != os.fstat(self.bridge.file.fileno()).st_ino:

@@ -352,8 +352,8 @@ class Session(QObject):
                     bool(getattr(reader, 'connected', False)), age, bool(facts.get('modules')))
 
     def poll_host(self, now):
-        if not self.host or now < self.next_host:
-            return
+        if not self.host or now < self.next_host or not getattr(self.reader, 'checked', True):
+            return  # not before the reader has looked for Rekordbox once
         self.next_host = now + .5
         self.host.poll(self.seen(), now)
         if self.popups:

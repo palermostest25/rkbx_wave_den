@@ -139,6 +139,11 @@ class HostTests(unittest.TestCase):
         self.assertFalse(host.quit())  # not Wave's
         host.policy.owned.add(7)
         self.assertFalse(host.quit(playing=True))
+        from unittest.mock import patch
+        with patch('rb_waveform_core.mac_bridge.ask_to_quit') as asked:
+            self.assertTrue(host.quit())
+        asked.assert_called_once_with()
+        self.assertIsNone(host.policy.decide(Seen(None), 100))  # and it is not started again
         host.close()
 
 
