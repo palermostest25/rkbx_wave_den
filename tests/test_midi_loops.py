@@ -56,6 +56,7 @@ class MidiMapTests(unittest.TestCase):
         self.assertEqual(browse_action('Browse', 0xB6), ('browse', 'relative'))
         self.assertEqual(browse_action('BrowsePress', 0x96), ('browse_press', None))
         self.assertEqual(browse_action('Back', 0x96), ('back', None))
+        self.assertEqual(browse_action('View', 0x96), ('view', None))
         self.assertEqual(browse_action('Load', 0x96), ('load', None))
         self.assertEqual(browse_action('LoadDeck3', 0x96), ('load', 2))
         for name, status in (('Browse+Shift', 0xB6), ('PlayPause', 0x90), ('Preview', 0x96)):

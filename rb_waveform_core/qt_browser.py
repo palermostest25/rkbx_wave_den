@@ -776,6 +776,8 @@ class BrowserPage(QWidget):
 
     def navigate(self, view, title):
         self.view, self.title = view, title
+        if view[0] != 'tracks':
+            self.table.clearSelection()  # nothing stays picked from a list that is no longer shown
         self.set_heading()
         if view[0] == 'sources':
             self.stack.setCurrentWidget(self.sources_page)
@@ -1093,6 +1095,10 @@ class BrowserPage(QWidget):
 
     # Loading ------------------------------------------------------------------------------------
     def selected_track(self):
+        """The track picked in the list shown now; None while playlists, folders or sources are shown, so
+        a track highlighted before can never be loaded from a view that doesn't show it."""
+        if self.stack.currentWidget() is not self.table:
+            return None
         rows = self.table.selectionModel().selectedRows()
         return self.model.tracks[rows[0].row()] if rows and rows[0].row() < len(self.model.tracks) else None
 

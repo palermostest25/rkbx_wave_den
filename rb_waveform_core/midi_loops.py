@@ -18,7 +18,7 @@ from queue import Queue, Empty
 import logging
 
 log = logging.getLogger(__name__)
-BROWSER_KINDS = ('browse', 'browse_press', 'back', 'load')
+BROWSER_KINDS = ('browse', 'browse_press', 'back', 'view', 'load')
 
 
 def shared_midi():
@@ -95,6 +95,8 @@ def browse_action(name, status):
         return 'browse_press', None
     if note and key in ('back', 'browseback', 'browserback', 'browsebackward', 'backbutton'):
         return 'back', None
+    if note and key in ('view', 'browseview', 'browserview', 'viewbutton', 'browserlayout', 'viewchange'):
+        return 'view', None
     match = re.fullmatch(r'load(?:track|deck|todeck)?(\d?)', key)
     if note and match:
         return 'load', int(match[1]) - 1 if match[1] else None
