@@ -6,6 +6,10 @@ on:
         description: 'Draft a release with this tag (for example v2.5.0) from the commit this run builds'
         required: false
         default: ''
+      publish_tag:
+        description: 'Only publish the drafted release with this tag (for example v2.5.0); nothing is built'
+        required: false
+        default: ''
   push:
     branches: [main, 'overhaul/**', 'complete/**']
     tags: ['v*']
@@ -13,7 +17,23 @@ on:
 permissions:
   contents: read
 jobs:
+  publish:
+    # Publishes a draft checked on GitHub: its tag is created at the commit the draft was built from,
+    # and Wave's updater offers it from then on.
+    if: startsWith(inputs.publish_tag, 'v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.publish_tag }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets --jq '{draft: .isDraft, files: [.assets[].name]}'
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,url
   build:
+    if: ${{ !startsWith(inputs.publish_tag, 'v') }}
     strategy:
       fail-fast: false
       matrix:
