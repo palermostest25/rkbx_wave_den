@@ -458,6 +458,11 @@ private slots:
         rb.cursor = 0;
         page.mirror(rb);
         QCOMPARE(page.selectedTrack()->title, QStringLiteral("Nine"));  // the knob turned back
+        rb.cursor = 1; rb.focus = "";  // Rekordbox behind Wave: no pane focused, the cursor still counts
+        page.mirror(rb);
+        QCOMPARE(page.selectedTrack()->title, QStringLiteral("Ten"));
+        rb.cursor = 0; rb.focus = "list";
+        page.mirror(rb);
         loads.clear();
         page.setDecks({0, 1}, {{0, ""}, {1, ""}}, {}, {});
         QVERIFY(page.goBack());

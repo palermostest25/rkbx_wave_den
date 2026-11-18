@@ -1122,7 +1122,8 @@ void BrowserPage::mirror(const bridge::Browser &b) {
         }
     }
     const int row = b.cursor - b.first;
-    if (b.focus == QLatin1String("list") && row >= 0 && row < model_->rowCount()) {
+    // Rekordbox behind Wave may report neither pane focused: its cursor row is still what its push and LOAD load.
+    if (b.focus != QLatin1String("tree") && row >= 0 && row < model_->rowCount()) {
         table_->selectRow(row);
         table_->scrollTo(model_->index(row, 1), QAbstractItemView::PositionAtCenter);
     } else if (b.focus == QLatin1String("tree")) {
