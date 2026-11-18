@@ -72,6 +72,11 @@ private:
     std::function<double()> level_;
 };
 
+bool samePath(QString a, QString b) {
+    a = QDir::fromNativeSeparators(a).toCaseFolded();
+    b = QDir::fromNativeSeparators(b).toCaseFolded();
+    return !a.isEmpty() && !b.isEmpty() && (a == b || a.endsWith(b) || b.endsWith(a));
+}
 
 // True when a deck Wave already knew got a new track; a deck first seen, or emptied, is not a load.
 bool trackLoaded(const std::map<int, QString> &before, const std::map<int, QString> &after) {
@@ -282,10 +287,9 @@ MainWindow::MainWindow(Session *session, QWidget *parent)
         popups_->start();
 #endif
         {
-            // VIEW and the zoom knobs, read beside Rekordbox: always on macOS; on Windows where it shares MIDI
-            // (Windows MIDI Services), and only ever after Rekordbox has the controller (see watch()).
-            midi_ = new midi::Listener(this);
-            connect(midi_, &midi::Listener::controller, this, &MainWindow::onController, Qt::QueuedConnection);
+            // The browse knob, its push, BACK, VIEW and LOAD, and the zoom knobs. On Windows through Wave's bridge
+            // in Rekordbox, which holds the controller (or directly where Windows shares it); on macOS directly.
+            useController(new midi::Listener(this));
             midi_->start();
         }
         keepAwake(session_->settings.flag("keep_awake"));
@@ -480,7 +484,6 @@ void MainWindow::browse(bool byKnob) {
 
 void MainWindow::toggleBrowser(bool byKnob) {
     const bool opening = pages_->currentWidget() != browser_;
-    knobOpened_ = 0;
     pages_->setCurrentWidget(opening ? static_cast<QWidget *>(browser_) : canvas_);
     syncNav();
     if (opening && byKnob) browser_->focusForKnob();  // opened from the controller: no keyboard pops up
@@ -501,8 +504,12 @@ void MainWindow::escape() {
 
 // --- The controller ----------------------------------------------------------------------------------------
 
+void MainWindow::useController(midi::Listener *listener) {
+    midi_ = listener;
+    connect(midi_, &midi::Listener::controller, this, &MainWindow::onController, Qt::QueuedConnection);
+}
+
 void MainWindow::onController(midi::Kind kind, int value, int deck) {
-    Q_UNUSED(deck);
     const Settings &s = session_->settings;
     if (kind == midi::Kind::SamplerZoom) {
         if (s.flag("sampler_zoom")) {
@@ -515,24 +522,42 @@ void MainWindow::onController(midi::Kind kind, int value, int deck) {
         zoomBy(std::pow(2.0, -value / 4.0));
         return;
     }
+    if (kind == midi::Kind::Press) pressedAt_ = now();  // a load that follows is the same push, not a second one
     if (!controllerSeen_) {
-        controllerSeen_ = true;
-        qCInfo(lcWindow) << "Wave hears the controller itself";
+        controllerSeen_ = true;  // from now on the controller's own messages drive the browser
+        qCInfo(lcWindow) << "The browse knob is read from the controller" << (midi_ && midi_->throughRekordbox() ? "through Rekordbox" : "itself");
     }
-    // The knob, its push, BACK and LOAD act in Rekordbox's browser, which Wave's shows: Wave only opens and
-    // closes its browser, with VIEW.
     if (kind == midi::Kind::View) {
-        if (s.text("browser") == QLatin1String("rekordbox")) { browse(true); return; }
-        const bool opening = pages_->currentWidget() != browser_;
-        toggleBrowser(true);
-        if (opening) if (const auto f = session_->lastFrame(); f && f->bridged && f->browser) browser_->mirror(*f->browser);
+        browse(true);  // VIEW opens the browser, and closes it again
+        return;
+    }
+    if (s.text("browser") == QLatin1String("rekordbox")) return;  // Rekordbox's own browser follows its controller
+    // Kept from Rekordbox: Wave's browser is the only one these controls move, and Wave loads its own pick.
+    // Otherwise Rekordbox acts on them too, and its LOAD is seen (and swapped for Wave's pick) when a deck changes.
+    const bool own = midi_ && midi_->keeping();
+    if (pages_->currentWidget() != browser_) {
+        // The knob turned or pushed on the waveforms: the browser opens, as a deck's does.
+        if (own && pages_->currentWidget() == canvas_ && (kind == midi::Kind::Browse || kind == midi::Kind::Press))
+            toggleBrowser(true);
+        return;
+    }
+    if (kind == midi::Kind::Browse) {
+        browser_->step(value);
+    } else if (kind == midi::Kind::Press) {
+        if (browser_->showsList()) browser_->enter();  // a playlist or folder opens
+        else if (own && deck >= 0) browser_->loadHighlighted(deck);  // a track: onto the deck the push belongs to
+        else if (own) browser_->enter();
+    } else if (kind == midi::Kind::Load) {
+        if (own && deck >= 0) browser_->loadHighlighted(deck);
+    } else if (kind == midi::Kind::Back && !browser_->goBack()) {
+        toggleBrowser();  // BACK at the top: back to the waveforms
     }
 }
 
 void MainWindow::followRekordboxBrowser(std::shared_ptr<const ReaderFrame> f) {
-    // Wave's browser shows Rekordbox's own, as the controller's knob moves it: turning the knob opens Wave's
-    // browser on the list Rekordbox's cursor is in, highlighted where it is, so the knob's push and LOAD load
-    // exactly what Wave shows.
+    // The controller's browse knob, seen through Rekordbox's own browser, for when Wave can't read the
+    // controller itself. Only while Wave's touch browser is open: a cursor move in Rekordbox's list moves
+    // Wave's highlight; Rekordbox moving to another playlist highlights that one.
     QStringList roots;
     for (const auto &[h, root] : f->devices) roots << root;
     browser_->setDeviceRoots(roots);
@@ -542,28 +567,31 @@ void MainWindow::followRekordboxBrowser(std::shared_ptr<const ReaderFrame> f) {
     for (const auto &[id, path] : b.tracks) ids.push_back(id);
     const auto key = std::make_tuple(b.cursor, b.focus + '|' + b.treePath, b.rows, b.first, 0, ids);
     if (mirrored_ && *mirrored_ == key) return;
-    const bool first = !mirrored_;
-    // The knob moved Rekordbox's cursor, its focus or its list; a count changing alone (an import) is no turn.
-    const bool turned = !first && (std::get<0>(*mirrored_) != b.cursor || std::get<1>(*mirrored_) != std::get<1>(key) ||
-                                   std::get<5>(*mirrored_) != ids);
+    const auto previous = mirrored_;
     mirrored_ = key;
-    const Settings &s = session_->settings;
-    if (s.text("browser") == QLatin1String("rekordbox") || !s.flag("knob_loads_wave")) return;
-    if (pages_->currentWidget() == browser_) {
-        if (browser_->mirroring() || !first) browser_->mirror(b);
-        if (knobOpened_ > 0) knobOpened_ = now();
-        return;
+    if (!previous) return;  // the first look is where Rekordbox was, not a move
+    const int cursor = std::get<0>(key), before = std::get<0>(*previous);
+    const bool cursorMoved = cursor != before && cursor >= 0 && before >= 0;
+    bool overlap = false;
+    for (uint32_t id : ids) for (uint32_t old : std::get<5>(*previous)) overlap = overlap || id == old;
+    const bool listChanged = std::get<2>(key) != std::get<2>(*previous) || std::get<1>(key) != std::get<1>(*previous) ||
+                             (!cursorMoved && std::get<3>(key) == std::get<3>(*previous) && !ids.empty() && !std::get<5>(*previous).empty() && !overlap);
+    if (!cursorMoved && !listChanged) return;  // Rekordbox's rows refreshed by themselves
+    if (session_->settings.text("browser") == QLatin1String("rekordbox") || controllerSeen_) return;
+    if (pages_->currentWidget() != browser_) return;
+    if (cursorMoved) {
+        if (!knobLogged_) { knobLogged_ = true; qCInfo(lcWindow) << "The browse knob is followed through Rekordbox's browser"; }
+        browser_->step(cursor - before);
+    } else if (listChanged && browser_->showsList()) {
+        // The knob in Rekordbox's tree: highlight the same list here, if Wave shows that library.
+        QString first;
+        for (const auto &[id, path] : b.tracks) if (!path.isEmpty()) { first = path; break; }
+        const QString source = first.isEmpty() ? QString() : browser_->sourceFor(first);
+        browser_->locate(source, ids, b.rows, [this, source](std::optional<Located> found) {
+            if (!found || pages_->currentWidget() != browser_ || source != browser_->sourcePath()) return;
+            browser_->highlightItem(found->id);
+        });
     }
-    // The knob turned (not the first look, which is just where Rekordbox was): the browser opens on it, from the
-    // waveforms only, never over Settings or while Rekordbox itself is up.
-    if (!turned || pages_->currentWidget() != canvas_ || rekordboxBrowsing_ || !aside_.isEmpty()) return;
-    if (!knobLogged_) {
-        knobLogged_ = true;
-        qCInfo(lcWindow) << "The browse knob opened Wave's browser on Rekordbox's list";
-    }
-    toggleBrowser(true);
-    browser_->mirror(b);
-    knobOpened_ = now();
 }
 
 std::map<int, QString> MainWindow::deckPaths() const {
@@ -584,7 +612,17 @@ void MainWindow::syncLoadTargets() {
         else if (rekordboxBrowsing_->kind == "window" && !host::alive(rekordboxBrowsing_->hwnd)) leaveRekordbox();  // closed in Rekordbox
         else if (rekordboxBrowsing_->kind == "whole" && !isMinimized()) rekordboxBrowsing_.reset();  // back in Wave by hand
     }
+    if (redirect_) {
+        // While a redirected load is under way, wait for it (or give up) before leaving the browser.
+        if (session_->loading() && now() < redirect_->deadline) return;
+        const auto it = paths.find(redirect_->deck);
+        const bool swapped = it != paths.end() && !it->second.isEmpty() && it->second != redirect_->rekordboxPick;
+        redirect_.reset();
+        if (swapped && pages_->currentWidget() == browser_) toggleBrowser();  // Wave's pick is on the deck
+        return;  // if it didn't land, the browser stays, with Rekordbox's answer in its message line
+    }
     if (pages_->currentWidget() == browser_ && trackLoaded(before, paths)) {
+        if (redirectControllerLoad(before, paths)) return;
         toggleBrowser();  // a track landed on a deck, from the screen or the controller: back to the waveforms
         return;
     }
@@ -596,19 +634,61 @@ void MainWindow::syncLoadTargets() {
     }
 }
 
+bool MainWindow::redirectControllerLoad(const std::map<int, QString> &before, const std::map<int, QString> &paths) {
+    // A deck changed while Wave's touch browser is open, and Wave didn't load it: that is the controller's
+    // LOAD, which loads Rekordbox's own pick. Load Wave's pick onto that deck instead; with nothing picked in
+    // Wave, put back what the deck had.
+    if (!session_->settings.flag("knob_loads_wave")) return false;
+    if (midi_ && midi_->keeping()) return false;  // Rekordbox never sees the knob: a deck change is someone else's
+    const auto picked = browser_->selectedTrack();
+    for (const auto &[idx, path] : paths) {
+        const auto old = before.find(idx);
+        if (old == before.end() || old->second == path || path.isEmpty() || session_->loadedByWave(idx, path)) continue;
+        if (picked && samePath(path, picked->path)) return false;  // Rekordbox loaded what Wave shows anyway
+        if (!picked && browser_->showsList() && now() - pressedAt_ > 1.5) browser_->enter();  // the push opened a playlist here
+        if (picked) {
+            if (session_->loadTrack(idx, *picked, browser_->sourcePath())) {
+                redirect_ = Redirect{idx, path, now() + 10};
+                browser_->showLoadStatus(QStringLiteral("Loading %1 on deck %2, as picked here…").arg(picked->title).arg(idx + 1));
+                qCInfo(lcWindow) << "Controller LOAD on deck" << idx + 1 << ": loading the track picked in Wave instead";
+                return true;
+            }
+            return false;
+        }
+        if (old->second.isEmpty()) {
+            browser_->showLoadStatus(QStringLiteral("Rekordbox loaded a track on deck %1: Wave can't unload it. Highlight a track here, then LOAD.").arg(idx + 1));
+            return false;
+        }
+        // Nothing picked in Wave: the deck gets back what it had before the stray LOAD.
+        redirect_ = Redirect{idx, path, now() + 10};
+        const int deck = idx;
+        const QString oldPath = old->second;
+        browser_->tracksForPaths({oldPath}, [this, deck, oldPath](std::map<QString, CatalogTrack> found) {
+            const auto it = found.find(oldPath);
+            if (it == found.end() || it->second.id.isEmpty()) return;
+            const auto [track, source] = browser_->forLoading(it->second);
+            session_->loadTrack(deck, track, source);
+        });
+        browser_->showLoadStatus(QStringLiteral("Nothing was picked here: putting the deck back as it was."));
+        qCInfo(lcWindow) << "Controller LOAD on deck" << idx + 1 << "with nothing picked in Wave: restoring its track";
+        return true;
+    }
+    return false;
+}
+
 // --- Rekordbox behind Wave ---------------------------------------------------------------------------------
 
 void MainWindow::watch() {
-    // Opened by the knob and then left alone (no turn, no touch): back to the waveforms, as a deck's browser does.
-    if (knobOpened_ > 0 && now() - knobOpened_ > kKnobIdle) {
-        knobOpened_ = 0;
-        if (pages_->currentWidget() == browser_ && browser_->mirroring()) toggleBrowser();
-    }
-    if (midi_) {
+    if (midi_ && !session_->demo()) {
         const auto f = session_->lastFrame();
         const bool live = f && f->state == host::State::Live;
         liveSince_ = live ? (liveSince_ > 0 ? liveSince_ : now()) : 0;
         midi_->setAllowed(live && now() - liveSince_ > 8);  // Rekordbox has opened its controllers by then
+        // Wave's browser takes the browser controls from Rekordbox while Wave is the screen: not while the DJ
+        // chose Rekordbox's browser, Rekordbox's own browser is up (Beatport, Spotify), or Wave stepped aside.
+        const Settings &s = session_->settings;
+        midi_->setKeeping(live && s.text("browser") == QLatin1String("wave") && s.flag("knob_loads_wave") &&
+                          !rekordboxBrowsing_ && aside_.isEmpty() && !isMinimized());
     }
     paceFrames();  // frames start as soon as something moves (a deck starts, a preview begins)
     if (!pendingStreaming_.isEmpty()) {
@@ -854,9 +934,6 @@ bool MainWindow::eventFilter(QObject *o, QEvent *e) {
     if (e->type() == QEvent::MouseButtonPress && session_->settings.text("keyboard") == QLatin1String("windows") &&
         o->inherits("QLineEdit") && static_cast<QWidget *>(o)->window() == this)
         QTimer::singleShot(300, this, [] { touch::showWindowsKeyboard(); });  // after Windows' own reaction to the tap
-    if (e->type() == QEvent::MouseButtonPress || e->type() == QEvent::TouchBegin || e->type() == QEvent::Wheel ||
-        e->type() == QEvent::KeyPress)
-        knobOpened_ = 0;  // touched: the browser is the DJ's now, it stays open
     return QMainWindow::eventFilter(o, e);
 }
 
@@ -1017,24 +1094,26 @@ void MainWindow::firstRun(bool installNow, bool setupPage) {
 }
 
 QString MainWindow::controllerSummary() const {
-    static const QString mirror = QStringLiteral("The knob, its push, BACK and LOAD work in Rekordbox, and Wave's browser shows it. ");
-    if (!midi_ || !midi::shared())
-        return mirror + QStringLiteral("VIEW can't reach Wave here: Windows gives the controller to Rekordbox alone. Windows 11 "
-                                       "with Windows MIDI Services (from Windows Update) shares it, then VIEW opens and closes Wave's "
-                                       "browser. Until then a load, or 20 s alone, takes you back to the waveforms.");
+    if (!midi_) return QStringLiteral("Wave can't read the controller here.");
     const QStringList controllers = midi_->controllers();
-    if (controllers.isEmpty())
-        return mirror + QStringLiteral("Wave listens for VIEW once Rekordbox has the controller. %1").arg(midi_->status()).trimmed();
+    if (controllers.isEmpty()) return QStringLiteral("No controller with a Rekordbox map is connected yet. %1").arg(midi_->status()).trimmed();
     const auto controls = midi_->controls();
-    static const std::pair<midi::Kind, const char *> names[] = {{midi::Kind::View, "VIEW"}, {midi::Kind::Zoom, "SHIFT + the knob (zoom)"},
-                                                              {midi::Kind::SamplerZoom, "the sampler knob"}};
-    QStringList found, missing;
-    for (const auto &[k, n] : names) (controls.count(k) ? found : missing) << QString::fromLatin1(n);
-    QString text = mirror + QStringLiteral("Wave also reads %1 itself %2: %3.").arg(controllers.join(", "),
-        controllerSeen_ ? QStringLiteral("and has heard from it") : QStringLiteral("and is waiting to hear from it"),
-        found.isEmpty() ? QStringLiteral("none of its controls") : found.join(", "));
-    if (!missing.isEmpty()) text += QStringLiteral(" Not in its map: %1.").arg(missing.join(", "));
-    return text;
+    static const std::pair<midi::Kind, const char *> names[] = {{midi::Kind::Browse, "the knob"}, {midi::Kind::Press, "its push"},
+                                                              {midi::Kind::Back, "BACK"}, {midi::Kind::View, "VIEW"},
+                                                              {midi::Kind::Load, "LOAD"}, {midi::Kind::SamplerZoom, "the sampler knob"}};
+    QStringList found;
+    for (const auto &[k, n] : names) if (controls.count(k)) found << QString::fromLatin1(n);
+    const QString heard = controllerSeen_ ? QStringLiteral("and has heard from it") : QStringLiteral("and is waiting to hear from it");
+#ifdef Q_OS_WIN
+    if (midi_->throughRekordbox())
+        return QStringLiteral("Wave reads %1 through Rekordbox %2: %3. %4").arg(controllers.join(", "), heard, found.join(", "),
+            midi_->keeping() ? QStringLiteral("The browser controls move Wave's browser only, and load what Wave shows.")
+                             : QStringLiteral("Rekordbox's browser has them now."));
+    return QStringLiteral("%1 is connected. Wave hears it through Rekordbox once Rekordbox is running with Wave's bridge (the "
+                          "status at the top says LIVE).").arg(controllers.join(", "));
+#else
+    return QStringLiteral("Wave reads %1 itself %2: %3.").arg(controllers.join(", "), heard, found.join(", "));
+#endif
 }
 
 // --- The monitor ---------------------------------------------------------------------------------------------

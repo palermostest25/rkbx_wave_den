@@ -248,6 +248,12 @@ jobs:
           mkdir bridge
           cl /nologo /std:c++17 /O2 /MT /EHsc /W4 /LD /Brepro /DWAVE_BRIDGE_VERSION=\"%BRIDGE_VERSION%\" native\win_bridge\wave_bridge_win.cpp /Fe:bridge\wave-bridge.dll /Fo:bridge\ /link /Brepro user32.lib
           dumpbin /exports bridge\wave-bridge.dll | findstr wave_bridge_attach
+      - name: Detour the controller callback under load (the bridge's MIDI hook)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          cl /nologo /std:c++17 /O2 /MT /EHsc /W4 native\win_bridge\detour_test.cpp /Fe:bridge\detour_test.exe /Fo:bridge\
+          bridge\detour_test.exe
       - name: Build
         shell: bash
         run: |

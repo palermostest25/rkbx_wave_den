@@ -1,8 +1,11 @@
-// The controller's browser controls, read beside Rekordbox and decoded with Rekordbox's own MIDI maps:
-// the browse knob turning and pressed, BACK, VIEW, each deck's LOAD, waveform zoom (SHIFT + BROWSE) and the
-// sampler volume knob as a zoom. Listening is passive; nothing is ever sent to the controller. Only where
-// the system shares the controller: classic Windows MIDI gives a port to one app, and taking it from
-// Rekordbox would stop its decks, so on Windows only with Windows MIDI Services.
+// The controller's browser controls, decoded with Rekordbox's own MIDI maps: the browse knob turning and
+// pressed, BACK, VIEW, each deck's LOAD, waveform zoom (SHIFT + BROWSE) and the sampler volume knob as a zoom.
+// Nothing is ever sent to the controller.
+//
+// On Windows, Rekordbox holds the controller, and Wave hears it through Wave's bridge inside Rekordbox, which
+// also keeps the browser controls from Rekordbox while Wave drives its own browser with them (setKeeping). Where
+// the bridge isn't there, Wave opens the controller itself only where Windows shares it (Windows MIDI Services),
+// never taking it from Rekordbox. On macOS CoreMIDI shares it.
 #pragma once
 
 #include <QObject>
@@ -10,6 +13,7 @@
 #include <QStringList>
 #include <QThread>
 
+#include <array>
 #include <atomic>
 #include <map>
 #include <mutex>
@@ -42,6 +46,12 @@ public:
     QString status() const;
     // Windows: may Wave open the controller now (Rekordbox is running with it)? macOS shares it always.
     void setAllowed(bool on) { allowed_ = on; }
+    // Windows: keep the browse knob, its push, BACK, VIEW and LOAD from Rekordbox, for Wave's browser.
+    void setKeeping(bool on) { keeping_ = on; }
+    bool keeping() const { return keeping_ && throughRekordbox_; }  // asked, and the bridge does it
+    bool throughRekordbox() const { return throughRekordbox_; }     // heard through Wave's bridge in Rekordbox
+    static std::vector<std::pair<int, int>> keys(const Table &table);  // what keeping keeps
+    void assumeThroughRekordbox(bool on) { throughRekordbox_ = on; }    // tests: as the bridge would report
 
 signals:
     // Browse: ``value`` steps (+ clockwise); Zoom: steps; SamplerZoom: the knob 0-127; others: a press.
@@ -51,6 +61,8 @@ public:
     // What the platform's MIDI callbacks call; public for tests.
     void receive(quintptr port, const QByteArray &data);
     void addDevice(quintptr port, const QString &name, const Table &table);
+    void receiveMessage(const Table &table, int status, int data1, int value);
+    Table merged() const;  // every connected controller's controls, for messages heard through Rekordbox
 
 private:
     void run();
@@ -63,7 +75,7 @@ private:
     QString status_;
     QThread *thread_ = nullptr;
     std::atomic<bool> stop_{false};
-    std::atomic<bool> allowed_{false};
+    std::atomic<bool> allowed_{false}, keeping_{false}, throughRekordbox_{false};
 #ifdef Q_OS_MACOS
 public:
     void macPackets(const void *list, quintptr source);

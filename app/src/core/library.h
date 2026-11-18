@@ -63,7 +63,6 @@ public:
     std::pair<int, std::vector<CatalogTrack>> browse(const QString &search, const QString &sort, bool descending,
                                                      int offset, int limit, const std::optional<std::pair<QString, QString>> &scope = {});
     std::optional<Located> locate(const std::vector<uint32_t> &ids, int rows);
-    std::map<uint32_t, CatalogTrack> tracks(const std::vector<uint32_t> &ids);  // by id, streamed ones too
     SourceStats stats();
 
 private:

@@ -28,7 +28,7 @@ WINDOWS = sys.platform == 'win32'
 APP = Path('/Applications/rekordbox 7/rekordbox.app')
 EXECUTABLE = APP/'Contents'/'MacOS'/'rekordbox'
 LIBRARY = 'wave-bridge.dll' if WINDOWS else 'wave-bridge.dylib'
-MAGIC, VERSION = b'RKWBRDG1', 5
+MAGIC, VERSION = b'RKWBRDG1', 6  # 6 appends the controller input, which this legacy reader ignores
 HEADER = struct.Struct('<8sIIIIIiQQ128s')
 DECK = struct.Struct('<IidfffIqqii1024s')
 COMMAND = struct.Struct('<IIIIQq')        # all but the trailing check

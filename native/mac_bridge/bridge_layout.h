@@ -8,11 +8,13 @@
 #endif
 
 constexpr char kBridgeMagic[8] = {'R', 'K', 'W', 'B', 'R', 'D', 'G', '1'};
-constexpr uint32_t kBridgeVersion = 5;
+constexpr uint32_t kBridgeVersion = 6;
 constexpr const char *kBridgeStateFile = "state.bin";
 constexpr uint32_t kBridgeDecks = 4;
 constexpr uint32_t kBridgeDevices = 4;
 constexpr uint32_t kBrowseRows = 64;
+constexpr uint32_t kMidiEvents = 128;      // the controller messages Rekordbox received, newest last
+constexpr uint32_t kMidiKeeps = 48;        // controls Wave keeps from Rekordbox while it runs
 
 enum : uint32_t { kStatusStarting = 0, kStatusLive = 1, kStatusUnsupported = 2, kStatusFailed = 3 };
 enum : uint32_t { kDeckLoaded = 1, kDeckPlaying = 2, kDeckLooping = 4, kDeckMasterTempo = 8, kDeckSync = 16,
@@ -77,6 +79,22 @@ struct BridgeBrowser {         // Rekordbox's own browser, as its controller mov
     BrowseRow rows_[kBrowseRows];
 };
 
+struct BridgeMidiEvent {       // one short MIDI message Rekordbox's controller input received
+    uint32_t seq;              // its number, from 1; written last (slot = (seq - 1) % kMidiEvents)
+    uint8_t status, data1, data2;
+    uint8_t kept;              // 1: kept from Rekordbox for Wave
+};
+
+struct BridgeMidi {            // outside the seqlock: each event carries its own seq
+    uint32_t hooked;           // bridge: 1 while it hears Rekordbox's controller input (Windows)
+    uint32_t written;          // bridge: the newest event's seq
+    BridgeMidiEvent events[kMidiEvents];
+    uint64_t wave_ns;          // Wave: its heartbeat on the bridge's clock; keeps apply while under 1 s old
+    uint32_t keep_count;       // Wave: entries in keep[]
+    uint32_t kept;             // bridge: messages kept from Rekordbox so far
+    uint16_t keep[kMidiKeeps]; // Wave: (status << 8) | data1 of each note or control change to keep
+};
+
 struct BridgeState {           // seqlock: odd while the bridge writes
     char magic[8];
     uint32_t version;
@@ -93,6 +111,7 @@ struct BridgeState {           // seqlock: odd while the bridge writes
     BridgeReply reply;
     BridgeDevice devices[kBridgeDevices];
     BridgeBrowser browser;
+    BridgeMidi midi;
 };
 
 static_assert(sizeof(BridgeDeck) == 1080, "layout");
@@ -101,4 +120,6 @@ static_assert(sizeof(BridgeReply) == 128, "layout");
 static_assert(sizeof(BridgeDevice) == 256, "layout");
 static_assert(sizeof(BrowseRow) == 264, "layout");
 static_assert(sizeof(BridgeBrowser) == 32 + 512 + 64 * 264, "layout");
-static_assert(sizeof(BridgeState) == 176 + 4 * 1080 + 40 + 128 + 4 * 256 + 32 + 512 + 64 * 264, "layout");
+static_assert(sizeof(BridgeMidiEvent) == 8, "layout");
+static_assert(sizeof(BridgeMidi) == 8 + 128 * 8 + 16 + 48 * 2, "layout");
+static_assert(sizeof(BridgeState) == 176 + 4 * 1080 + 40 + 128 + 4 * 256 + 32 + 512 + 64 * 264 + 1144, "layout");

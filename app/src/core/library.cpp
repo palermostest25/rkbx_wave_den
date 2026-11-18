@@ -385,43 +385,6 @@ std::pair<int, std::vector<CatalogTrack>> Library::browse(const QString &search,
     return {total, rows};
 }
 
-std::map<uint32_t, CatalogTrack> Library::tracks(const std::vector<uint32_t> &ids) {
-    std::map<uint32_t, CatalogTrack> found;
-    std::vector<uint32_t> unique;
-    for (uint32_t id : ids) if (id) unique.push_back(id);
-    std::sort(unique.begin(), unique.end());
-    unique.erase(std::unique(unique.begin(), unique.end()), unique.end());
-    for (size_t at = 0; at < unique.size(); at += 200) {
-        const size_t n = std::min<size_t>(200, unique.size() - at);
-        QStringList marks;
-        for (size_t i = 0; i < n; ++i) marks << QStringLiteral("?");
-        QString sql;
-        if (device_) {
-            const bool keyed = has("key", {"key_id", "name"}) && has("content", {"key_id"});
-            const bool imaged = has("image", {"image_id", "path"}) && has("content", {"image_id"});
-            sql = QStringLiteral("SELECT c.content_id,c.title,coalesce(a.name,''),coalesce(c.bpmx100,0)/100.0,coalesce(%1,''),%2,c.path,"
-                                 "coalesce(%3,'') FROM content c LEFT JOIN artist a ON a.artist_id=c.artist_id_artist%4%5 "
-                                 "WHERE c.content_id IN (%6)")
-                      .arg(keyed ? "k.name" : "''", kDeviceSeconds, imaged ? "i.path" : "''",
-                           keyed ? " LEFT JOIN \"key\" k ON k.key_id=c.key_id" : "", imaged ? " LEFT JOIN image i ON i.image_id=c.image_id" : "",
-                           marks.join(','));
-        } else {
-            sql = QStringLiteral("SELECT c.ID,c.Title,coalesce(a.Name,''),coalesce(c.BPM,0)/100.0,coalesce(k.ScaleName,''),coalesce(c.Length,0),"
-                                 "c.FolderPath,coalesce(%1,'') FROM djmdContent c LEFT JOIN djmdArtist a ON a.ID=c.ArtistID "
-                                 "LEFT JOIN djmdKey k ON k.ID=c.KeyID WHERE c.ID IN (%2)")
-                      .arg(has("djmdContent", {"ImagePath"}) ? "c.ImagePath" : "''", marks.join(','));
-        }
-        Query q(db_, sql);
-        for (size_t i = 0; i < n; ++i) q.bind(qint64(unique[at + i]));
-        while (q.next()) {
-            CatalogTrack t{q.text(0), q.text(1), q.text(2), q.real(3), q.text(4), q.real(5), q.text(6), QString()};
-            if (!q.text(7).isEmpty()) t.artwork = joined(root(), q.text(7));
-            found[q.text(0).toUInt()] = t;
-        }
-    }
-    return found;
-}
-
 std::optional<Located> Library::locate(const std::vector<uint32_t> &ids, int rows) {
     std::vector<uint32_t> unique;
     for (uint32_t id : ids) if (id) unique.push_back(id);
