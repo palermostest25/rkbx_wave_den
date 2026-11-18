@@ -95,7 +95,6 @@ private:
     void onController(midi::Kind kind, int value, int deck);
     void followRekordboxBrowser(std::shared_ptr<const ReaderFrame> frame);
     void syncLoadTargets();
-    bool redirectControllerLoad(const std::map<int, QString> &before, const std::map<int, QString> &paths);
     void watchRekordbox();
     void stepAside(const QString &why, const std::vector<host::Popup> &popups);
     void comeBack();
@@ -151,10 +150,10 @@ private:
     // The controller.
     std::optional<std::tuple<int, QString, int, int, int, std::vector<uint32_t>>> mirrored_;
     bool controllerSeen_ = false, knobLogged_ = false;
-    double pressedAt_ = 0;
     std::map<int, QString> deckPaths_;
-    struct Redirect { int deck; QString rekordboxPick; double deadline; };
-    std::optional<Redirect> redirect_;
+    double liveSince_ = 0;                        // when Rekordbox's bridge went live, for the controller
+    double knobOpened_ = 0;                       // the knob opened the browser and it's been left to it since
+    static constexpr double kKnobIdle = 20;       // seconds alone before it goes back to the waveforms
     // The monitor.
     QPointer<QScreen> connectedScreen_;
     bool holdWindowed_ = false;

@@ -64,24 +64,31 @@ bool shared() {
 #endif
 }
 
-std::optional<Action> browseAction(const QString &function, int status) {
-    // Rekordbox's maps name these a little differently between controllers, so names are matched loosely.
-    QString key = function.toCaseFolded();
-    key.remove(QRegularExpression("[^a-z0-9]"));
-    const bool note = (status & 0xF0) == 0x90, control = (status & 0xF0) == 0xB0;
-    if (key == QLatin1String("zoom") && control) return Action{Kind::Zoom};
-    if (key.contains("shift") || key.contains("zoom") || key.contains("preview")) return std::nullopt;
-    if (control && key.contains("sampler") && (key.contains("vol") || key.contains("level") || key.contains("gain")))
+std::optional<Action> browseAction(const QString &function, int status, const QString &control) {
+    // By the function Rekordbox gives a control (the map's first column) and the control itself (its second):
+    // DDJ-FLX10's are Browse, ForwardAndLoad (Browse+Press), Back, SwitchActiveWindow (BrowseView) and
+    // SamplerVolume. Other controllers name them a little differently, so names are also matched loosely.
+    auto squash = [](const QString &text) { QString k = text.toCaseFolded(); return k.remove(QRegularExpression("[^a-z0-9+]")); };
+    const QString key = squash(function), button = squash(control);
+    const bool note = (status & 0xF0) == 0x90, cc = (status & 0xF0) == 0xB0;
+    if (key == QLatin1String("zoom") && cc) return Action{Kind::Zoom};  // SHIFT + BROWSE: the waveforms' zoom
+    // Shifted or long-press layers do something else (tag a track, related tracks, area...).
+    if (button.contains(QLatin1String("+shift")) || button.contains(QLatin1String("+longpress")) || key.contains("shift") ||
+        key.contains("zoom") || key.contains("preview"))
+        return std::nullopt;
+    if (cc && key.contains("sampler") && (key.contains("vol") || key.contains("level") || key.contains("gain")))
         return Action{Kind::SamplerZoom};
     const bool browser = key.contains("brows") || key.contains("rotary") || key.contains("selector");
-    if (browser && control) return Action{Kind::Browse};
+    if (browser && cc) return Action{Kind::Browse};
+    if (note && (key == QLatin1String("forwardandload") || button == QLatin1String("browse+press"))) return Action{Kind::Press};
     static const QStringList presses = {"press", "push", "click", "focus", "enter", "select"};
     bool pressed = false;
     for (const QString &w : presses) pressed = pressed || key.contains(w);
     if ((browser && note && pressed) || ((key == "browse" || key == "browser") && note)) return Action{Kind::Press};
     static const QStringList backs = {"back", "browseback", "browserback", "browsebackward", "backbutton"};
-    if (note && backs.contains(key)) return Action{Kind::Back};
-    if (note && key.contains("view")) return Action{Kind::View};  // VIEW, BrowserView, ViewChange…
+    if (note && (backs.contains(key) || button == QLatin1String("back"))) return Action{Kind::Back};
+    if (note && (key == QLatin1String("switchactivewindow") || button == QLatin1String("browseview") || key.contains("view")))
+        return Action{Kind::View};  // BROWSE VIEW on the FLX10; VIEW, BrowserView... elsewhere
     const auto load = QRegularExpression("^load(?:track|deck|todeck)?(\\d?)$").match(key);
     if (note && load.hasMatch()) return Action{Kind::Load, load.captured(1).isEmpty() ? -1 : load.captured(1).toInt() - 1};
     return std::nullopt;
@@ -90,30 +97,41 @@ std::optional<Action> browseAction(const QString &function, int status) {
 std::pair<QString, Table> loadMap(const QString &text, const QString &fileName) {
     QString name = fileName.section('.', 0, 0);
     Table table;
-    const QRegularExpression midi("^[9Bb][0-9A-Fa-f]{3}$");
+    const QRegularExpression midi("^[89Bb][0-9A-Fa-f]{3}$");
     for (QString line : text.split('\n')) {
         line.remove('\r');
         if (line.startsWith(QChar(0xFEFF))) line.remove(0, 1);
         const QStringList row = csvRow(line);
         if (row.size() > 2 && row[0] == QLatin1String("@file")) name = row[2];
-        if (row.size() < 8 || !midi.match(row[3]).hasMatch()) continue;
-        bool ok = false;
-        const int status = row[3].left(2).toInt(&ok, 16), data1 = row[3].mid(2).toInt(nullptr, 16);
-        // "Zoom" is Rekordbox's own waveform zoom; the rest are the browser's controls.
-        const auto action = browseAction(row[0], status);
-        if (!action) continue;
-        // Deck columns hold the MIDI channel offset each deck sends on.
-        bool any = false;
-        for (int deck = 0; deck < 4; ++deck) {
-            bool numeric = false;
-            const int offset = row[4 + deck].trimmed().toInt(&numeric);
-            if (!numeric || offset >= 16) continue;
-            any = true;
-            Action a = *action;
-            if (a.kind == Kind::Load) a.deck = deck;
-            table.try_emplace({status + offset, data1}, a);
+        if (row.size() < 8 || row[0].startsWith('#')) continue;
+        if (midi.match(row[3].trimmed()).hasMatch()) {
+            // One message, with each deck's MIDI channel offset in its deck column.
+            const int status = row[3].left(2).toInt(nullptr, 16), data1 = row[3].mid(2, 2).toInt(nullptr, 16);
+            const auto action = browseAction(row[0], status, row[1]);
+            if (!action) continue;
+            bool any = false;
+            for (int deck = 0; deck < 4; ++deck) {
+                bool numeric = false;
+                const int offset = row[4 + deck].trimmed().toInt(&numeric);
+                if (!numeric || offset >= 16) continue;
+                any = true;
+                Action a = *action;
+                if (a.kind == Kind::Load || a.kind == Kind::Press) a.deck = deck;
+                table.try_emplace({status + offset, data1}, a);
+            }
+            if (!any) table.try_emplace({status, data1}, *action);  // a control for all decks; LoadDeck3 names its deck
+            continue;
         }
-        if (!any) table.try_emplace({status, data1}, *action);  // a control for all decks; LoadDeck3 names its deck
+        // Each deck's own whole message in its deck column (the FLX10's ForwardAndLoad: 9646, 9647, 9648, 9649).
+        for (int deck = 0; deck < 4; ++deck) {
+            const QString code = row[4 + deck].trimmed();
+            if (!midi.match(code).hasMatch()) continue;
+            const int status = code.left(2).toInt(nullptr, 16), data1 = code.mid(2, 2).toInt(nullptr, 16);
+            auto action = browseAction(row[0], status, row[1]);
+            if (!action) break;
+            action->deck = deck;
+            table.try_emplace({status, data1}, *action);
+        }
     }
     return {name, table};
 }
@@ -289,19 +307,34 @@ void Listener::run() {
         std::lock_guard l(lock_);
         devices_.clear();
     };
+    // Rekordbox comes first: Wave opens the controller only once Rekordbox is running with it (allowed_), lets
+    // go the moment Rekordbox isn't, and after a controller is plugged in waits for Rekordbox to take it.
+    // Where Windows shares MIDI (Windows MIDI Services) both read it; where it doesn't, Rekordbox keeps it.
+    double settleUntil = 0;
     while (!stop_) {
         if (maps_.empty() && now() >= retry) {
             retry = now() + 5;
             loadMaps();
             if (!maps_.empty()) names.reset();  // reopen with maps to match against
         }
+        // Only where Windows shares MIDI: with classic Windows MIDI, opening the port in a moment Rekordbox let go of
+        // it (a re-plug, its own MIDI settings) would take the controller from Rekordbox's decks.
+        if (!allowed_ || !shared()) {
+            if (names) { closeAll(); names.reset(); }
+            for (int i = 0; i < 25 && !stop_; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            continue;
+        }
         QStringList current;
         for (UINT i = 0; i < midiInGetNumDevs(); ++i) {
             MIDIINCAPSW caps{};
             current << (midiInGetDevCapsW(i, &caps, sizeof caps) == MMSYSERR_NOERROR ? QString::fromWCharArray(caps.szPname) : QString());
         }
-        if (!names || *names != current) {
-            closeAll();  // port numbers shift when devices come and go: reopen all
+        if (names && *names != current) {
+            closeAll();  // port numbers shift when devices come and go: reopen all, after Rekordbox has
+            names.reset();
+            settleUntil = now() + 15;
+        }
+        if (!names && now() >= settleUntil) {
             names = current;
             QStringList busy;
             for (int i = 0; i < current.size(); ++i) {

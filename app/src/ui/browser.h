@@ -3,6 +3,7 @@
 // load bar below. Queries run on a worker of their own, so the waveforms never wait for the library.
 #pragma once
 
+#include "core/bridge.h"
 #include "core/library.h"
 
 #include <QFrame>
@@ -62,6 +63,10 @@ public:
 
     void setOpenOn(const QString &mode) { openOn_ = mode; }      // "single" or "double" tap opens a playlist
     void setKeyboard(const QString &which) { keyboardMode_ = which; }  // "wave" or "windows"
+    // Rekordbox's own browser, as its knob moves it: the list its cursor is in, highlighted where it is, so the
+    // controller's push and LOAD load exactly what Wave shows.
+    void mirror(const bridge::Browser &browser);
+    bool mirroring() const { return view_.kind == QLatin1String("rekordbox"); }
     void setDecks(const std::vector<int> &order, const std::map<int, QString> &locked, const QString &unavailable,
                   const std::map<int, QString> &loaded);
     void showLoadStatus(const QString &text);
@@ -69,6 +74,7 @@ public:
     // Library work on the browser's worker; ``done`` runs on the UI thread.
     void locate(const QString &source, const std::vector<uint32_t> &ids, int rows, std::function<void(std::optional<Located>)> done);
     void tracksForPaths(const QStringList &paths, std::function<void(std::map<QString, CatalogTrack>)> done);
+    void tracksForIds(const std::map<QString, std::vector<uint32_t>> &ids, std::function<void(std::map<uint32_t, CatalogTrack>)> done);
     void shutdown();
 
 signals:
@@ -111,6 +117,10 @@ private:
     std::map<int, QString> locked_;
     QString unavailable_;
     QStringList deviceRoots_;
+    std::map<QString, CatalogTrack> known_;             // file -> its track, for Rekordbox's rows
+    std::vector<std::pair<uint32_t, QString>> mirrored_;  // the rows shown from Rekordbox's list
+    std::optional<bridge::Browser> lastMirror_;
+    bool resolving_ = false;
 
     SourceTile *sourceTile_;
     std::map<QString, NavTile *> tiles_;

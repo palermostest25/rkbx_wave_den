@@ -24,7 +24,7 @@ struct Action { Kind kind; int deck = -1; };  // deck: for LOAD, -1 when the map
 using Table = std::map<std::pair<int, int>, Action>;  // (status, data1) -> action
 
 bool shared();                                         // the controller can be read beside Rekordbox here
-std::optional<Action> browseAction(const QString &function, int status);
+std::optional<Action> browseAction(const QString &function, int status, const QString &control = {});
 std::pair<QString, Table> loadMap(const QString &csvText, const QString &fileName);
 std::optional<std::pair<QString, Table>> findMap(const QString &device, const std::vector<std::pair<QString, Table>> &maps);
 std::vector<std::array<int, 3>> messages(const QByteArray &data);  // (status, data1, data2)
@@ -40,6 +40,8 @@ public:
     QStringList controllers() const;     // the connected controllers with a Rekordbox map
     std::set<Kind> controls() const;     // which browser controls their maps have
     QString status() const;
+    // Windows: may Wave open the controller now (Rekordbox is running with it)? macOS shares it always.
+    void setAllowed(bool on) { allowed_ = on; }
 
 signals:
     // Browse: ``value`` steps (+ clockwise); Zoom: steps; SamplerZoom: the knob 0-127; others: a press.
@@ -61,6 +63,7 @@ private:
     QString status_;
     QThread *thread_ = nullptr;
     std::atomic<bool> stop_{false};
+    std::atomic<bool> allowed_{false};
 #ifdef Q_OS_MACOS
 public:
     void macPackets(const void *list, quintptr source);

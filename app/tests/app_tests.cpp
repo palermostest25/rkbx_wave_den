@@ -17,6 +17,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLabel>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -50,6 +51,19 @@ const char *kFlx10 = "@file,1,DDJ-FLX10,,,,,,,,,,,,\n"
                      "SamplerVolume,SamplerVolume,Knob,B602,,,,,,,,,,,Sampler volume\n"
                      "Zoom,Browse+Shift,Rotary,B664,,,,,,,,,,,Scaling Waveform for all deck\n"
                      "GetLoopActive,LoopState,Indicator,,,,,,,9F04,9F05,9F06,9F07,RO;Priority=100,\n";
+// The browser rows of Rekordbox 7.2.19's own DDJ-FLX10.midi.csv, as it ships.
+const char *kFlx10Real = "@file,1,DDJ-FLX10\n"
+    "#name,function,type,input,deck1,deck2,deck3,deck4,output,deck1,deck2,deck3,deck4,option,comment\n"
+    "Browse,Browse,Rotary,B640,,,,,,,,,,,Browse(Track/Folder Select)\n"
+    "Zoom,Browse+Shift,Rotary,B664,,,,,,,,,,,Scaling Waveform for all deck\n"
+    "ForwardAndLoad,Browse+Press,Button,,9646,9647,9648,9649,,,,,,,Load to Deck / Instant Double (double click)\n"
+    "Back,Back,Button,9665,,,,,,,,,,,Library Back (Folder Close)\n"
+    "Area,Back+Shift,Button,9666,,,,,,,,,,,Area (Change panel type from among several types)\n"
+    "SwitchActiveWindow,BrowseView,Button,967A,,,,,,,,,,,BROWSE VIEW\n"
+    "AddToTagList,BrowseView+LongPress,Button,9667,,,,,,,,,,,Tag Track\n"
+    "RelatedTracks,BrowseView+Shift,Button,9668,,,,,,,,,,,Related Track\n"
+    "SamplerVolume,SamplerVolume,KnobSliderHiRes,B603,,,,,,,,,,,Sampler Volume\n"
+    "LoadedIndicator,LoadedIndicator,Indicator,,,,,,,9F00,9F01,9F02,9F03,RO;Priority=100,Trigger for Load illumination\n";
 }  // namespace
 
 class AppTests : public QObject {
@@ -232,6 +246,33 @@ private slots:
         QVERIFY(listener.controls().count(midi::Kind::View));
     }
 
+    void rekordboxsOwnFlx10MapIsReadAsItShips() {
+        const auto [name, table] = midi::loadMap(QString::fromLatin1(kFlx10Real), "DDJ-FLX10.midi.csv");
+        QCOMPARE(name, QStringLiteral("DDJ-FLX10"));
+        auto at = [&](int status, int data) { return table.count({status, data}) ? std::optional(table.at({status, data})) : std::nullopt; };
+        QCOMPARE(int(at(0xB6, 0x40)->kind), int(midi::Kind::Browse));
+        QCOMPARE(int(at(0xB6, 0x64)->kind), int(midi::Kind::Zoom));
+        for (int deck = 0; deck < 4; ++deck) {  // each deck's LOAD: a full code in the deck's own column
+            QVERIFY(at(0x96, 0x46 + deck));
+            QCOMPARE(int(at(0x96, 0x46 + deck)->kind), int(midi::Kind::Press));
+            QCOMPARE(at(0x96, 0x46 + deck)->deck, deck);
+        }
+        QCOMPARE(int(at(0x96, 0x65)->kind), int(midi::Kind::Back));
+        QCOMPARE(int(at(0x96, 0x7A)->kind), int(midi::Kind::View));  // BROWSE VIEW
+        QCOMPARE(int(at(0xB6, 0x03)->kind), int(midi::Kind::SamplerZoom));
+        QVERIFY(!at(0x96, 0x66));  // SHIFT + BACK, VIEW held and SHIFT + VIEW are Rekordbox's alone
+        QVERIFY(!at(0x96, 0x67));
+        QVERIFY(!at(0x96, 0x68));
+        QVERIFY(!at(0x9F, 0x00));  // an indicator, out
+        midi::Listener listener;
+        listener.addDevice(1, "DDJ-FLX10", table);
+        QSignalSpy spy(&listener, &midi::Listener::controller);
+        listener.receive(1, QByteArray::fromHex("967a7f" "967a00" "96487f"));
+        QCOMPARE(spy.count(), 2);
+        QCOMPARE(spy[0][0].value<midi::Kind>(), midi::Kind::View);
+        QCOMPARE(spy[1][2].toInt(), 2);
+    }
+
     // --- Updates and setup -----------------------------------------------------------------------
     void onlyANewerChecksummedGitHubReleaseIsOffered() {
         QCOMPARE(versionNumbers("v3.0.10"), (QList<int>{3, 0, 10}));
@@ -394,6 +435,34 @@ private slots:
         bool located = false;
         page.locate({}, {2, 1}, 2, [&](std::optional<Located> found) { located = found && found->name == QLatin1String("Friday"); });
         QTRY_VERIFY(located);
+        // Rekordbox's own list, as its knob moves it: titled from the library, its cursor highlighted, headed by
+        // the playlist's name; BACK leaves it for Wave's own playlists.
+        bridge::Browser rb;
+        rb.rows = 2; rb.cursor = 1; rb.first = 0; rb.focus = "list";
+        rb.tracks = {{2, "/nine.wav"}, {1, "/ten.wav"}};
+        page.mirror(rb);
+        QVERIFY(page.mirroring());
+        QTRY_COMPARE(table->model()->index(0, 1).data().toString(), QStringLiteral("Nine"));
+        QCOMPARE(table->model()->index(1, 1).data().toString(), QStringLiteral("Ten"));
+        QCOMPARE(page.selectedTrack()->title, QStringLiteral("Ten"));
+        bool counted = false;
+        for (QLabel *l : page.findChildren<QLabel *>()) counted |= l->text().contains(QStringLiteral("2 of 2"));
+        QVERIFY(counted);  // where Rekordbox's cursor is, in its list
+        bool headed = false;
+        for (int i = 0; i < 100 && !headed; ++i) {
+            for (QAbstractButton *b : page.findChildren<QAbstractButton *>()) headed |= b->text().contains(QStringLiteral("Friday"));
+            for (QLabel *l : page.findChildren<QLabel *>()) headed |= l->text().contains(QStringLiteral("Friday"));
+            if (!headed) QTest::qWait(20);
+        }
+        QVERIFY(headed);
+        rb.cursor = 0;
+        page.mirror(rb);
+        QCOMPARE(page.selectedTrack()->title, QStringLiteral("Nine"));  // the knob turned back
+        loads.clear();
+        page.setDecks({0, 1}, {{0, ""}, {1, ""}}, {}, {});
+        QVERIFY(page.goBack());
+        QVERIFY(!page.mirroring());
+        QTRY_COMPARE(list->model()->rowCount(), 1);
         page.shutdown();
         qunsetenv("RKBX_WAVE_MASTER_DB");
     }
