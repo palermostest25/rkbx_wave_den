@@ -24,6 +24,7 @@
 namespace wave::midi {
 
 enum class Kind { Browse, Press, Back, View, Load, Zoom, SamplerZoom };
+enum class Keep { Nothing, View, Browser };  // what the bridge keeps from Rekordbox for Wave
 struct Action { Kind kind; int deck = -1; };  // deck: for LOAD, -1 when the map doesn't say
 using Table = std::map<std::pair<int, int>, Action>;  // (status, data1) -> action
 
@@ -47,10 +48,12 @@ public:
     // Windows: may Wave open the controller now (Rekordbox is running with it)? macOS shares it always.
     void setAllowed(bool on) { allowed_ = on; }
     // Windows: keep the browse knob, its push, BACK, VIEW and LOAD from Rekordbox, for Wave's browser.
-    void setKeeping(bool on) { keeping_ = on; }
-    bool keeping() const { return keeping_ && throughRekordbox_; }  // asked, and the bridge does it
+    void setKeeping(Keep what) { keeping_ = int(what); }
+    void setKeeping(bool on) { setKeeping(on ? Keep::Browser : Keep::Nothing); }
+    // Wave's browser has the browse controls: asked, and the bridge does it.
+    bool keeping() const { return keeping_ == int(Keep::Browser) && throughRekordbox_; }
     bool throughRekordbox() const { return throughRekordbox_; }     // heard through Wave's bridge in Rekordbox
-    static std::vector<std::pair<int, int>> keys(const Table &table);  // what keeping keeps
+    static std::vector<std::pair<int, int>> keys(const Table &table, Keep what = Keep::Browser);  // what keeping keeps
     void assumeThroughRekordbox(bool on) { throughRekordbox_ = on; }    // tests: as the bridge would report
 
 signals:
@@ -75,7 +78,8 @@ private:
     QString status_;
     QThread *thread_ = nullptr;
     std::atomic<bool> stop_{false};
-    std::atomic<bool> allowed_{false}, keeping_{false}, throughRekordbox_{false};
+    std::atomic<bool> allowed_{false}, throughRekordbox_{false};
+    std::atomic<int> keeping_{0};
 #ifdef Q_OS_MACOS
 public:
     void macPackets(const void *list, quintptr source);

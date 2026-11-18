@@ -1,4 +1,5 @@
 #include "app/reader.h"
+#include "core/streamed.h"
 
 #include "core/clock.h"
 #include "core/library.h"
@@ -198,10 +199,10 @@ void Reader::run() {
                     info.artist = track->artist;
                     info.key = track->key;
                     info.artwork = track->artwork;
-                    // Rekordbox keeps a streamed track's title encrypted: say where it streams from instead.
-                    if (info.title.startsWith(QLatin1String("$A")) && info.title.contains(QLatin1String(":v"))) {
+                    // A streamed track's title is read from Rekordbox's encrypted copy; if that fails, where it streams from.
+                    if (info.title.isEmpty() || isStreamedText(info.title)) {
                         info.title = service.isEmpty() ? QStringLiteral("Streamed track") : QStringLiteral("%1 track").arg(service);
-                        if (info.artist.startsWith(QLatin1String("$A"))) info.artist.clear();
+                        if (isStreamedText(info.artist)) info.artist.clear();
                     }
                 } else if (!service.isEmpty()) {
                     info.title = QStringLiteral("%1 track").arg(service);

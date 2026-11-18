@@ -52,7 +52,8 @@ enum : int { NUM_PLAYERS, IS_LOADED, IS_LOADING, IS_PLAYING, POSITION_MS, TOTAL_
              TEMPO_SELECT, MESSAGE_CTOR, POST_MESSAGE, LOAD_TEMPLATE, DATABASE_GET, GET_ROW_DATA_TRACK,
              TRACK_CTOR, TRACK_DTOR, TRACK_BASIC_INFO, BROWSE_INSTANCE, BROWSE_MANAGERS, LIST_CONTAINER,
              CONTAINER_LIST, TREE_VIEWER, ROW_TRACK, SELECTED_ROWS, LIST_BOX, HAS_FOCUS, DEVICE_ROOT,
-             ALL_DEVICES, CRT_FREE, STICK_DATABASE, STICK_LOAD, STICK_ROW, MIDI_CALLBACK, MIDI_OPEN, CODE_COUNT };
+             ALL_DEVICES, CRT_FREE, STICK_DATABASE, STICK_LOAD, STICK_ROW, MIDI_CALLBACK, MIDI_OPEN, PERFORM, SPLIT_SCREEN,
+             CODE_COUNT };
 // FNV-1a of each function's first bytes; entries never called pin what the bridge reads directly:
 // PLAYER_CONTROL the graph's players (+0x430/+0x43c), ENGINE_GET and DATABASE_GET the singletons,
 // MAIN_COMPONENT its static, LOAD_TEMPLATE (whole) the load message and UiManager offset.
@@ -113,7 +114,15 @@ constexpr Code kCode[CODE_COUNT] = {
     // and the one midiInOpen that passes it (CALLBACK_FUNCTION). The bridge hears the controller there.
     {0x1410692b0, 0x29, 0x97482164307fc9cbULL},  // midiInCallback(HMIDIIN, UINT, DWORD_PTR instance, msg, time)
     {0x141069ab0, 0x24, 0x401859268165a48bULL},  // midiInOpen(&handle, id, midiInCallback, collector, 0x30000)
+    // Rekordbox's own commands: MainComponent is its JUCE ApplicationCommandTarget (at +0x238), and perform runs a
+    // command as its menus and buttons do. Show Split Screen (0xB04C, the browser's own bottom-right button too)
+    // toggles the split browser window through +0x328's slot 0x190, reading nothing else of the request.
+    {0x141824840, 0x30, 0xea4f7fb0902eb0edULL},  // MainComponent::perform(const InvocationInfo &)
+    {0x141826fa9, 0x20, 0x882a3c70274bc1ceULL},  // ... its Show Split Screen case
 };
+constexpr uint64_t kCommandTargetVtable = 0x1439e11c8ULL;  // MainComponent's ApplicationCommandTarget vtable
+constexpr uint64_t kCommandTarget = 0x238;                 // that base, inside MainComponent
+constexpr int kShowSplitScreen = 0xB04C;
 
 struct JString { const char *text; };  // juce::String: one pointer to its UTF-8 text
 struct CueInfo { int32_t in, out; };   // djengine::StCueInfo: `long` is 32-bit on Windows
@@ -529,6 +538,26 @@ int load(const void *dj, int players, const BridgeCommand &c, char *message, siz
     return result;
 }
 
+// Rekordbox's Show Split Screen, as its View menu and the browser's split-screen button run it: the browser in a
+// window of its own. A toggle: Wave asks only while that window isn't open.
+bool show_split_screen(char *message, size_t size) {
+    const void *main = global(kMainComponent);
+    void *target = main ? const_cast<uint8_t *>(static_cast<const uint8_t *>(main)) + kCommandTarget : nullptr;
+    if (!target || field<uint64_t>(target, 0) != kCommandTargetVtable - kBase + api.slide ||
+        field<uint64_t>(reinterpret_cast<const void *>(kCommandTargetVtable - kBase + api.slide), 4 * 8) !=
+            kCode[PERFORM].address - kBase + api.slide) {
+        snprintf(message, size, "Rekordbox is still starting");
+        return false;
+    }
+    alignas(16) uint8_t info[0x60] = {};  // juce::ApplicationCommandTarget::InvocationInfo: the command, invoked directly
+    const int command = kShowSplitScreen;
+    memcpy(info, &command, sizeof command);
+    using Perform = bool (*)(void *target, const void *info);
+    reinterpret_cast<Perform>(kCode[PERFORM].address - kBase + api.slide)(target, info);
+    snprintf(message, size, "Rekordbox's split screen browser toggled");
+    return true;
+}
+
 void run_command(const void *dj, int players) {
     const BridgeCommand c = shared->command;  // a copy: Wave may be writing the next one
     if (c.seq == shared->reply.seq || command_check(c) != c.check) return;
@@ -550,6 +579,11 @@ void run_command(const void *dj, int players) {
     } else if (c.kind == kCommandMasterTempo) {
         snprintf(message, sizeof message, "Deck %u has no track", c.deck + 1);
         result = kReplyBadDeck;
+    } else if (c.kind == kCommandBrowser && c.content_id) {
+        result = show_split_screen(message, sizeof message) ? kReplyRequested : kReplyNotReady;
+    } else if (c.kind == kCommandBrowser) {
+        snprintf(message, sizeof message, "Wave puts the split screen browser away itself");
+        result = kReplyRequested;
     } else {
         snprintf(message, sizeof message, "Unknown request");
         result = kReplyBadRequest;

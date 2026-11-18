@@ -687,8 +687,12 @@ void MainWindow::watch() {
         // Wave's browser takes the browser controls from Rekordbox while Wave is the screen: not while the DJ
         // chose Rekordbox's browser, Rekordbox's own browser is up (Beatport, Spotify), or Wave stepped aside.
         const Settings &s = session_->settings;
-        midi_->setKeeping(live && s.text("browser") == QLatin1String("wave") && s.flag("knob_loads_wave") &&
-                          !rekordboxBrowsing_ && aside_.isEmpty() && !isMinimized());
+        // While Rekordbox's own browser is up the knob is Rekordbox's, and VIEW only Wave's: it brings Wave back.
+        const bool wave = s.text("browser") == QLatin1String("wave") && s.flag("knob_loads_wave");
+        midi_->setKeeping(!live || !aside_.isEmpty() ? midi::Keep::Nothing
+                          : rekordboxBrowsing_       ? midi::Keep::View
+                          : wave && !isMinimized()   ? midi::Keep::Browser
+                                                     : midi::Keep::Nothing);
     }
     paceFrames();  // frames start as soon as something moves (a deck starts, a preview begins)
     if (!pendingStreaming_.isEmpty()) {
@@ -829,17 +833,37 @@ bool MainWindow::browseInRekordbox(const QString &service) {
     std::optional<host::Win> target;
     for (const host::Win &w : c.panels) if (w.resizable) { target = w; break; }
     if (!target && c.main && !splitAsked_) {
-        // Only the browser, as Split Screen shows it, when Rekordbox's View menu can be reached.
+        // Only the browser, in the window of its own that Rekordbox's split screen button (bottom right of its browser)
+        // opens: through the bridge, as that button runs it; or Rekordbox's View menu where Windows can reach it.
         splitAsked_ = true;
-        if (host::splitScreenFromMenu(c.main->hwnd)) {
-            QTimer::singleShot(900, this, [this, service] { if (!browseInRekordbox(service)) toggleBrowser(); });
+        if (session_->bridged()) session_->showRekordboxBrowser(true, 0, 0);
+        else if (!host::splitScreenFromMenu(c.main->hwnd)) splitAsked_ = false;
+        if (splitAsked_) {
+            // The window takes a moment to appear: look for it a few times, then fall back to the main window.
+            auto look = std::make_shared<std::function<void(int)>>();
+            *look = [this, service, look](int left) {
+                const auto f = session_->lastFrame();
+                const uint32_t pid = f && f->pid ? f->pid : host::rekordboxPid();
+                bool open = false;
+                for (const host::Win &w : host::classify(host::windowsOf(pid)).panels) open = open || w.resizable;
+                if (open || left <= 0) {
+                    const bool shown = browseInRekordbox(service);
+                    splitAsked_ = false;
+                    if (!shown) toggleBrowser();
+                } else {
+                    QTimer::singleShot(300, this, [look, left] { (*look)(left - 1); });
+                }
+            };
+            QTimer::singleShot(300, this, [look] { (*look)(10); });
             return true;
         }
     }
     if (!target) target = c.main;
     if (!target) return false;
     if (streaming) setOnTop(false);
-    host::present(target->hwnd, pageRect(), std::nullopt, true, !streaming);
+    // The split browser fills Wave's screen; Rekordbox's main window stays below Wave's toolbar, for BACK TO WAVE.
+    const bool split = !c.main || target->hwnd != c.main->hwnd;
+    host::present(target->hwnd, split ? host::monitorRect(quintptr(winId())) : pageRect(), std::nullopt, true, !streaming);
     rekordboxBrowsing_ = Browsing{"window", deckPaths(), target->hwnd, c.main && target->hwnd == c.main->hwnd, windowState(), service};
     if (streaming) {
         // Rekordbox's tree has the service by name: select it there, off the UI thread (Rekordbox may be slow to answer).
