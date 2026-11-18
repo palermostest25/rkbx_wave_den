@@ -482,6 +482,13 @@ private slots:
         QCOMPARE(deviceHandle("F:/", devices), int64_t(0));
         QCOMPARE(deviceHandle("/Volumes/USB", {{3, "/Volumes/USB/"}}), int64_t(3));
         QCOMPARE(deviceHandle("E:/", {}), int64_t(0));
+        // A stick's own path for a file on it: at a drive's root (Windows), or in a folder (macOS).
+        QCOMPARE(stickPath("E:/", "E:/Contents/Fred again../a.m4a"), QStringLiteral("/Contents/Fred again../a.m4a"));
+        QCOMPARE(stickPath("E:/", "e:\\Contents\\a.m4a"), QStringLiteral("/Contents/a.m4a"));
+        QCOMPARE(stickPath("E:", "E:/Contents/a.m4a"), QStringLiteral("/Contents/a.m4a"));
+        QCOMPARE(stickPath("/Volumes/USB", "/Volumes/USB/Contents/a.m4a"), QStringLiteral("/Contents/a.m4a"));
+        QVERIFY(stickPath("E:/", "F:/Contents/a.m4a").isEmpty());
+        QVERIFY(stickPath("/Volumes/USB", "/Volumes/USB2/a.m4a").isEmpty());
     }
 
     void controlsKeepTheirSettings() {

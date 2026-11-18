@@ -131,6 +131,16 @@ QStringList stickLibraries() {
     return found;
 }
 
+QString stickPath(QString root, QString file) {
+    // A stick at a drive's root is "E:/" (with its slash), one in a folder "/Volumes/USB" (without): either way the
+    // file must be inside it, and its path is kept from the slash after the root.
+    root.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    file.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    while (root.endsWith('/')) root.chop(1);
+    if (root.isEmpty() || !file.startsWith(root + '/', Qt::CaseInsensitive)) return {};
+    return file.mid(root.size());
+}
+
 QString rootKey(const QString &root) {
     QString key = root.trimmed();
     key.replace(QLatin1Char('\\'), QLatin1Char('/'));  // Windows paths, whatever this computer writes
@@ -204,17 +214,15 @@ bool Library::has(const QString &table, const QStringList &columns) {
 std::optional<LibraryTrack> Library::resolvePath(const QString &audioPath) {
     QString stored = audioPath;
     if (device_) {  // a stick stores paths from its own root
-        const QString root = QDir(this->root()).absolutePath();
-        const QString file = QDir::fromNativeSeparators(QFileInfo(audioPath).absoluteFilePath());
-        if (!file.startsWith(root + '/', Qt::CaseInsensitive)) return std::nullopt;
-        stored = file.mid(root.size());
+        stored = stickPath(root(), QFileInfo(audioPath).absoluteFilePath());
+        if (stored.isEmpty()) return std::nullopt;
     }
     const QString key = device_ && has("key", {"key_id", "name"}) && has("content", {"key_id"})
                             ? QStringLiteral("coalesce((SELECT k.name FROM \"key\" k WHERE k.key_id=c.key_id),'')") : QStringLiteral("''");
     const QString sql = device_
         ? QStringLiteral("SELECT c.content_id,c.title,coalesce(a.name,''),%1,c.bpmx100,c.path,c.analysisDataFilePath,"
                          "(SELECT count(*) FROM cue q WHERE q.content_id=c.content_id),0,'',%2,'' "
-                         "FROM content c LEFT JOIN artist a ON a.artist_id=c.artist_id_artist WHERE c.path=? LIMIT 100").arg(kDeviceSeconds, key)
+                         "FROM content c LEFT JOIN artist a ON a.artist_id=c.artist_id_artist WHERE c.path=? COLLATE NOCASE LIMIT 100").arg(kDeviceSeconds, key)
         : QStringLiteral("SELECT c.ID,c.Title,coalesce(a.Name,''),c.Length,c.BPM,c.FolderPath,c.AnalysisDataPath,"
                          "(SELECT count(*) FROM djmdCue q WHERE q.ContentID=c.ID),coalesce(c.DJPlayCount,0),coalesce(c.updated_at,''),"
                          "coalesce((SELECT k.ScaleName FROM djmdKey k WHERE k.ID=c.KeyID),''),coalesce(c.ImagePath,'') "

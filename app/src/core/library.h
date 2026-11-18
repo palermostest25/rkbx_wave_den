@@ -93,6 +93,9 @@ QStringList stickLibraries();               // exportLibrary.db on every mounted
 QString volumeName(const QString &root);    // a stick's name as the computer shows it
 // A drive or mount point compared by what it names: "E:", "E:\\", "E:/" and "\\\\?\\E:\\" are all "e:".
 QString rootKey(const QString &root);
+// A stick's own path for one of its files ("/Contents/a.mp3" for "E:\\Contents\\a.mp3" on the stick at "E:/"),
+// "" when the file isn't on that stick.
+QString stickPath(QString root, QString file);
 std::vector<std::pair<QString, QString>> sources();  // ("Collection", ""), then (name, exportLibrary.db) per stick
 // A collection track's analysis folder sits in Rekordbox's share folder (its cues are in master.db);
 // a stick's sits on the stick (its cues are in its ANLZ files).
