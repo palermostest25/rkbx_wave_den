@@ -33,6 +33,9 @@ struct DeckView {
     uint64_t generation = 0;       // a new number per track, for caches
 };
 
+// The handle Rekordbox gives the stick mounted at ``root``, 0 when Rekordbox hasn't mounted it.
+int64_t deviceHandle(const QString &root, const std::vector<std::pair<int64_t, QString>> &devices);
+
 class Session : public QObject {
     Q_OBJECT
 public:

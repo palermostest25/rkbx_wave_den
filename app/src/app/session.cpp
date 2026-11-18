@@ -380,6 +380,18 @@ void Session::request(std::function<std::pair<bool, QString>(bridge::Client &)> 
     }));
 }
 
+int64_t deviceHandle(const QString &root, const std::vector<std::pair<int64_t, QString>> &devices) {
+    // Rekordbox names a stick by its drive ("E:", "E:\\"…): matched by what it names, not how it's written.
+    const QString wanted = rootKey(root);
+    for (const auto &[h, mounted] : devices)
+        if (h && rootKey(mounted) == wanted) return h;
+    // One stick in Windows and one in Rekordbox are the same stick, however Rekordbox writes its root.
+    if (devices.size() == 1 && devices.front().first && stickLibraries().size() == 1 &&
+        rootKey(QFileInfo(stickLibraries().front()).dir().absoluteFilePath("../..")) == wanted)
+        return devices.front().first;
+    return 0;
+}
+
 bool Session::loadTrack(int idx, const CatalogTrack &track, const QString &source) {
     QString why = loadUnavailable();
     if (why.isEmpty() && loading_) why = QStringLiteral("Still loading %1").arg(loading_->title);
@@ -393,11 +405,15 @@ bool Session::loadTrack(int idx, const CatalogTrack &track, const QString &sourc
         // A stick's export stores paths from its own root; the engine reports the mounted path.
         const QString root = QDir(QFileInfo(source).absolutePath() + "/../..").absolutePath();
         expected = QDir(root).filePath(QString(track.path).remove(0, track.path.startsWith('/') ? 1 : 0));
-        for (const auto &[h, mounted] : frame_ ? frame_->devices : std::vector<std::pair<int64_t, QString>>{})
-            if (QDir::cleanPath(QDir::fromNativeSeparators(mounted)).compare(root, Qt::CaseInsensitive) == 0 ||
-                QDir::cleanPath(QDir::fromNativeSeparators(mounted)).compare(root + '/', Qt::CaseInsensitive) == 0)
-                handle = h;
-        if (!handle) why = QStringLiteral("Rekordbox has not mounted that USB stick yet");
+        const auto devices = frame_ ? frame_->devices : std::vector<std::pair<int64_t, QString>>{};
+        handle = deviceHandle(root, devices);
+        if (!handle) {
+            why = devices.empty() ? QStringLiteral("Rekordbox hasn't opened a USB stick yet: wait a moment after plugging it in")
+                                  : QStringLiteral("Rekordbox has not mounted that USB stick yet");
+            QStringList seen;
+            for (const auto &[h, mounted] : devices) seen << QStringLiteral("%1=%2").arg(h).arg(mounted);
+            qCWarning(lcSession) << "No Rekordbox device for" << root << "; Rekordbox has" << seen;
+        }
     }
     if (!why.isEmpty()) {
         emit loadStatus(why);

@@ -469,6 +469,21 @@ private slots:
         qunsetenv("RKBX_WAVE_MASTER_DB");
     }
 
+    void aStickIsFoundHoweverRekordboxWritesItsDrive() {
+        QCOMPARE(rootKey("E:"), QStringLiteral("e:"));
+        QCOMPARE(rootKey("E:\\"), QStringLiteral("e:"));
+        QCOMPARE(rootKey("e:/"), QStringLiteral("e:"));
+        QCOMPARE(rootKey("\\\\?\\E:\\"), QStringLiteral("e:"));
+        QCOMPARE(rootKey("/Volumes/USB/"), QStringLiteral("/volumes/usb"));
+        QCOMPARE(rootKey("/"), QStringLiteral("/"));
+        const std::vector<std::pair<int64_t, QString>> devices{{7, "D:"}, {9, "E:\\"}};
+        QCOMPARE(deviceHandle("E:/", devices), int64_t(9));
+        QCOMPARE(deviceHandle("d:/", devices), int64_t(7));
+        QCOMPARE(deviceHandle("F:/", devices), int64_t(0));
+        QCOMPARE(deviceHandle("/Volumes/USB", {{3, "/Volumes/USB/"}}), int64_t(3));
+        QCOMPARE(deviceHandle("E:/", {}), int64_t(0));
+    }
+
     void controlsKeepTheirSettings() {
         QTemporaryDir dir;
         Session session(dir.filePath("settings.json"), true);

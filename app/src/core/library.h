@@ -91,6 +91,8 @@ private:
 QString masterDatabase();                   // where Rekordbox keeps master.db
 QStringList stickLibraries();               // exportLibrary.db on every mounted local drive
 QString volumeName(const QString &root);    // a stick's name as the computer shows it
+// A drive or mount point compared by what it names: "E:", "E:\\", "E:/" and "\\\\?\\E:\\" are all "e:".
+QString rootKey(const QString &root);
 std::vector<std::pair<QString, QString>> sources();  // ("Collection", ""), then (name, exportLibrary.db) per stick
 // A collection track's analysis folder sits in Rekordbox's share folder (its cues are in master.db);
 // a stick's sits on the stick (its cues are in its ANLZ files).
