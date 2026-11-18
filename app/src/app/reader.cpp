@@ -62,6 +62,7 @@ void Reader::run() {
     uint32_t pid = 0;
     uint64_t lastTick = ~0ULL;
     bool bridged = false, stale = false, checked = false;
+    int misses = 0;
     std::map<int, QString> paths;
     ReaderFrame last;
     const QString stateFile = QDir(bridge::defaultFolder()).filePath("state.bin");
@@ -108,10 +109,11 @@ void Reader::run() {
             snapshot->older = true;
             snapshot->note = QStringLiteral("Rekordbox has an older Wave bridge loaded: press CONNECT to restart it");
         }
-        if (!snapshot && bridged) {  // caught Rekordbox mid-write: read again, never disconnect
+        if (!snapshot && bridged && ++misses < 100) {  // caught Rekordbox mid-write: read again, never disconnect
             wait(.002);
             continue;
         }
+        if (snapshot) misses = 0;  // a bridge that stays unreadable (it stopped mid-write) is gone, not busy
         if (bridged && snapshot && pid && snapshot->pid == pid && snapshot->status == bridge::Live && !bridge::live(snapshot, pid)) {
             // Rekordbox's main thread is busy (a heavy load, a dialog): its bridge resumes with it, so hold
             // every deck as it is rather than start over.

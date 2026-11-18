@@ -17,6 +17,7 @@
 #include <windows.h>
 #include <initguid.h>
 #include <objbase.h>
+#include <shobjidl.h>
 #endif
 #ifdef Q_OS_MACOS
 #include <IOKit/ps/IOPSKeys.h>
@@ -221,7 +222,22 @@ bool setMode(int value) {
     return ok;
 }
 
+bool windowsKeyboardShown() {
+    // The input pane's own answer: where the touch keyboard is on screen, empty while it is hidden.
+    IFrameworkInputPane *pane = nullptr;
+    bool shown = false;
+    if (SUCCEEDED(CoCreateInstance(CLSID_FrameworkInputPane, nullptr, CLSCTX_INPROC_SERVER, IID_IFrameworkInputPane,
+                                   reinterpret_cast<void **>(&pane))) && pane) {
+        RECT r{};
+        shown = SUCCEEDED(pane->Location(&r)) && r.right > r.left && r.bottom > r.top;
+        pane->Release();
+    }
+    return shown;
+}
+
 void showWindowsKeyboard() {
+    // Windows may have brought it up for the tap already: Toggle would put it away again.
+    if (windowsKeyboardShown()) return;
     // TabTip.exe hosts it; started if it isn't running, then asked to show itself.
     if (!FindWindowW(L"IPTip_Main_Window", nullptr)) {
         wchar_t path[MAX_PATH];
@@ -237,6 +253,7 @@ void showWindowsKeyboard() {
     }
 }
 #else
+bool windowsKeyboardShown() { return false; }
 bool available() { return false; }
 int mode() { return kNoKeyboard; }
 bool setMode(int) { return false; }

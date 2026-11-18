@@ -849,7 +849,7 @@ bool MainWindow::eventFilter(QObject *o, QEvent *e) {
     // A tap on the search box with Windows' keyboard chosen: Windows' own keyboard comes up.
     if (e->type() == QEvent::MouseButtonPress && session_->settings.text("keyboard") == QLatin1String("windows") &&
         o->inherits("QLineEdit") && static_cast<QWidget *>(o)->window() == this)
-        QTimer::singleShot(0, [] { touch::showWindowsKeyboard(); });
+        QTimer::singleShot(300, this, [] { touch::showWindowsKeyboard(); });  // after Windows' own reaction to the tap
     return QMainWindow::eventFilter(o, e);
 }
 
@@ -876,6 +876,7 @@ void MainWindow::setView(const QString &key, const QVariant &value) {
     if (key == "tap_to_open") browser_->setOpenOn(value.toString());
     if (key == "keyboard") { browser_->setKeyboard(value.toString()); touch_.apply(); }
     if (key == "touch_keyboard_off") touch_.apply();
+    if ((key == "keyboard" || key == "touch_keyboard_off") && settings_) settings_->refresh();
     if (key == "dim") static_cast<Dimmer *>(dimmer_)->refresh();
     if (key == "always_on_top") setOnTop(value.toBool());
     canvas_->update();

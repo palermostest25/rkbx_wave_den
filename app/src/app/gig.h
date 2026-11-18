@@ -44,6 +44,7 @@ bool available();
 int mode();                                 // Windows' setting now
 bool setMode(int value);
 void showWindowsKeyboard();                 // Windows' touch keyboard up, for the field that has focus
+bool windowsKeyboardShown();
 
 // Off while Wave runs with its own keyboard, back as it was when Wave closes. The setting to put back is
 // kept in Wave's settings, so a Wave that crashed restores it the next time.
