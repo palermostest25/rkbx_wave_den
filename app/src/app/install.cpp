@@ -223,8 +223,13 @@ int runUninstall(bool ask) {
     for (const QString &link : shortcuts()) QFile::remove(link);
     RegDeleteKeyW(HKEY_LOCAL_MACHINE, kUninstallKey);
     // Wave's own folder goes once this process has ended.
+    // cmd.exe reads its own quoting, not the C runtime's: its command line goes to it as written.
     const QString dir = QDir::toNativeSeparators(QCoreApplication::applicationDirPath());
-    QProcess::startDetached("cmd.exe", {"/c", QStringLiteral("ping -n 3 127.0.0.1 >nul & rmdir /s /q \"%1\"").arg(dir)});
+    QProcess cleanup;
+    cleanup.setProgram(qEnvironmentVariable("ComSpec", "C:\\Windows\\System32\\cmd.exe"));
+    cleanup.setNativeArguments(QStringLiteral("/d /c \"ping -n 3 127.0.0.1 >nul & rmdir /s /q \"%1\"\"").arg(dir));
+    cleanup.setWorkingDirectory(QDir::tempPath());  // not inside the folder it removes
+    cleanup.startDetached();
     return 0;
 #else
     Q_UNUSED(ask);
