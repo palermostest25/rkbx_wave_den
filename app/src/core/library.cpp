@@ -131,6 +131,14 @@ QStringList stickLibraries() {
     return found;
 }
 
+QString rootKey(const QString &root) {
+    QString key = root.trimmed();
+    key.replace(QLatin1Char('\\'), QLatin1Char('/'));  // Windows paths, whatever this computer writes
+    if (key.startsWith(QLatin1String("//?/")) || key.startsWith(QLatin1String("//./"))) key.remove(0, 4);
+    while (key.size() > 1 && key.endsWith('/')) key.chop(1);
+    return key.toCaseFolded();
+}
+
 QString volumeName(const QString &root) {
     const QStorageInfo volume(root);
     if (!volume.name().isEmpty()) return volume.name();

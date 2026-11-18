@@ -1128,11 +1128,11 @@ void BrowserPage::syncDecks() {
 void BrowserPage::showLoadStatus(const QString &text) { message_->setText(text); }
 
 QString BrowserPage::sourceFor(const QString &file) const {
-    const QString f = folded(file);
+    const QString f = rootKey(file);
     for (const QString &root : deviceRoots_) {
-        QString r = folded(root);
-        while (r.endsWith('/')) r.chop(1);
-        if (!r.isEmpty() && f.startsWith(r + '/')) return QDir(root).filePath("PIONEER/rekordbox/exportLibrary.db");
+        const QString r = rootKey(root);
+        if (!r.isEmpty() && r != QLatin1String("/") && f.startsWith(r + '/'))
+            return QDir(QDir::fromNativeSeparators(root)).filePath("PIONEER/rekordbox/exportLibrary.db");
     }
     return {};
 }
