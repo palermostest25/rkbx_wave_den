@@ -124,7 +124,7 @@ jobs:
           path: rb_waveform_core/data/wave-bridge.dll
       - uses: actions/upload-artifact@v4
         with:
-          name: rekordbox-wave-${{ matrix.os }}
+          name: python-wave-${{ matrix.os }}
           path: |
             dist/Rekordbox-Wave-*.exe
             dist/*.dmg
@@ -187,11 +187,22 @@ jobs:
         with:
           path: ${{ runner.temp }}/vcpkg-cache
           key: vcpkg-${{ matrix.triplet }}-${{ env.VCPKG_TAG }}-${{ hashFiles('app/vcpkg.json', 'app/triplets/*') }}
+      - name: Build the Windows Rekordbox bridge
+        if: runner.os == 'Windows'
+        shell: cmd
+        # As the Python build makes it: the same source builds the same bytes, so its name (its hash) holds.
+        run: |
+          for /f %%i in ('git rev-parse HEAD:native') do set TREE=%%i
+          set BRIDGE_VERSION=%TREE:~0,7%
+          mkdir bridge
+          cl /nologo /std:c++17 /O2 /MT /EHsc /W4 /LD /Brepro /DWAVE_BRIDGE_VERSION=\"%BRIDGE_VERSION%\" native\win_bridge\wave_bridge_win.cpp /Fe:bridge\wave-bridge.dll /Fo:bridge\ /link /Brepro user32.lib
+          dumpbin /exports bridge\wave-bridge.dll | findstr wave_bridge_attach
       - name: Build
         shell: bash
         run: |
           pip install ninja || true
-          args=(-DCMAKE_BUILD_TYPE=Release)
+          args=(-DCMAKE_BUILD_TYPE=Release -DWAVE_PACKAGED=ON)
+          if [ "$RUNNER_OS" = Windows ]; then args+=("-DWAVE_BRIDGE_LIBRARY=$PWD/bridge/wave-bridge.dll"); fi
           if [ -n "${{ matrix.triplet }}" ]; then
             args+=("-DCMAKE_TOOLCHAIN_FILE=$RUNNER_TEMP/vcpkg/scripts/buildsystems/vcpkg.cmake"
                    "-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}" "-DVCPKG_HOST_TRIPLET=${{ matrix.triplet }}"
@@ -212,6 +223,88 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir app-build --output-on-failure
+      - name: Package for Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist, validation | Out-Null
+          Copy-Item "app-build\Rekordbox Wave.exe" "dist\Rekordbox Wave.exe"
+          # One self-contained exe: nothing but Windows' own libraries.
+          $deps = dumpbin /dependents "dist\Rekordbox Wave.exe" | Select-String '\.dll' | ForEach-Object { $_.ToString().Trim() }
+          $deps
+          $foreign = $deps | Where-Object { $_ -match '^(Qt|lib|msvcp|vcruntime|sqlite)' }
+          if ($foreign) { throw "Wave needs DLLs it doesn't carry: $foreign" }
+          Copy-Item "dist\Rekordbox Wave.exe" dist\Rekordbox-Wave-Windows-x64.exe
+          $run = Start-Process "dist\Rekordbox Wave.exe" -ArgumentList '--demo','--config','validation\profile.json','--smoke-test','validation\windows-demo.png' -Wait -PassThru
+          if ($run.ExitCode) { throw "Wave did not start" }
+          foreach ($page in 'settings','browser') {
+            $run = Start-Process "dist\Rekordbox Wave.exe" -ArgumentList '--demo','--config','validation\profile.json','--page',$page,'--smoke-test',"validation\windows-$page.png" -Wait -PassThru
+            if ($run.ExitCode) { throw "Wave did not show $page" }
+          }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          $version = (Select-String -Path app\CMakeLists.txt -Pattern 'project\(RekordboxWave VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          & $iscc /Q "/DAppVersion=$version" installer\windows\RekordboxWave.iss
+          if ($LASTEXITCODE) { throw "The installer did not build" }
+      - name: Install, start and uninstall with the Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Start-Process dist\Rekordbox-Wave-Setup-Windows-x64.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=desktopicon' -Wait
+          $folder = "$env:LOCALAPPDATA\Programs\Rekordbox Wave"
+          if (-not (Test-Path "$folder\Rekordbox Wave.exe")) { throw "Wave was not installed" }
+          $run = Start-Process "$folder\Rekordbox Wave.exe" -ArgumentList '--demo','--config','validation\installed.json','--smoke-test','validation\installed.png' -Wait -PassThru
+          if ($run.ExitCode) { throw "The installed Wave did not start" }
+          Start-Process "$folder\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait
+          Start-Sleep -Seconds 3
+          if (Test-Path "$folder\Rekordbox Wave.exe") { throw "Wave was not uninstalled" }
+      - name: Install from the portable exe into Program Files, start, uninstall
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # The runner is an administrator, so Windows doesn't ask: the same steps INSTALL takes.
+        run: |
+          $run = Start-Process "dist\Rekordbox Wave.exe" -ArgumentList '--install' -Wait -PassThru
+          if ($run.ExitCode) { throw "--install failed ($($run.ExitCode))" }
+          $exe = "$env:ProgramFiles\Rekordbox Wave\Rekordbox Wave.exe"
+          if (-not (Test-Path $exe)) { throw "Not in Program Files" }
+          if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Rekordbox Wave.lnk")) { throw "No Start menu shortcut" }
+          if (-not (Test-Path "$env:PUBLIC\Desktop\Rekordbox Wave.lnk")) { throw "No desktop shortcut" }
+          $entry = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\RekordboxWave'
+          if ($entry.DisplayName -ne 'Rekordbox Wave') { throw "Not in installed apps" }
+          $run = Start-Process $exe -ArgumentList '--demo','--config','validation\pf.json','--smoke-test','validation\program-files.png' -Wait -PassThru
+          if ($run.ExitCode) { throw "The installed Wave did not start" }
+          $run = Start-Process $exe -ArgumentList '--uninstall-now' -Wait -PassThru
+          if ($run.ExitCode) { throw "--uninstall-now failed" }
+          Start-Sleep -Seconds 6
+          if (Test-Path "$env:ProgramFiles\Rekordbox Wave") { throw "Wave's folder is still there" }
+          if (Test-Path "$env:PUBLIC\Desktop\Rekordbox Wave.lnk") { throw "The desktop shortcut is still there" }
+      - name: Package for macOS
+        if: runner.os == 'macOS'
+        run: |
+          name=$([ "${{ matrix.arch }}" = arm64 ] && echo AppleSilicon || echo Intel)
+          mkdir -p dist validation dmg
+          cp -R "app-build/Rekordbox Wave.app" dmg/
+          macdeployqt "dmg/Rekordbox Wave.app"
+          codesign --force --deep --sign - --identifier io.github.palermostest25.rekordbox-wave "dmg/Rekordbox Wave.app"
+          codesign -dv "dmg/Rekordbox Wave.app" 2>&1 | grep Identifier=io.github.palermostest25.rekordbox-wave
+          codesign --verify --deep --strict "dmg/Rekordbox Wave.app"
+          "dmg/Rekordbox Wave.app/Contents/MacOS/Rekordbox Wave" --demo --config validation/profile.json --smoke-test "$PWD/validation/mac-demo.png"
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "Rekordbox Wave" -srcfolder dmg -format UDZO "dist/Rekordbox-Wave-macOS-$name.dmg"
+      - uses: actions/upload-artifact@v4
+        if: runner.os != 'Linux'
+        with:
+          name: wave-release-${{ matrix.os }}
+          path: |
+            dist/Rekordbox-Wave-*.exe
+            dist/*.dmg
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os != 'Linux'
+        with:
+          name: wave-screens-${{ matrix.os }}
+          path: validation/
+          if-no-files-found: ignore
       - name: Show vcpkg logs
         if: failure() && runner.os == 'Windows'
         shell: bash
@@ -219,14 +312,14 @@ jobs:
   release:
     # A pushed v* tag drafts a release with every download; publish it from GitHub after checking it.
     if: startsWith(github.ref, 'refs/tags/v') || startsWith(inputs.release_tag, 'v')
-    needs: build
+    needs: [build, app]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: rekordbox-wave-*
+          pattern: wave-release-*
           merge-multiple: true
           path: downloads
       - env:
