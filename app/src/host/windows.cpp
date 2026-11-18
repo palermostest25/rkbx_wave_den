@@ -77,17 +77,18 @@ QRect windowRect(quintptr hwnd) {
     return QRect(QPoint(r.left, r.top), QPoint(r.right - 1, r.bottom - 1));
 }
 
-void present(quintptr hwnd, std::optional<QRect> rect, std::optional<QPoint> centre, bool activate) {
+void present(quintptr hwnd, std::optional<QRect> rect, std::optional<QPoint> centre, bool activate, bool topmost) {
     HWND w = h(hwnd);
+    const HWND order = topmost ? HWND_TOPMOST : HWND_TOP;
     if (IsIconic(w) || (rect && IsZoomed(w))) ShowWindow(w, activate ? SW_RESTORE : SW_SHOWNOACTIVATE);  // they ignore a new rectangle
     const UINT flags = SWP_SHOWWINDOW | (activate ? 0 : SWP_NOACTIVATE);
-    if (rect) SetWindowPos(w, HWND_TOPMOST, rect->left(), rect->top(), rect->width(), rect->height(), flags);
+    if (rect) SetWindowPos(w, order, rect->left(), rect->top(), rect->width(), rect->height(), flags);
     else if (centre) {
         RECT r{};
         GetWindowRect(w, &r);
-        SetWindowPos(w, HWND_TOPMOST, centre->x() - (r.right - r.left) / 2, centre->y() - (r.bottom - r.top) / 2, 0, 0, flags | SWP_NOSIZE);
+        SetWindowPos(w, order, centre->x() - (r.right - r.left) / 2, centre->y() - (r.bottom - r.top) / 2, 0, 0, flags | SWP_NOSIZE);
     } else {
-        SetWindowPos(w, HWND_TOPMOST, 0, 0, 0, 0, flags | SWP_NOMOVE | SWP_NOSIZE);
+        SetWindowPos(w, order, 0, 0, 0, 0, flags | SWP_NOMOVE | SWP_NOSIZE);
     }
     if (activate) {
         BringWindowToTop(w);
@@ -205,12 +206,47 @@ bool Automation::press(quintptr hwnd, const QString &button) {
     return pressed;
 }
 
+bool Automation::select(quintptr hwnd, const QString &name) {
+    if (!automation_) return false;
+    bool done = false;
+    walk(static_cast<IUIAutomation *>(automation_), hwnd, [&](IUIAutomationElement *e, CONTROLTYPEID type) {
+        if (type != UIA_TreeItemControlTypeId && type != UIA_ListItemControlTypeId && type != UIA_DataItemControlTypeId &&
+            type != UIA_ButtonControlTypeId && type != UIA_TextControlTypeId)
+            return true;
+        if (!nameOf(e).trimmed().startsWith(name, Qt::CaseInsensitive)) return true;
+        IUIAutomationSelectionItemPattern *item = nullptr;
+        if (SUCCEEDED(e->GetCurrentPatternAs(UIA_SelectionItemPatternId, __uuidof(IUIAutomationSelectionItemPattern),
+                                             reinterpret_cast<void **>(&item))) && item) {
+            done = SUCCEEDED(item->Select());
+            item->Release();
+        }
+        if (!done) {
+            IUIAutomationInvokePattern *invoke = nullptr;
+            if (SUCCEEDED(e->GetCurrentPatternAs(UIA_InvokePatternId, __uuidof(IUIAutomationInvokePattern), reinterpret_cast<void **>(&invoke))) &&
+                invoke) {
+                done = SUCCEEDED(invoke->Invoke());
+                invoke->Release();
+            }
+        }
+        if (!done) {
+            IUIAutomationLegacyIAccessiblePattern *legacy = nullptr;
+            if (SUCCEEDED(e->GetCurrentPatternAs(UIA_LegacyIAccessiblePatternId, __uuidof(IUIAutomationLegacyIAccessiblePattern),
+                                                 reinterpret_cast<void **>(&legacy))) && legacy) {
+                done = SUCCEEDED(legacy->DoDefaultAction());
+                legacy->Release();
+            }
+        }
+        return !done;
+    });
+    return done;
+}
+
 #else  // not Windows: Rekordbox's windows are reached through macOS Accessibility (popups.cpp) instead
 
 std::vector<Win> windowsOf(uint32_t) { return {}; }
 bool alive(quintptr) { return false; }
 QRect windowRect(quintptr) { return {}; }
-void present(quintptr, std::optional<QRect>, std::optional<QPoint>, bool) {}
+void present(quintptr, std::optional<QRect>, std::optional<QPoint>, bool, bool) {}
 void putBack(quintptr, bool) {}
 void setTopmost(quintptr, bool) {}
 bool splitScreenFromMenu(quintptr) { return false; }
@@ -218,6 +254,7 @@ Automation::Automation() {}
 Automation::~Automation() {}
 bool Automation::read(quintptr, QStringList *, QStringList *) { return false; }
 bool Automation::press(quintptr, const QString &) { return false; }
+bool Automation::select(quintptr, const QString &) { return false; }
 
 #endif
 

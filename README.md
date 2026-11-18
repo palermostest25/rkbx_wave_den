@@ -26,6 +26,9 @@ Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
   album or key, with search and your choice of keyboard: Wave's own keys, or Windows' touch keyboard. Turn the controller's browse knob and Wave's
   highlight moves; press the knob to open a playlist, BACK to go up; press LOAD on the controller and
   the track picked in Wave goes onto that deck. Or tap a deck's LOAD button on screen.
+- **Beatport and Spotify:** the BEATPORT and SPOTIFY tiles in Wave's browser bring Rekordbox's own browser
+  over Wave on that service (sign in there the first time; Rekordbox shows only then). Load a track and Wave
+  is back on the waveforms, with the streamed track's waveform once Rekordbox has analysed it.
 - **Or Rekordbox's own browser, over Wave** (Settings › Browser): it goes away by itself after a load.
 - **Touch preview:** touch or drag a deck's whole-track overview to see that part of the track in its
   lane; it glides back to the playhead when you let go. Tap the big time to flip remaining and elapsed.

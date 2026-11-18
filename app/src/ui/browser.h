@@ -73,6 +73,7 @@ public:
 
 signals:
     void loadRequested(int deck, const wave::CatalogTrack &track, const QString &source);
+    void streamingRequested(const QString &service);  // "Beatport", "Spotify": through Rekordbox's own browser
 
 private:
     struct View { QString kind = "tracks"; QString category, parent; std::optional<std::pair<QString, QString>> scope;

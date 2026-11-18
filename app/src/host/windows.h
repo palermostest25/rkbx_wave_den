@@ -34,7 +34,8 @@ bool alive(quintptr hwnd);
 QRect windowRect(quintptr hwnd);
 // Put a Rekordbox window above Wave's always-on-top window: into ``rect`` (physical pixels), or centred at
 // ``centre``, or where it is.
-void present(quintptr hwnd, std::optional<QRect> rect = {}, std::optional<QPoint> centre = {}, bool activate = true);
+void present(quintptr hwnd, std::optional<QRect> rect = {}, std::optional<QPoint> centre = {}, bool activate = true,
+             bool topmost = true);
 void putBack(quintptr hwnd, bool minimize = true);         // undo present
 bool splitScreenFromMenu(quintptr hwnd);                   // View › Show Split Screen, when there is a native menu
 void setTopmost(quintptr hwnd, bool on);
@@ -48,6 +49,8 @@ public:
     // Texts (the window's name first) and button names; ``press`` presses the named button of that window.
     bool read(quintptr hwnd, QStringList *texts, QStringList *buttons);
     bool press(quintptr hwnd, const QString &button);
+    // Selects (or invokes) the first list or tree item of the window whose name starts with ``name``.
+    bool select(quintptr hwnd, const QString &name);
 
 private:
     void *automation_ = nullptr;

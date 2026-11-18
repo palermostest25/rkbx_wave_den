@@ -24,6 +24,8 @@
 #include <QScreen>
 #include <QShortcut>
 #include <QStackedWidget>
+#include <QThread>
+#include <QThreadPool>
 #include <QTime>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -196,6 +198,7 @@ MainWindow::MainWindow(Session *session, QWidget *parent)
     browser_ = new BrowserPage;
     browser_->setOpenOn(session_->settings.text("tap_to_open"));
     browser_->setKeyboard(session_->settings.text("keyboard"));
+    connect(browser_, &BrowserPage::streamingRequested, this, &MainWindow::openStreaming);
     connect(browser_, &BrowserPage::loadRequested, this, [this](int deck, const CatalogTrack &t, const QString &source) {
         session_->loadTrack(deck, t, source);
     });
@@ -657,6 +660,14 @@ bool MainWindow::redirectControllerLoad(const std::map<int, QString> &before, co
 
 void MainWindow::watch() {
     paceFrames();  // frames start as soon as something moves (a deck starts, a preview begins)
+    if (!pendingStreaming_.isEmpty()) {
+        const auto f = session_->lastFrame();
+        if (f && f->state == host::State::Live && browseInRekordbox(pendingStreaming_)) pendingStreaming_.clear();
+        else if (now() - pendingSince_ > 90) {
+            showBanner(QStringLiteral("Rekordbox didn't come up for %1: press REKORDBOX to open it yourself").arg(pendingStreaming_), "warn", {}, {}, 10000, "streaming");
+            pendingStreaming_.clear();
+        }
+    }
     syncLoadTargets();
     watchRekordbox();
     updateStatus();
@@ -767,17 +778,19 @@ QRect MainWindow::pageRect() const {
     return r;
 }
 
-bool MainWindow::browseInRekordbox() {
+bool MainWindow::browseInRekordbox(const QString &service) {
     // Rekordbox's browser in front until a track is loaded. macOS, through the bridge: its Split Screen
     // browser window over Wave. Windows: its browser window - or its main window - over Wave, below the toolbar.
+    // For a streaming service Wave stops being always-on-top meanwhile, so a sign-in (Rekordbox's own, or a
+    // web page) can come to the front.
     const auto f = session_->lastFrame();
+    const bool streaming = !service.isEmpty();
 #ifdef Q_OS_MACOS
     if (!session_->bridged()) return false;
+    if (streaming) setOnTop(false);
     const QPoint centre = frameGeometry().center();
     session_->showRekordboxBrowser(true, centre.x(), centre.y());
-    rekordboxBrowsing_ = Browsing{"mac", deckPaths(), 0, false, windowState()};
-    syncNav();
-    return true;
+    rekordboxBrowsing_ = Browsing{"mac", deckPaths(), 0, false, windowState(), service};
 #elif defined(Q_OS_WIN)
     const uint32_t pid = f && f->pid ? f->pid : host::rekordboxPid();
     if (!pid) return false;
@@ -788,21 +801,49 @@ bool MainWindow::browseInRekordbox() {
         // Only the browser, as Split Screen shows it, when Rekordbox's View menu can be reached.
         splitAsked_ = true;
         if (host::splitScreenFromMenu(c.main->hwnd)) {
-            QTimer::singleShot(900, this, [this] { if (!browseInRekordbox()) toggleBrowser(); });
+            QTimer::singleShot(900, this, [this, service] { if (!browseInRekordbox(service)) toggleBrowser(); });
             return true;
         }
     }
     if (!target) target = c.main;
     if (!target) return false;
-    host::present(target->hwnd, pageRect());
-    rekordboxBrowsing_ = Browsing{"window", deckPaths(), target->hwnd, c.main && target->hwnd == c.main->hwnd, windowState()};
-    syncNav();
-    qCInfo(lcWindow) << "Rekordbox's browser is up over Wave";
-    return true;
+    if (streaming) setOnTop(false);
+    host::present(target->hwnd, pageRect(), std::nullopt, true, !streaming);
+    rekordboxBrowsing_ = Browsing{"window", deckPaths(), target->hwnd, c.main && target->hwnd == c.main->hwnd, windowState(), service};
+    if (streaming) {
+        // Rekordbox's tree has the service by name: select it there, off the UI thread (Rekordbox may be slow to answer).
+        const quintptr hwnd = target->hwnd;
+        QThreadPool::globalInstance()->start([hwnd, service] {
+            host::Automation automation;
+            for (int attempt = 0; attempt < 6 && !automation.select(hwnd, service); ++attempt) QThread::msleep(300);
+        });
+    }
 #else
     Q_UNUSED(f);
     return false;
 #endif
+    syncNav();
+    if (streaming)
+        showBanner(QStringLiteral("%1 in Rekordbox: pick a track and load it (sign in there if it asks). Wave comes back by itself.").arg(service),
+                   "info", QStringLiteral("BACK TO WAVE"), [this] { leaveRekordbox(); }, 0, "streaming");
+    qCInfo(lcWindow) << "Rekordbox's browser is up over Wave" << service;
+    return true;
+}
+
+void MainWindow::openStreaming(const QString &service) {
+    // Rekordbox is opened only for this: started (hidden) if it isn't running, shown when it is ready.
+    if (rekordboxBrowsing_) leaveRekordbox();
+    if (session_->demo()) {
+        showBanner(QStringLiteral("%1 streams through Rekordbox: start Wave without --demo").arg(service), "info", {}, {}, 5000);
+        return;
+    }
+    if (pages_->currentWidget() == browser_) toggleBrowser();
+    if (browseInRekordbox(service)) return;
+    pendingStreaming_ = service;
+    pendingSince_ = now();
+    if (!host::rekordboxPid()) session_->connectRekordbox();
+    showBanner(QStringLiteral("Opening %1 in Rekordbox…").arg(service), "info", QStringLiteral("CANCEL"),
+               [this] { pendingStreaming_.clear(); hideBanner("streaming"); }, 0, "streaming");
 }
 
 void MainWindow::leaveRekordbox() {
@@ -811,6 +852,8 @@ void MainWindow::leaveRekordbox() {
     rekordboxBrowsing_.reset();
     syncNav();
     if (!browsing) return;
+    hideBanner("streaming");
+    if (!browsing->service.isEmpty()) setOnTop(session_->settings.flag("always_on_top"));
     if (browsing->kind == "mac") session_->showRekordboxBrowser(false, 0, 0);
     else if (browsing->kind == "window") host::putBack(browsing->hwnd, !browsing->main || session_->settings.flag("hide_rekordbox"));
     else {
@@ -841,6 +884,16 @@ void MainWindow::changeEvent(QEvent *e) {
     // Back in Wave after Rekordbox was shown: on top again, unless Wave is stepping aside for a question.
     if (e->type() == QEvent::ActivationChange && isActiveWindow() && aside_.isEmpty() && !rekordboxBrowsing_)
         setOnTop(session_->settings.flag("always_on_top"));
+#ifdef Q_OS_WIN
+    // A tap on Wave while a streaming service is up in Rekordbox: Rekordbox's browser stays in front of Wave.
+    if (e->type() == QEvent::ActivationChange && isActiveWindow() && rekordboxBrowsing_ && !rekordboxBrowsing_->service.isEmpty() &&
+        rekordboxBrowsing_->kind == "window") {
+        const quintptr hwnd = rekordboxBrowsing_->hwnd;
+        QTimer::singleShot(0, this, [this, hwnd] {
+            if (rekordboxBrowsing_ && rekordboxBrowsing_->hwnd == hwnd) host::present(hwnd, pageRect(), std::nullopt, false, false);
+        });
+    }
+#endif
     if (e->type() == QEvent::WindowStateChange) paceFrames();
     QMainWindow::changeEvent(e);
 }

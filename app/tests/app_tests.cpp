@@ -398,6 +398,24 @@ private slots:
         qunsetenv("RKBX_WAVE_MASTER_DB");
     }
 
+    void streamedTracksAreNamedByTheirService() {
+        QCOMPARE(streamingService("spotify:track:4uLU6hMCjMI75M1A2tKUQC"), QStringLiteral("Spotify"));
+        QCOMPARE(streamingService("https://api.beatport.com/v4/catalog/tracks/123"), QStringLiteral("Beatport"));
+        QCOMPARE(streamingService("tidal:track:1"), QStringLiteral("TIDAL"));
+        QVERIFY(streamingService("C:/Music/Spotify Hits/track.mp3").isEmpty());  // a file is a file
+        QVERIFY(streamingService("/Volumes/USB/Contents/a.mp3").isEmpty());
+    }
+
+    void streamingTilesAskForRekordboxsBrowser() {
+        BrowserPage page;
+        QSignalSpy spy(&page, &BrowserPage::streamingRequested);
+        for (QAbstractButton *b : page.findChildren<QAbstractButton *>())
+            if (b->accessibleName() == QLatin1String("Spotify in Rekordbox")) b->click();
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy[0][0].toString(), QStringLiteral("Spotify"));
+        page.shutdown();
+    }
+
     void timesAndLoopsReadAsOnTheDecks() {
         QCOMPARE(clockText(83.47), QStringLiteral("01:23.4"));
         QCOMPARE(clockText(83.47, false), QStringLiteral("01:23"));

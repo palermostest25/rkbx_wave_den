@@ -35,6 +35,8 @@ struct ReaderFrame {
     std::map<int, TrackInfo> tracks;                    // decks whose file changed in this frame
 };
 
+QString streamingService(const QString &path);  // "Spotify" for spotify:track:…, "" for a file
+
 class Reader : public QObject {
     Q_OBJECT
 public:

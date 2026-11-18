@@ -99,7 +99,8 @@ private:
     void watchRekordbox();
     void stepAside(const QString &why, const std::vector<host::Popup> &popups);
     void comeBack();
-    bool browseInRekordbox();
+    bool browseInRekordbox(const QString &service = {});
+    void openStreaming(const QString &service);  // Beatport, Spotify: Rekordbox's own browser, only for this
     void leaveRekordbox();
     void connectRekordbox();
     void offerUpdate();
@@ -142,9 +143,11 @@ private:
     std::optional<double> stuckSince_;
     double closedSeen_ = 0;
     bool toldAccessibility_ = false;
-    struct Browsing { QString kind; std::map<int, QString> tracks; quintptr hwnd = 0; bool main = false; Qt::WindowStates state; };
+    struct Browsing { QString kind; std::map<int, QString> tracks; quintptr hwnd = 0; bool main = false; Qt::WindowStates state; QString service; };
     std::optional<Browsing> rekordboxBrowsing_;
     bool splitAsked_ = false;
+    QString pendingStreaming_;                    // a streaming service asked for while Rekordbox was starting
+    double pendingSince_ = 0;
     // The controller.
     std::optional<std::tuple<int, QString, int, int, int, std::vector<uint32_t>>> mirrored_;
     bool controllerSeen_ = false, knobLogged_ = false;

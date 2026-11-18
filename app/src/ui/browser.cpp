@@ -291,7 +291,7 @@ private:
 class NavTile : public QAbstractButton {
 public:
     NavTile(const QString &kind, QWidget *parent = nullptr) : QAbstractButton(parent), kind_(kind) {
-        setFixedSize(76, 70);
+        setFixedSize(76, 64);
         setAccessibleName(QStringLiteral("Browse by %1").arg(kind.toLower()));
         setFocusPolicy(Qt::NoFocus);
         setCursor(Qt::PointingHandCursor);
@@ -308,7 +308,7 @@ protected:
             p.drawRoundedRect(r, 6, 6);
         }
         const QColor ink = on_ ? Qt::white : QColor("#b9bfc6");
-        const QRectF icon(r.center().x() - 12, r.top() + 9, 24, 24);
+        const QRectF icon(r.center().x() - 12, r.top() + 6, 24, 24);
         p.setPen(QPen(ink, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.setBrush(Qt::NoBrush);
         const QPointF c = icon.center();
@@ -337,6 +337,16 @@ protected:
             p.drawEllipse(c, 11, 11);
             p.drawLine(c, QPointF(c.x(), icon.top() + 5));
             p.drawLine(c, QPointF(c.x() + 6, c.y() + 2));
+        } else if (kind_ == "BEATPORT") {  // streaming: a play button in a circle
+            p.drawEllipse(c, 11, 11);
+            const QPointF tri[] = {{c.x() - 3.5, c.y() - 6}, {c.x() - 3.5, c.y() + 6}, {c.x() + 6.5, c.y()}};
+            p.drawPolygon(tri, 3);
+        } else if (kind_ == "SPOTIFY") {  // streaming: sound waves
+            for (int k = 0; k < 3; ++k) {
+                const double rr = 4 + k * 4.5;
+                p.drawArc(QRectF(icon.left() + 2 - rr, c.y() - rr, 2 * rr, 2 * rr), -50 * 16, 100 * 16);
+            }
+            p.drawPoint(QPointF(icon.left() + 2, c.y()));
         } else if (kind_ == "SEARCH") {
             p.drawEllipse(QPointF(icon.left() + 9, icon.top() + 9), 8, 8);
             p.drawLine(QPointF(icon.left() + 15, icon.top() + 15), QPointF(icon.right() - 1, icon.bottom() - 1));
@@ -590,6 +600,18 @@ BrowserPage::BrowserPage(QWidget *parent) : QWidget(parent), cache_(std::make_sh
         auto *tile = new NavTile(QString::fromLatin1(kind));
         connect(tile, &QAbstractButton::clicked, this, [this, kind] { openCategory(QString::fromLatin1(kind)); });
         tiles_[QString::fromLatin1(kind)] = tile;
+        column->addWidget(tile);
+    }
+    // Streaming services live in Rekordbox (its sign-in, its catalogue): these open them there, over Wave.
+    auto *rule = new QFrame;
+    rule->setFixedHeight(1);
+    rule->setStyleSheet(QStringLiteral("background:#24272b; margin:0 12px;"));
+    column->addWidget(rule);
+    for (const char *service : {"Beatport", "Spotify"}) {
+        auto *tile = new NavTile(QString::fromLatin1(service).toUpper());
+        tile->setAccessibleName(QStringLiteral("%1 in Rekordbox").arg(QString::fromLatin1(service)));
+        tile->setToolTip(QStringLiteral("Browse %1 in Rekordbox's own browser, over Wave").arg(QString::fromLatin1(service)));
+        connect(tile, &QAbstractButton::clicked, this, [this, service] { emit streamingRequested(QString::fromLatin1(service)); });
         column->addWidget(tile);
     }
     column->addStretch();

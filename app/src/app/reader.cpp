@@ -34,6 +34,18 @@ bool sameBrowser(const std::optional<bridge::Browser> &a, const std::optional<br
 
 }  // namespace
 
+QString streamingService(const QString &path) {
+    // How Rekordbox names a streamed file: a service's scheme (spotify:track:…) or its web address.
+    static const std::pair<const char *, const char *> services[] = {
+        {"spotify", "Spotify"}, {"beatport", "Beatport"}, {"beatsource", "Beatsource"}, {"tidal", "TIDAL"},
+        {"soundcloud", "SoundCloud"}, {"apple", "Apple Music"}};
+    const QString p = path.toLower();
+    for (const auto &[key, name] : services)
+        if (p.startsWith(QLatin1String(key)) || p.contains(QLatin1String(key) + QLatin1Char(':')) || p.contains(QLatin1String(key) + QLatin1String(".com")))
+            return QString::fromLatin1(name);
+    return {};
+}
+
 Reader::Reader(QObject *parent) : QObject(parent) { qRegisterMetaType<std::shared_ptr<const ReaderFrame>>(); }
 
 Reader::~Reader() { stop(); }
@@ -179,12 +191,21 @@ void Reader::run() {
             TrackInfo info;
             info.path = path;
             if (!path.isEmpty()) {
+                const QString service = streamingService(path);
                 if (auto track = libraries.resolvePath(path)) {
                     info.analysisFolder = track->analysisFolder;
                     info.title = track->title;
                     info.artist = track->artist;
                     info.key = track->key;
                     info.artwork = track->artwork;
+                    // Rekordbox keeps a streamed track's title encrypted: say where it streams from instead.
+                    if (info.title.startsWith(QLatin1String("$A")) && info.title.contains(QLatin1String(":v"))) {
+                        info.title = service.isEmpty() ? QStringLiteral("Streamed track") : QStringLiteral("%1 track").arg(service);
+                        if (info.artist.startsWith(QLatin1String("$A"))) info.artist.clear();
+                    }
+                } else if (!service.isEmpty()) {
+                    info.title = QStringLiteral("%1 track").arg(service);
+                    info.error = QStringLiteral("Streaming from %1: the waveform shows once Rekordbox has analysed it").arg(service);
                 } else {
                     info.error = QStringLiteral("%1 is not in the Rekordbox library or a mounted USB").arg(QFileInfo(path).fileName());
                 }
