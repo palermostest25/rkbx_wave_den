@@ -235,9 +235,22 @@ std::optional<LibraryTrack> Library::resolvePath(const QString &audioPath) {
 std::vector<Cue> Library::cues(const QString &analysisFolder) {
     std::vector<Cue> out;
     if (device_) return out;
-    Query q(db_, QStringLiteral("SELECT q.InMsec,q.OutMsec,q.Kind FROM djmdCue q JOIN djmdContent c ON c.ID=q.ContentID "
-                                "WHERE c.AnalysisDataPath LIKE ? AND coalesce(q.rb_local_deleted,0)=0"));
-    q.bind(QStringLiteral("%/") + QFileInfo(analysisFolder).fileName() + QStringLiteral("/%"));
+    // The track's id, found once by its analysis folder (a scan of the collection); then its cues by id.
+    const QString name = QFileInfo(analysisFolder).fileName();
+    auto it = cueIds_.find(name);
+    if (it == cueIds_.end()) {
+        Query ids(db_, QStringLiteral("SELECT ID FROM djmdContent WHERE AnalysisDataPath LIKE ?"));
+        ids.bind(QStringLiteral("%/") + name + QStringLiteral("/%"));
+        QStringList found;
+        while (ids.next()) found << ids.text(0);
+        it = cueIds_.emplace(name, found).first;
+    }
+    if (it->second.isEmpty()) return out;
+    QStringList marks;
+    for (int i = 0; i < it->second.size(); ++i) marks << QStringLiteral("?");
+    Query q(db_, QStringLiteral("SELECT InMsec,OutMsec,Kind FROM djmdCue WHERE ContentID IN (%1) AND coalesce(rb_local_deleted,0)=0")
+                     .arg(marks.join(',')));
+    for (const QString &id : it->second) q.bind(id);
     while (q.next()) {
         const qint64 in = q.integer(0), outMs = q.integer(1);
         int number = int(q.integer(2));

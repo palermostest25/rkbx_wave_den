@@ -4,6 +4,7 @@
 #include "host/rekordbox.h"
 
 #include <QDir>
+#include <QDateTime>
 #include <QFileInfo>
 #include <QLoggingCategory>
 #include <QtConcurrent>
@@ -283,6 +284,16 @@ void Session::pollCues() {
     for (int i = 0; i < 4; ++i)
         if (decks_[size_t(i)].analysis && inCollection(decks_[size_t(i)].requested)) folders[i] = decks_[size_t(i)].requested;
     if (folders.empty()) return;
+    // Only when Rekordbox wrote to its library since the last look (or another track came): a stat, not a query.
+    if (masterPath_.isEmpty() || now() > masterCheckedAt_ + 30) { masterPath_ = masterDatabase(); masterCheckedAt_ = now(); }
+    const QFileInfo db(masterPath_), wal(masterPath_ + "-wal");
+    const QString signature = QStringLiteral("%1|%2|%3").arg(db.lastModified().toMSecsSinceEpoch())
+                                  .arg(wal.lastModified().toMSecsSinceEpoch()).arg(wal.size());
+    QStringList all;
+    for (const auto &[idx, folder] : folders) all << QString::number(idx) + folder;
+    if (signature == cueSignature_ && all == cueFolders_) return;
+    cueSignature_ = signature;
+    cueFolders_ = all;
     cuePolling_ = true;
     auto libraries = cueLibraries_;
     auto *watcher = new QFutureWatcher<std::map<int, std::vector<Cue>>>(this);

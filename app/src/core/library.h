@@ -69,6 +69,7 @@ private:
     Library() = default;
     bool has(const QString &table, const QStringList &columns);
     sqlite3 *db_ = nullptr;
+    std::map<QString, QStringList> cueIds_;  // analysis folder name -> the tracks it belongs to
     bool device_ = false;
     QString path_;
 };
