@@ -10,6 +10,8 @@
 #include <QCommandLineParser>
 #include <QDir>
 #include <QIcon>
+#include <QImageReader>
+#include <QSslSocket>
 #include <QLoggingCategory>
 #include <QStyleFactory>
 #include <QSysInfo>
@@ -41,10 +43,18 @@ int main(int argc, char **argv) {
     const QCommandLineOption uninstall("uninstall", "Remove Rekordbox Wave from this computer.");
     const QCommandLineOption uninstallNow("uninstall-now");
     const QCommandLineOption afterInstall("after-install");
+    const QCommandLineOption selfCheck("self-check", "Check this build can read artwork and reach GitHub over HTTPS.");
     const QCommandLineOption page("page", "Open on <page>: settings, browser, or a settings page.", "page");
-    args.addOptions({demo, config, smoke, setup, installRekordbox, installSelf, replace, uninstall, uninstallNow, afterInstall, page});
+    args.addOptions({demo, config, smoke, setup, installRekordbox, installSelf, replace, uninstall, uninstallNow, afterInstall, page, selfCheck});
     args.process(app);
 
+    if (args.isSet(selfCheck)) {
+        // A static build carries only the plugins it was linked with: JPEG for artwork, a TLS backend for updates.
+        const bool jpeg = QImageReader::supportedImageFormats().contains("jpg");
+        const bool tls = QSslSocket::supportsSsl();
+        fprintf(stdout, "jpeg %d, tls %d (%s)\n", jpeg, tls, qPrintable(QSslSocket::availableBackends().join(", ")));
+        return jpeg && tls ? 0 : 1;
+    }
     // The installer's halves: no window, an exit code.
     if (args.isSet(installSelf)) return wave::install::runInstall();
     if (args.isSet(replace)) return wave::install::runReplace(args.value(replace));

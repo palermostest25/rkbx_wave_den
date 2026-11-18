@@ -6,7 +6,7 @@
       "name": "qtbase",
       "platform": "windows",
       "default-features": false,
-      "features": ["gui", "widgets", "png", "network", "testlib", "concurrent"]
+      "features": ["gui", "widgets", "png", "jpeg", "network", "testlib", "concurrent"]
     }
   ]
 }
