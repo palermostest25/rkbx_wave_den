@@ -33,10 +33,23 @@ const char *const kDownloadPage = "https://rekordbox.com/en/download/";
 namespace {
 // Where a maintainer can point Wave at AlphaTheta's exact download for the supported version, without a release.
 const char *kSources = "https://raw.githubusercontent.com/palermostest25/rkbx_wave_den/main/docs/rekordbox-sources.json";
-const QStringList kOfficial = {"https://rekordbox.com/", "https://cdn.rekordbox.com/", "https://www.rekordbox.com/"};
+// AlphaTheta's own installer, hosted on this project's pre-release (the mirror-rekordbox CI job): first choice,
+// as it stays put when rekordbox.com moves on. Checked by its SHA-256 and AlphaTheta's signature like any other.
+const char *kMirror = "https://github.com/palermostest25/rkbx_wave_den/releases/download/rekordbox-7.2.19/Install_rekordbox_x64_7_2_19.exe";
+const char *kMirrorSha256 = "290bfaa2bbab6d4b650d9e8982b5a8eeaaa86ad168eb8dc3f3d506c11310f862";
+const QStringList kOfficial = {"https://rekordbox.com/", "https://cdn.rekordbox.com/", "https://www.rekordbox.com/",
+                               "https://github.com/palermostest25/rkbx_wave_den/releases/download/"};
+// Where GitHub serves release files from, after its redirect.
+const QStringList kGitHubFiles = {"https://objects.githubusercontent.com/", "https://release-assets.githubusercontent.com/"};
 
 bool official(const QString &url) {
     for (const QString &h : kOfficial) if (url.startsWith(h)) return true;
+    return false;
+}
+
+bool servedOfficially(const QString &url) {
+    if (official(url)) return true;
+    for (const QString &h : kGitHubFiles) if (url.startsWith(h)) return true;
     return false;
 }
 
@@ -157,6 +170,7 @@ void Setup::finish(bool ok, const QString &message) {
 void Setup::run(const QString &archive) {
     if (busy_) return;
     busy_ = true;
+    triedMirror_ = triedSite_ = false;
     folder_ = QDir::temp().filePath(QStringLiteral("wave-rekordbox-%1").arg(QDateTime::currentMSecsSinceEpoch()));
     QDir().mkpath(folder_);
     if (!archive.isEmpty()) installFrom(archive);
@@ -164,6 +178,13 @@ void Setup::run(const QString &archive) {
 }
 
 void Setup::find() {
+#ifdef Q_OS_WIN
+    if (!triedMirror_) {
+        triedMirror_ = true;
+        download(QString::fromLatin1(kMirror), QString::fromLatin1(kMirrorSha256));
+        return;
+    }
+#endif
     emit status(QStringLiteral("Looking for Rekordbox %1 on rekordbox.com…").arg(supportedText()));
     emit progress(-1);
     QNetworkReply *reply = net_->get(request(kSources));
@@ -193,7 +214,7 @@ void Setup::find() {
 }
 
 void Setup::download(const QString &url, const QString &sha256) {
-    if (!official(url)) { finish(false, QStringLiteral("Wave only downloads Rekordbox from rekordbox.com")); return; }
+    if (!official(url)) { finish(false, QStringLiteral("Wave only downloads Rekordbox from rekordbox.com or Wave's own release")); return; }
     emit status(QStringLiteral("Downloading Rekordbox %1…").arg(supportedText()));
     const QString target = QDir(folder_).filePath(url.section('/', -1).section('?', 0, 0));
     auto *file = new QFile(target, this);
@@ -202,7 +223,8 @@ void Setup::download(const QString &url, const QString &sha256) {
     QNetworkReply *reply = net_->get(request(url));
     connect(reply, &QNetworkReply::readyRead, this, [reply, file, digest] { const QByteArray b = reply->readAll(); digest->addData(b); file->write(b); });
     connect(reply, &QNetworkReply::downloadProgress, this, [this](qint64 done, qint64 total) { emit progress(total > 0 ? double(done) / total : -1); });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, file, digest, sha256, target] {
+    const bool fromMirror = url == QString::fromLatin1(kMirror);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, file, digest, sha256, target, fromMirror] {
         reply->deleteLater();
         const QByteArray b = reply->readAll();
         digest->addData(b);
@@ -211,8 +233,11 @@ void Setup::download(const QString &url, const QString &sha256) {
         file->deleteLater();
         const QString got = QString::fromLatin1(digest->result().toHex());
         delete digest;
-        if (reply->error() != QNetworkReply::NoError) finish(false, reply->errorString());
-        else if (!official(reply->url().toString())) finish(false, QStringLiteral("The download was redirected away from rekordbox.com"));
+        if (reply->error() != QNetworkReply::NoError) {
+            if (fromMirror && !triedSite_) { triedSite_ = true; find(); return; }  // the hosted copy is unreachable: rekordbox.com
+            finish(false, reply->errorString());
+        }
+        else if (!servedOfficially(reply->url().toString())) finish(false, QStringLiteral("The download was redirected away from rekordbox.com"));
         else if (!sha256.isEmpty() && got != sha256) finish(false, QStringLiteral("The Rekordbox download did not match its checksum"));
         else installFrom(target);
     });

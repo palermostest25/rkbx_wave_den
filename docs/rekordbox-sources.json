@@ -1,5 +1,13 @@
 {
   "_comment": "AlphaTheta's own downloads of the Rekordbox version Wave supports. Wave reads this from the main branch when the DJ installs Rekordbox from Settings; only rekordbox.com URLs are used, and every installer's AlphaTheta signature is checked before it runs. Fill in url (and sha256) when the version changes.",
-  "windows": {"version": "7.2.19", "url": "", "sha256": ""},
-  "mac": {"version": "7.2.19", "url": "", "sha256": ""}
+  "windows": {
+    "version": "7.2.19",
+    "url": "https://cdn.rekordbox.com/files/20260914104659/Install_rekordbox_x64_7_2_19.zip",
+    "sha256": "ee0e5aca6e24291aae94e3f1fab971106bea2467ea4a8a0eac1195a1ea901e52"
+  },
+  "mac": {
+    "version": "7.2.19",
+    "url": "",
+    "sha256": ""
+  }
 }

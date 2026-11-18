@@ -62,11 +62,11 @@ Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
    if you like, the desktop, and can start Wave when you sign in. Uninstall it from
    **Settings → Apps** like any other app. The installer is not code-signed yet, so Windows SmartScreen
    may say *"Windows protected your PC"*: click **More info → Run anyway**.
-3. If Rekordbox 7.2.19 isn't installed, leave **Install Rekordbox 7.2.19** ticked. When Wave first
-   starts it downloads AlphaTheta's own installer from rekordbox.com, checks that AlphaTheta signed it,
-   and runs it (Windows asks for permission). If rekordbox.com no longer offers 7.2.19, Wave says so:
-   download it from rekordbox.com yourself and choose the file in **Settings → Rekordbox → USE A
-   DOWNLOADED INSTALLER**.
+3. If Rekordbox 7.2.19 isn't installed, leave **Download and install Rekordbox 7.2.19** ticked. The
+   installer downloads AlphaTheta's own Rekordbox installer (about 660 MB, hosted unmodified on this
+   project's [Rekordbox 7.2.19 pre-release](https://github.com/palermostest25/rkbx_wave_den/releases/tag/rekordbox-7.2.19)),
+   checks its fingerprint, and runs it (Windows asks for permission). Already have Rekordbox 7.2.19? The
+   option isn't offered. Wave can also install it later from **Settings → Rekordbox**.
 
 Prefer no installer? **`Rekordbox-Wave-Windows-x64.exe`** is the same app as a single file that runs
 from anywhere. Press its **INSTALL** button (top right, or Settings → System) to put it in

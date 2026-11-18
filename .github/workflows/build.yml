@@ -10,6 +10,10 @@ on:
         description: 'Only publish the drafted release with this tag (for example v2.5.0); nothing is built'
         required: false
         default: ''
+      mirror_rekordbox:
+        description: 'yes: host the supported Rekordbox (AlphaTheta''s installer, checked) on its pre-release; nothing else runs'
+        required: false
+        default: ''
   push:
     branches: [main, 'overhaul/**', 'complete/**']
     tags: ['v*']
@@ -32,8 +36,55 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets --jq '{draft: .isDraft, files: [.assets[].name]}'
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,url
+  mirror-rekordbox:
+    # AlphaTheta's own Rekordbox installer, as rekordbox.com serves it, checked against its fingerprint and
+    # AlphaTheta's signature, hosted on a pre-release for Wave's installer to fetch. A pre-release is never
+    # offered by Wave's updater, which reads the latest full release only.
+    if: inputs.mirror_rekordbox == 'yes'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: rekordbox-7.2.19
+      URL: https://cdn.rekordbox.com/files/20260914104659/Install_rekordbox_x64_7_2_19.zip
+      ZIP_SHA256: ee0e5aca6e24291aae94e3f1fab971106bea2467ea4a8a0eac1195a1ea901e52
+      EXE_SHA256: 290bfaa2bbab6d4b650d9e8982b5a8eeaaa86ad168eb8dc3f3d506c11310f862
+      REKORDBOX_SHA256: c9ed23e974c51c75e2ec069fbd2679a3dbe606be9e79e9cbbd13d6418ab11c37
+    steps:
+      - name: Fetch, check and unpack AlphaTheta's installer
+        run: |
+          set -eu
+          sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full osslsigncode
+          mkdir out && cd out
+          curl -fsSL --retry 3 -o Install_rekordbox_x64_7_2_19.zip "$URL"
+          echo "$ZIP_SHA256  Install_rekordbox_x64_7_2_19.zip" | sha256sum -c
+          7z x -y Install_rekordbox_x64_7_2_19.zip > /dev/null
+          echo "$EXE_SHA256  Install_rekordbox_x64_7_2_19.exe" | sha256sum -c
+          osslsigncode verify -in Install_rekordbox_x64_7_2_19.exe | tee sig.txt | grep -q "O=AlphaTheta Corporation"
+          grep -q "Signature verification: ok" sig.txt
+          7z x -y -tNsis -o../unpacked Install_rekordbox_x64_7_2_19.exe > /dev/null || true  # its last entry warns
+          echo "$REKORDBOX_SHA256  ../unpacked/rekordbox.exe" | sha256sum -c
+          (cd ../unpacked && 7z a -tzip -mx=5 ../out/rekordbox-7.2.19-windows-unpacked.zip . '-x!$PLUGINSDIR' '-x!$TEMP' > /dev/null)
+          sha256sum Install_rekordbox_x64_7_2_19.zip Install_rekordbox_x64_7_2_19.exe rekordbox-7.2.19-windows-unpacked.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Host it on the pre-release
+        run: |
+          cd out
+          cat > notes.md <<'NOTES'
+          Rekordbox 7.2.19 for Windows, the version Rekordbox Wave supports: AlphaTheta's own installer, unmodified,
+          as rekordbox.com serves it, signed by AlphaTheta Corporation. Wave's Windows installer fetches
+          `Install_rekordbox_x64_7_2_19.exe` from here when Rekordbox 7.2.19 isn't installed, checks its SHA-256 and
+          runs it. `rekordbox-7.2.19-windows-unpacked.zip` is the same installer unpacked, for reference.
+          Rekordbox is AlphaTheta's software and is subject to its licence.
+          NOTES
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "Rekordbox 7.2.19 (for Rekordbox Wave)" --notes-file notes.md \
+            Install_rekordbox_x64_7_2_19.exe Install_rekordbox_x64_7_2_19.zip rekordbox-7.2.19-windows-unpacked.zip SHA256SUMS.txt
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,isPrerelease,assets --jq '{url, isPrerelease, files: [.assets[].name]}'
   build:
-    if: ${{ !startsWith(inputs.publish_tag, 'v') }}
+    if: ${{ !startsWith(inputs.publish_tag, 'v') && inputs.mirror_rekordbox != 'yes' }}
     strategy:
       fail-fast: false
       matrix:
@@ -142,9 +193,9 @@ jobs:
           name: packaged-interface-${{ matrix.os }}
           path: validation/packaged-native.png
   app:
-    # The C++ rewrite (app/). Windows: one static exe (Qt from vcpkg, built once and cached). macOS: Qt's
+    # Wave (app/). Windows: one static exe (Qt from vcpkg, built once and cached). macOS: Qt's
     # frameworks, one build per architecture. Linux: tests only. SQLCipher is built in (app/third_party).
-    if: ${{ !startsWith(inputs.publish_tag, 'v') }}
+    if: ${{ !startsWith(inputs.publish_tag, 'v') && inputs.mirror_rekordbox != 'yes' }}
     strategy:
       fail-fast: false
       matrix:
