@@ -235,6 +235,8 @@ jobs:
           $foreign = $deps | Where-Object { $_ -match '^(Qt|lib|msvcp|vcruntime|sqlite)' }
           if ($foreign) { throw "Wave needs DLLs it doesn't carry: $foreign" }
           Copy-Item "dist\Rekordbox Wave.exe" dist\Rekordbox-Wave-Windows-x64.exe
+          $check = Start-Process "dist\Rekordbox Wave.exe" -ArgumentList '--self-check' -Wait -PassThru
+          if ($check.ExitCode) { throw "This build can't read JPEG artwork or speak HTTPS" }
           $run = Start-Process "dist\Rekordbox Wave.exe" -ArgumentList '--demo','--config','validation\profile.json','--smoke-test','validation\windows-demo.png' -Wait -PassThru
           if ($run.ExitCode) { throw "Wave did not start" }
           foreach ($page in 'settings','browser') {
@@ -288,6 +290,7 @@ jobs:
           codesign --force --deep --sign - --identifier io.github.palermostest25.rekordbox-wave "dmg/Rekordbox Wave.app"
           codesign -dv "dmg/Rekordbox Wave.app" 2>&1 | grep Identifier=io.github.palermostest25.rekordbox-wave
           codesign --verify --deep --strict "dmg/Rekordbox Wave.app"
+          "dmg/Rekordbox Wave.app/Contents/MacOS/Rekordbox Wave" --self-check
           "dmg/Rekordbox Wave.app/Contents/MacOS/Rekordbox Wave" --demo --config validation/profile.json --smoke-test "$PWD/validation/mac-demo.png"
           ln -s /Applications dmg/Applications
           hdiutil create -volname "Rekordbox Wave" -srcfolder dmg -format UDZO "dist/Rekordbox-Wave-macOS-$name.dmg"
