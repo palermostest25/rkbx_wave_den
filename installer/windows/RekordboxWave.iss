@@ -97,8 +97,8 @@ begin
         RekordboxReady := True;
       except
         if not DownloadPage.AbortedByUser then
-          SuppressibleMsgBox('Rekordbox {#RekordboxVersion} could not be downloaded: ' + GetExceptionMessage +
-            #13#10#13#10'Wave installs anyway, and offers Rekordbox again when it starts.', mbInformation, MB_OK, IDOK);
+          SuppressibleMsgBox('Rekordbox {#RekordboxVersion} could not be downloaded: ' + GetExceptionMessage + #13#10#13#10 +
+            'Wave installs anyway, and offers Rekordbox again when it starts.', mbInformation, MB_OK, IDOK);
       end;
     finally
       DownloadPage.Hide;
