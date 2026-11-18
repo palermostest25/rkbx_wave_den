@@ -38,8 +38,8 @@ const QRegularExpression &notice() {
 const QRegularExpression &keep() {
     // Never dismissed for the DJ: Rekordbox may need these answered.
     static const QRegularExpression re(
-        "\\b(sign ?in|log ?in|password|account|licen[cs]e|activat|quit|exit|delete|remove|overwrite|database|backup|"
-        "restore|convert|corrupt|audio device|driver)", QRegularExpression::CaseInsensitiveOption);
+        "\\b(sign ?in|log ?in|password|account|licen[cs]e|activat\\w*|quit|exit|delete|remove|overwrite|database|backup|"
+        "restore|convert|corrupt\\w*|audio device|driver)\\b", QRegularExpression::CaseInsensitiveOption);
     return re;
 }
 

@@ -45,10 +45,14 @@ signals:
     // Browse: ``value`` steps (+ clockwise); Zoom: steps; SamplerZoom: the knob 0-127; others: a press.
     void controller(wave::midi::Kind kind, int value, int deck);
 
+public:
+    // What the platform's MIDI callbacks call; public for tests.
+    void receive(quintptr port, const QByteArray &data);
+    void addDevice(quintptr port, const QString &name, const Table &table);
+
 private:
     void run();
     void loadMaps();
-    void receive(quintptr port, const QByteArray &data);
     bool attach(quintptr port, const QString &name);
 
     std::vector<std::pair<QString, Table>> maps_;

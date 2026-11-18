@@ -90,6 +90,8 @@ QString joined(const QString &root, QString relative) {
 }  // namespace
 
 QString masterDatabase() {
+    const QString override = qEnvironmentVariable("RKBX_WAVE_MASTER_DB");  // tests, and a library kept elsewhere
+    if (!override.isEmpty()) return override;
     // Rekordbox names it in its agent's options.json; master.db beside it otherwise.
     QFile options(QDir(pioneerFolder()).filePath("rekordboxAgent/storage/options.json"));
     if (options.open(QIODevice::ReadOnly)) {

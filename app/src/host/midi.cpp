@@ -240,6 +240,11 @@ bool Listener::attach(quintptr port, const QString &name) {
     return true;
 }
 
+void Listener::addDevice(quintptr port, const QString &name, const Table &table) {
+    std::lock_guard l(lock_);
+    devices_[port] = {name, table};
+}
+
 void Listener::receive(quintptr port, const QByteArray &data) {
     Table table;
     {

@@ -20,8 +20,8 @@ const char *const kAskUpdate = "Rekordbox runs an earlier Wave's bridge: CONNECT
 Policy::Policy(bool windows) : windows(windows) {}
 
 Action Policy::decide(const Seen &seen, double now) {
-    const bool first = first_;
-    first_ = false;
+    const bool wasFirst = first;
+    first = false;
     if (!seen.pid) {
         const uint32_t wentAway = lastPid_;
         lastPid_ = 0;
@@ -36,7 +36,7 @@ Action Policy::decide(const Seen &seen, double now) {
             return launch(now);
         }
         if (starting(now)) return Action::Nothing;
-        if (first && autoStart) return launch(now);
+        if (wasFirst && autoStart) return launch(now);
         ask = kAskStart;
         return Action::Nothing;
     }

@@ -114,3 +114,8 @@ add_executable(core_tests tests/core_tests.cpp)
 target_link_libraries(core_tests PRIVATE wavecore Qt6::Test)
 target_compile_definitions(core_tests PRIVATE WAVE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
 add_test(NAME core_tests COMMAND core_tests)
+
+add_executable(app_tests tests/app_tests.cpp)
+target_link_libraries(app_tests PRIVATE waveapp Qt6::Test)
+add_test(NAME app_tests COMMAND app_tests)
+set_tests_properties(app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

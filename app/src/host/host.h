@@ -45,6 +45,7 @@ public:
 
     bool windows, autoStart = true, autoConnect = true, keepRunning = true;
     bool quitting = false;
+    bool first = true;             // the first look, when Wave has just started
     QString ask;                   // what the DJ is asked to do, when Wave won't act alone
     std::optional<double> launchedAt;
     std::set<uint32_t> owned;
@@ -55,7 +56,7 @@ private:
     Action launch(double now);
     Action restartNow(const Seen &seen, double now);
 
-    bool first_ = true, staleRestarted_ = false;
+    bool staleRestarted_ = false;
     uint32_t lastPid_ = 0;
     std::set<uint32_t> triedAttach_, restarted_;
     std::vector<double> relaunches_, restarts_;
