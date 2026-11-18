@@ -32,6 +32,7 @@ Classified classify(const std::vector<Win> &windows, const std::set<quintptr> &p
 std::vector<Win> windowsOf(uint32_t pid);
 bool alive(quintptr hwnd);
 QRect windowRect(quintptr hwnd);
+QRect monitorRect(quintptr hwnd);   // the whole screen the window is on, in physical pixels
 // Put a Rekordbox window above Wave's always-on-top window: into ``rect`` (physical pixels), or centred at
 // ``centre``, or where it is.
 void present(quintptr hwnd, std::optional<QRect> rect = {}, std::optional<QPoint> centre = {}, bool activate = true,

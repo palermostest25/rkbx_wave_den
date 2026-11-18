@@ -4,6 +4,7 @@
 #include "core/anlz.h"
 #include "core/bridge.h"
 #include "core/library.h"
+#include "core/streamed.h"
 #include "core/settings.h"
 #include "core/timeline.h"
 #include "core/waveform.h"
@@ -45,6 +46,30 @@ class CoreTests : public QObject {
 
 private slots:
     // --- Rekordbox's files --------------------------------------------------------------------
+    void streamedTitlesAreReadAsRekordboxWritesThem() {
+        // Rekordbox's own format, made with its key by its encrypt function's recipe (AES-128-CBC, PKCS#7, Base64).
+        QCOMPARE(revealStreamed("$A7:v1:AAECAwQFBgcICQoLDA0ODw==:v+JW6Kn2zaWWJa1s8T1xJhZuMTV6BaYUE7qBzT/H7Eo="),
+                 QStringLiteral("Danielle (smile on my face)"));
+        QCOMPARE(revealStreamed("$A7:v1:oaGhoaGhoaGhoaGhoaGhoQ==:kl6mF/HrrVRnv6R5ZjojbQ=="), QStringLiteral("Fred again.."));
+        QCOMPARE(revealStreamed("$A7:v1:Dw8PDw8PDw8PDw8PDw8PDw==:wXzKOtEs8DTU4AQ8V/loDWTs2xzghiBD8e3NuEF4y7E="),
+                 QString::fromUtf8("\u00d8 \u00dcn\u00efc\u00f8d\u00e9 \u2013 Beatport"));
+        QCOMPARE(revealStreamed("Plain title"), QStringLiteral("Plain title"));  // anything else, as it is
+        QCOMPARE(revealStreamed("$Aloha"), QStringLiteral("$Aloha"));
+        QVERIFY(revealStreamed("$A7:v1:AAECAwQFBgcICQoLDA0ODw==:AAAA").isEmpty());  // damaged: nothing, never garbage
+        QVERIFY(isStreamedText("$A7:v1:x:y"));
+        QVERIFY(!isStreamedText("$A$AP Rocky"));
+    }
+
+    void aesDecryptsTheStandardExample() {
+        // FIPS-197 appendix C.1 through CBC: with a zero IV the first block is the standard's ciphertext; the second is
+        // the PKCS#7 padding block encrypted after it.
+        const QByteArray key = QByteArray::fromHex("000102030405060708090a0b0c0d0e0f");
+        const QByteArray data = QByteArray::fromHex("69c4e0d86a7b0430d8cdb78070b4c55a9e978e6d16b086570ef794ef97984232");
+        QCOMPARE(aes128CbcDecrypt(key, QByteArray(16, 0), data).toHex(), QByteArray("00112233445566778899aabbccddeeff"));
+        QVERIFY(aes128CbcDecrypt(key, QByteArray(16, 0), data.left(16)).isEmpty());  // no valid padding: nothing
+        QVERIFY(aes128CbcDecrypt(key, QByteArray(15, 0), data).isEmpty());
+    }
+
     void analysisMatchesThePythonApp() {
         const QJsonObject want = expected();
         QString error;

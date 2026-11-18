@@ -77,6 +77,14 @@ QRect windowRect(quintptr hwnd) {
     return QRect(QPoint(r.left, r.top), QPoint(r.right - 1, r.bottom - 1));
 }
 
+QRect monitorRect(quintptr hwnd) {
+    MONITORINFO info{};
+    info.cbSize = sizeof info;
+    if (!GetMonitorInfoW(MonitorFromWindow(h(hwnd), MONITOR_DEFAULTTONEAREST), &info)) return windowRect(hwnd);
+    const RECT &r = info.rcMonitor;
+    return QRect(QPoint(r.left, r.top), QPoint(r.right - 1, r.bottom - 1));
+}
+
 void present(quintptr hwnd, std::optional<QRect> rect, std::optional<QPoint> centre, bool activate, bool topmost) {
     HWND w = h(hwnd);
     const HWND order = topmost ? HWND_TOPMOST : HWND_TOP;
@@ -246,6 +254,7 @@ bool Automation::select(quintptr hwnd, const QString &name) {
 std::vector<Win> windowsOf(uint32_t) { return {}; }
 bool alive(quintptr) { return false; }
 QRect windowRect(quintptr) { return {}; }
+QRect monitorRect(quintptr) { return {}; }
 void present(quintptr, std::optional<QRect>, std::optional<QPoint>, bool, bool) {}
 void putBack(quintptr, bool) {}
 void setTopmost(quintptr, bool) {}

@@ -27,9 +27,11 @@ Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
   keyboard. Turn the controller's browse knob and Wave's browser opens and its highlight moves; push the
   knob to open a playlist, and on a track to load it onto that deck; BACK goes up, VIEW opens and closes
   it. Rekordbox's own browser doesn't move meanwhile. Or tap a track and a deck's LOAD button on screen.
-- **Beatport and Spotify:** the BEATPORT and SPOTIFY tiles in Wave's browser bring Rekordbox's own browser
-  over Wave on that service (sign in there the first time; Rekordbox shows only then). Load a track and Wave
-  is back on the waveforms, with the streamed track's waveform once Rekordbox has analysed it.
+- **Beatport and Spotify:** streamed tracks in your playlists and histories show in Wave's browser with
+  their real titles and artists (Rekordbox keeps them encrypted; Wave reads them as Rekordbox does) and
+  load like any other. To search or browse the services themselves, the BEATPORT and SPOTIFY tiles bring
+  up Rekordbox's own split-screen browser, full screen, on that service (sign in there the first time).
+  Load a track, or press VIEW, and Wave is back on the waveforms.
 - **Or Rekordbox's own browser, over Wave** (Settings › Browser): it goes away by itself after a load.
 - **Touch preview:** touch or drag a deck's whole-track overview to see that part of the track in its
   lane; it glides back to the playhead when you let go. Tap the big time to flip remaining and elapsed.
@@ -161,8 +163,9 @@ OS, Rekordbox version and the status text Wave shows.
 
 - **Windows:** the bridge is new in 2.3 and still being tested on hardware, and connecting live to a running
   Rekordbox is new in 2.5. Try it at home before a gig.
-- **Windows:** Rekordbox's browser is its Split Screen window when it is open (View › Show Split Screen,
-  once), otherwise Rekordbox's main window, laid over Wave below Wave's toolbar.
+- **Windows:** Rekordbox's browser is its split-screen window (the button at the bottom right of
+  Rekordbox's browser, or View › Show Split Screen): Wave opens it through the bridge and lays it over
+  Wave's whole screen.
 - **Windows:** Rekordbox holds the controller, so Wave hears it through its bridge inside Rekordbox, which
   also keeps the browser controls (knob, push, BACK, VIEW, LOAD) from Rekordbox while Wave runs. Everything
   else on the controller is Rekordbox's as always. If Wave quits, Rekordbox has them back within a second.

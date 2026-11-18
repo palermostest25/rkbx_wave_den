@@ -1,4 +1,5 @@
 #include "core/library.h"
+#include "core/streamed.h"
 
 #include "core/clock.h"
 
@@ -236,7 +237,7 @@ std::optional<LibraryTrack> Library::resolvePath(const QString &audioPath) {
         const QString analysis = q.text(6);
         if (analysis.isEmpty()) continue;
         LibraryTrack t;
-        t.id = q.text(0); t.title = q.text(1); t.artist = q.text(2);
+        t.id = q.text(0); t.title = revealStreamed(q.text(1)); t.artist = revealStreamed(q.text(2));
         t.lengthSec = q.real(3); t.bpm = q.real(4) / 100; t.audioPath = q.text(5);
         t.analysisFolder = QFileInfo(joined(root(), analysis)).absolutePath();
         t.key = q.text(10);
@@ -349,7 +350,11 @@ std::pair<int, std::vector<CatalogTrack>> Library::browse(const QString &search,
         fields = QStringLiteral("c.ID,c.Title,coalesce(a.Name,''),coalesce(c.BPM,0)/100.0,coalesce(k.ScaleName,''),coalesce(c.Length,0),"
                                 "c.FolderPath,coalesce(%1,'')").arg(has("djmdContent", {"ImagePath"}) ? "c.ImagePath" : "''");
         tables = QStringLiteral("djmdContent c LEFT JOIN djmdArtist a ON a.ID=c.ArtistID LEFT JOIN djmdKey k ON k.ID=c.KeyID");
-        condition = QStringLiteral("coalesce(c.rb_local_deleted,0)=0 AND c.Title NOT LIKE %1").arg(kEncrypted);
+        // Streamed tracks (Beatport, Spotify...) show in the DJ's playlists and histories, titled as Rekordbox shows them;
+        // in a whole-collection list their encrypted titles can't sort or search, so they stay out of it.
+        const bool list = scope && (scope->first == "PLAYLIST" || scope->first == "HISTORY");
+        condition = list ? QStringLiteral("coalesce(c.rb_local_deleted,0)=0")
+                         : QStringLiteral("coalesce(c.rb_local_deleted,0)=0 AND c.Title NOT LIKE %1").arg(kEncrypted);
         sorts = {{"Title", "c.Title"}, {"Artist", "a.Name"}, {"BPM", "c.BPM"}, {"Key", "k.ScaleName"}, {"Time", "c.Length"}};
         identity = QStringLiteral("c.ID");
     }
@@ -394,7 +399,8 @@ std::pair<int, std::vector<CatalogTrack>> Library::browse(const QString &search,
     for (const QVariant &p : parameters) q.bind(p);
     q.bind(qint64(limit)).bind(qint64(offset));
     while (q.next()) {
-        CatalogTrack t{q.text(0), q.text(1), q.text(2), q.real(3), q.text(4), q.real(5), q.text(6), QString()};
+        CatalogTrack t{q.text(0), revealStreamed(q.text(1)), revealStreamed(q.text(2)), q.real(3), q.text(4), q.real(5), q.text(6), QString()};
+        if (t.title.isEmpty()) t.title = QStringLiteral("Streamed track");
         if (!q.text(7).isEmpty()) t.artwork = joined(root(), q.text(7));
         rows.push_back(t);
     }

@@ -1,7 +1,7 @@
 # Rekordbox Wave, in C++ with Qt 6. Built beside the Python app until it does everything that one does;
 # then releases switch to it. See app/README.md.
 cmake_minimum_required(VERSION 3.21)
-project(RekordboxWave VERSION 3.0.5 LANGUAGES CXX)
+project(RekordboxWave VERSION 3.0.6 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,6 +27,7 @@ add_library(wavecore STATIC
   src/core/bridge.cpp
   src/core/settings.cpp
   src/core/library.cpp
+  src/core/streamed.cpp
 )
 target_include_directories(wavecore PUBLIC src)
 target_link_libraries(wavecore PUBLIC Qt6::Core Qt6::Gui)

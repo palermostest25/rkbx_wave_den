@@ -297,12 +297,13 @@ Table Listener::merged() const {
     return all;
 }
 
-std::vector<std::pair<int, int>> Listener::keys(const Table &table) {
-    // The browser's own controls; the zoom knobs and everything else stay Rekordbox's (Wave only listens).
+std::vector<std::pair<int, int>> Listener::keys(const Table &table, Keep what) {
+    // The browser's own controls (or VIEW alone); the zoom knobs and everything else stay Rekordbox's (Wave only listens).
     std::vector<std::pair<int, int>> out;
     for (const auto &[key, action] : table)
-        if (action.kind == Kind::Browse || action.kind == Kind::Press || action.kind == Kind::Back ||
-            action.kind == Kind::View || action.kind == Kind::Load)
+        if (what == Keep::Browser ? action.kind == Kind::Browse || action.kind == Kind::Press || action.kind == Kind::Back ||
+                                        action.kind == Kind::View || action.kind == Kind::Load
+                                  : what == Keep::View && action.kind == Kind::View)
             out.push_back(key);
     return out;
 }
@@ -363,7 +364,10 @@ void Listener::run() {
         for (const auto &[status, data1, value] : tap.take()) receiveMessage(table, status, data1, value);
         const bool through = tap.hooked();
         throughRekordbox_ = through;
-        tap.keep(through && keeping_ ? keep : std::vector<std::pair<int, int>>{});
+        const Keep keeping = Keep(keeping_.load());
+        tap.keep(!through || keeping == Keep::Nothing ? std::vector<std::pair<int, int>>{}
+                 : keeping == Keep::View             ? keys(table, Keep::View)
+                                                     : keep);
         if (through != wasThrough) {
             wasThrough = through;
             qCInfo(lcMidi) << (through ? "Wave hears the controller through Rekordbox" : "The bridge doesn't hear the controller");
