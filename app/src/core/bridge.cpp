@@ -8,6 +8,7 @@
 #include <QThread>
 #include <QElapsedTimer>
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 
@@ -186,6 +187,94 @@ std::pair<bool, QString> Client::request(Command kind, int deck, uint32_t value,
         QThread::msleep(5);
     }
     return {false, QStringLiteral("Rekordbox did not answer; is it still running?")};
+}
+
+Tap::Tap(const QString &path) : file_(path) {}
+
+Tap::~Tap() {
+    if (map_) {
+        auto *m = &reinterpret_cast<BridgeState *>(map_)->midi;
+        reinterpret_cast<std::atomic<uint32_t> *>(&m->keep_count)->store(0, std::memory_order_release);
+        reinterpret_cast<std::atomic<uint64_t> *>(&m->wave_ns)->store(0, std::memory_order_release);
+        file_.unmap(map_);
+    }
+}
+
+bool Tap::ensure() {
+    if (map_) {
+        const auto *state = reinterpret_cast<const BridgeState *>(map_);
+        if (!std::memcmp(state->magic, kBridgeMagic, sizeof kBridgeMagic) && state->version == kBridgeVersion) return true;
+        file_.unmap(map_);  // another layout: look again later
+        map_ = nullptr;
+        file_.close();
+    }
+    const uint64_t now = uptimeNs();
+    if (now < retryAt_) return false;
+    retryAt_ = now + 1000000000ULL;
+    if (!file_.isOpen() && !file_.open(QIODevice::ReadWrite)) return false;
+    if (file_.size() < qint64(sizeof(BridgeState))) { file_.close(); return false; }
+    map_ = file_.map(0, sizeof(BridgeState));
+    if (!map_) { file_.close(); return false; }
+    const auto *state = reinterpret_cast<const BridgeState *>(map_);
+    if (std::memcmp(state->magic, kBridgeMagic, sizeof kBridgeMagic) || state->version != kBridgeVersion) {
+        file_.unmap(map_);
+        map_ = nullptr;
+        file_.close();
+        return false;
+    }
+    next_ = 0;
+    return true;
+}
+
+std::vector<std::array<int, 3>> Tap::take() {
+    std::vector<std::array<int, 3>> out;
+    hooked_ = false;
+    if (!ensure()) return out;
+    auto *state = reinterpret_cast<BridgeState *>(map_);
+    const uint64_t beat = reinterpret_cast<std::atomic<uint64_t> *>(&state->uptime_ns)->load(std::memory_order_acquire);
+    const uint64_t now = uptimeNs();
+    const BridgeMidi &m = state->midi;
+    hooked_ = reinterpret_cast<const std::atomic<uint32_t> *>(&m.hooked)->load(std::memory_order_acquire) == 1 &&
+              state->status == kStatusLive && beat && now >= beat && now - beat < 1000000000ULL;
+    if (state->pid != pid_) { pid_ = state->pid; next_ = 0; }  // another Rekordbox: its own count
+    if (!hooked_) return out;
+    const uint32_t written = reinterpret_cast<const std::atomic<uint32_t> *>(&m.written)->load(std::memory_order_acquire);
+    if (!next_ || written + 1 < next_) { next_ = written + 1; return out; }  // from now on, not what came before
+    if (written >= next_ + kMidiEvents) next_ = written + 1 - kMidiEvents;  // fell behind: the oldest are gone
+    for (uint32_t i = 0; i < kMidiEvents && next_ <= written; ++i) {
+        const BridgeMidiEvent &e = m.events[(next_ - 1) % kMidiEvents];
+        const auto *seq = reinterpret_cast<const std::atomic<uint32_t> *>(&e.seq);
+        if (seq->load(std::memory_order_acquire) != next_) break;  // still being written
+        const std::array<int, 3> message{e.status, e.data1, e.data2};
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (seq->load(std::memory_order_acquire) != next_) break;  // overwritten while read
+        out.push_back(message);
+        ++next_;
+    }
+    return out;
+}
+
+void Tap::keep(const std::vector<std::pair<int, int>> &controls) {
+    if (!map_) return;
+    auto &m = reinterpret_cast<BridgeState *>(map_)->midi;
+    std::vector<uint16_t> keys;
+    for (const auto &[status, data1] : controls) {
+        const int s = (status & 0xF0) == 0x80 ? 0x90 | (status & 0x0F) : status;
+        const auto key = uint16_t(s << 8 | (data1 & 0x7F));
+        if (std::find(keys.begin(), keys.end(), key) == keys.end() && keys.size() < kMidiKeeps) keys.push_back(key);
+    }
+    auto *count = reinterpret_cast<std::atomic<uint32_t> *>(&m.keep_count);
+    if (keys != keeping_) {
+        count->store(0, std::memory_order_release);  // nothing half-written is ever kept
+        for (size_t i = 0; i < keys.size(); ++i) m.keep[i] = keys[i];
+        count->store(uint32_t(keys.size()), std::memory_order_release);
+        keeping_ = keys;
+    }
+    reinterpret_cast<std::atomic<uint64_t> *>(&m.wave_ns)->store(keys.empty() ? 0 : uptimeNs(), std::memory_order_release);
+}
+
+uint32_t Tap::kept() const {
+    return map_ ? reinterpret_cast<const std::atomic<uint32_t> *>(&reinterpret_cast<const BridgeState *>(map_)->midi.kept)->load() : 0;
 }
 
 }  // namespace wave::bridge

@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QString>
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -66,6 +67,28 @@ private:
     QFile file_;
     uchar *map_ = nullptr;
     bool older_ = false;
+};
+
+// The controller as Rekordbox hears it (Windows): the bridge passes on every message Rekordbox's MIDI input
+// receives, and keeps the controls Wave names from Rekordbox while Wave's heartbeat is fresh.
+class Tap {
+public:
+    explicit Tap(const QString &path);
+    ~Tap();
+    std::vector<std::array<int, 3>> take();  // messages since the last call: (status, data1, data2)
+    bool hooked() const { return hooked_; }  // a live bridge hears Rekordbox's controller input
+    // Keeps these (status, data1) from Rekordbox, and beats: call at least twice a second. {} keeps nothing.
+    void keep(const std::vector<std::pair<int, int>> &controls);
+    uint32_t kept() const;                   // messages kept from Rekordbox so far
+
+private:
+    bool ensure();
+    QFile file_;
+    uchar *map_ = nullptr;
+    uint32_t pid_ = 0, next_ = 0;
+    uint64_t retryAt_ = 0;
+    bool hooked_ = false;
+    std::vector<uint16_t> keeping_;
 };
 
 }  // namespace wave::bridge

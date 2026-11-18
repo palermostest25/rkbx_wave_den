@@ -229,6 +229,7 @@ bool open_shared() {
     shared->status = kStatusStarting;
     memset(shared->note, 0, sizeof shared->note);
     memset(shared->decks, 0, sizeof shared->decks);
+    memset(&shared->midi, 0, sizeof shared->midi);  // Wave reads the controller itself on macOS
     // A request left from an earlier Rekordbox session must never run in this one.
     shared->reply = BridgeReply{};
     shared->reply.seq = shared->command.seq;

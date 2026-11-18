@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "../mac_bridge/bridge_layout.h"
+#include "detour.h"
 
 namespace {
 
@@ -51,7 +52,7 @@ enum : int { NUM_PLAYERS, IS_LOADED, IS_LOADING, IS_PLAYING, POSITION_MS, TOTAL_
              TEMPO_SELECT, MESSAGE_CTOR, POST_MESSAGE, LOAD_TEMPLATE, DATABASE_GET, GET_ROW_DATA_TRACK,
              TRACK_CTOR, TRACK_DTOR, TRACK_BASIC_INFO, BROWSE_INSTANCE, BROWSE_MANAGERS, LIST_CONTAINER,
              CONTAINER_LIST, TREE_VIEWER, ROW_TRACK, SELECTED_ROWS, LIST_BOX, HAS_FOCUS, DEVICE_ROOT,
-             ALL_DEVICES, CRT_FREE, STICK_DATABASE, STICK_LOAD, STICK_ROW, CODE_COUNT };
+             ALL_DEVICES, CRT_FREE, STICK_DATABASE, STICK_LOAD, STICK_ROW, MIDI_CALLBACK, MIDI_OPEN, CODE_COUNT };
 // FNV-1a of each function's first bytes; entries never called pin what the bridge reads directly:
 // PLAYER_CONTROL the graph's players (+0x430/+0x43c), ENGINE_GET and DATABASE_GET the singletons,
 // MAIN_COMPONENT its static, LOAD_TEMPLATE (whole) the load message and UiManager offset.
@@ -108,6 +109,10 @@ constexpr Code kCode[CODE_COUNT] = {
     {0x141f557f0, 0x40, 0x7c8d688eac9c82a1ULL},  // the stick database for a handle (null if unusable)
     {0x14218bdf0, 0x48, 0x8a7f9ea550e6b48fULL},  // a stick database's track table loader
     {0x142190ae0, 0x50, 0x42d649ab558148d3ULL},  // its row lookup: no table (+0x88), no track
+    // The controller: Rekordbox reads every MIDI input with WinMM, through one callback (JUCE's MidiInCollector),
+    // and the one midiInOpen that passes it (CALLBACK_FUNCTION). The bridge hears the controller there.
+    {0x1410692b0, 0x29, 0x97482164307fc9cbULL},  // midiInCallback(HMIDIIN, UINT, DWORD_PTR instance, msg, time)
+    {0x141069ab0, 0x24, 0x401859268165a48bULL},  // midiInOpen(&handle, id, midiInCallback, collector, 0x30000)
 };
 
 struct JString { const char *text; };  // juce::String: one pointer to its UTF-8 text
@@ -173,6 +178,71 @@ uint64_t ticks = 0;
 LARGE_INTEGER frequency;
 bool failed = false;
 
+// --- The controller, as Rekordbox hears it ------------------------------------------------------------------
+// Rekordbox's MIDI callback is detoured to midi_hook: every short message it receives is shared with Wave, and the
+// ones Wave keeps (its browser controls, while Wave runs and says so) never reach Rekordbox. A fault in here
+// passes the message on untouched. The callback's first three instructions (15 bytes, none RIP-relative) move to
+// a trampoline that continues into the rest of it.
+constexpr UINT kMimData = 0x3C3;  // MIM_DATA
+constexpr size_t kMidiPrologue = 15;  // three whole instructions, none RIP-relative
+using MidiProc = void (CALLBACK *)(HANDLE, UINT, DWORD_PTR, DWORD_PTR, DWORD_PTR);  // HMIDIIN
+MidiProc midi_next = nullptr;
+volatile LONG midi_seq = 0;
+volatile LONG midi_broken = 0;
+uint64_t now_ns();
+
+bool wave_keeps(uint32_t status, uint32_t data1) {
+    BridgeMidi &m = shared->midi;
+    const uint64_t wave = *reinterpret_cast<volatile uint64_t *>(&m.wave_ns);
+    const uint64_t now = now_ns();
+    if (!wave || wave > now + 1000000000ULL || now - wave > 1000000000ULL) return false;  // Wave isn't there
+    uint32_t n = *reinterpret_cast<volatile uint32_t *>(&m.keep_count);
+    if (n > kMidiKeeps) n = kMidiKeeps;
+    if ((status & 0xF0) == 0x80) status = 0x90 | (status & 0x0F);  // a note-off is its note-on's release
+    const uint16_t key = static_cast<uint16_t>(status << 8 | data1);
+    for (uint32_t i = 0; i < n; ++i)
+        if (reinterpret_cast<volatile uint16_t *>(m.keep)[i] == key) return true;
+    return false;
+}
+
+bool midi_seen(DWORD_PTR message) {
+    const uint32_t status = static_cast<uint32_t>(message & 0xFF), data1 = static_cast<uint32_t>((message >> 8) & 0x7F),
+                   data2 = static_cast<uint32_t>((message >> 16) & 0x7F);
+    if (status < 0x80 || status >= 0xF0) return false;  // only channel messages: clock and sysex pass by
+    const bool keep = wave_keeps(status, data1);
+    const LONG seq = InterlockedIncrement(&midi_seq);
+    BridgeMidiEvent &e = shared->midi.events[(static_cast<uint32_t>(seq) - 1) % kMidiEvents];
+    e.status = static_cast<uint8_t>(status);
+    e.data1 = static_cast<uint8_t>(data1);
+    e.data2 = static_cast<uint8_t>(data2);
+    e.kept = keep ? 1 : 0;
+    MemoryBarrier();
+    InterlockedExchange(reinterpret_cast<volatile LONG *>(&e.seq), seq);
+    InterlockedExchange(reinterpret_cast<volatile LONG *>(&shared->midi.written), seq);
+    if (keep) InterlockedIncrement(reinterpret_cast<volatile LONG *>(&shared->midi.kept));
+    return keep;
+}
+
+void CALLBACK midi_hook(HANDLE in, UINT message, DWORD_PTR instance, DWORD_PTR param1, DWORD_PTR param2) {
+    bool keep = false;
+    if (message == kMimData && shared && !midi_broken) {
+        __try {
+            keep = midi_seen(param1);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            InterlockedExchange(&midi_broken, 1);
+            keep = false;
+        }
+    }
+    if (!keep) midi_next(in, message, instance, param1, param2);
+}
+
+// Detours the verified callback (see detour.h): Rekordbox's MIDI input goes through midi_hook from now on.
+bool hook_midi() {
+    // midi_next is set before the entry jumps to the hook, which calls it.
+    auto *target = reinterpret_cast<uint8_t *>(kCode[MIDI_CALLBACK].address - kBase + api.slide);
+    return wave_detour::install(target, kMidiPrologue, reinterpret_cast<void *>(&midi_hook), reinterpret_cast<void **>(&midi_next));
+}
+
 template <typename F> F at(int index) { return reinterpret_cast<F>(kCode[index].address - kBase + api.slide); }
 template <typename T> T field(const void *object, size_t offset) {
     return *reinterpret_cast<const T *>(static_cast<const uint8_t *>(object) + offset);
@@ -236,6 +306,7 @@ bool open_shared() {
     memset(shared->decks, 0, sizeof shared->decks);
     memset(shared->devices, 0, sizeof shared->devices);
     memset(&shared->browser, 0, sizeof shared->browser);
+    memset(&shared->midi, 0, sizeof shared->midi);
     shared->browser.rows = -1;
     shared->browser.cursor = -1;
     shared->browser.focus = 2;
@@ -686,6 +757,10 @@ DWORD begin(DWORD wait_ms) {
         publish_status(kStatusFailed, "Could not reach Rekordbox's UI thread");
         return kNoUiThread;
     }
+    // The controller: Wave reads it through Rekordbox, which holds it. Decks work either way.
+    bool hooked = false;
+    __try { hooked = hook_midi(); } __except (EXCEPTION_EXECUTE_HANDLER) { hooked = false; }
+    InterlockedExchange(reinterpret_cast<volatile LONG *>(&shared->midi.hooked), hooked ? 1 : 0);
     return kAttached;
 }
 

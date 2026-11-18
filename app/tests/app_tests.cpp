@@ -2,6 +2,8 @@
 // the controller's maps, the updater's choices, and the window itself, driven as a DJ would.
 #include "app/session.h"
 #include "app/updater.h"
+#include "core/bridge.h"
+#include "../../native/mac_bridge/bridge_layout.h"
 #include "core/library.h"
 #include "host/host.h"
 #include "host/midi.h"
@@ -25,6 +27,9 @@
 #include <QTableView>
 
 #include <sqlite3.h>
+
+#include <algorithm>
+#include <cstring>
 
 using namespace wave;
 using host::Action;
@@ -271,6 +276,83 @@ private slots:
         QCOMPARE(spy.count(), 2);
         QCOMPARE(spy[0][0].value<midi::Kind>(), midi::Kind::View);
         QCOMPARE(spy[1][2].toInt(), 2);
+        // What Wave keeps from Rekordbox: the knob, each deck's push, BACK and VIEW; never the zooms or SHIFT layers.
+        const auto keys = midi::Listener::keys(table);
+        auto kept = [&](int status, int data1) { return std::find(keys.begin(), keys.end(), std::make_pair(status, data1)) != keys.end(); };
+        QVERIFY(kept(0xB6, 0x40));
+        for (int d = 0x46; d <= 0x49; ++d) QVERIFY(kept(0x96, d));
+        QVERIFY(kept(0x96, 0x65));
+        QVERIFY(kept(0x96, 0x7A));
+        QVERIFY(!kept(0xB6, 0x64));  // SHIFT + BROWSE: Rekordbox zooms too
+        QVERIFY(!kept(0xB6, 0x03));  // the sampler volume stays the sampler's
+        QVERIFY(!kept(0x96, 0x66));
+        // Heard through Rekordbox: whole messages, decoded with every connected controller's map.
+        spy.clear();
+        listener.receiveMessage(listener.merged(), 0xB6, 0x40, 0x01);
+        listener.receiveMessage(listener.merged(), 0x96, 0x47, 0x7F);
+        listener.receiveMessage(listener.merged(), 0x96, 0x47, 0x00);
+        QCOMPARE(spy.count(), 2);
+        QCOMPARE(spy[0][1].toInt(), 1);
+        QCOMPARE(spy[1][2].toInt(), 1);  // the push on deck 2
+    }
+
+    void theBridgesControllerInputIsReadOnceAndKeepsWhatWaveAsks() {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("state.bin");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadWrite));
+        file.resize(sizeof(BridgeState));
+        auto *state = reinterpret_cast<BridgeState *>(file.map(0, sizeof(BridgeState)));
+        QVERIFY(state);
+        std::memset(state, 0, sizeof *state);
+        std::memcpy(state->magic, kBridgeMagic, sizeof kBridgeMagic);
+        state->version = kBridgeVersion;
+        state->pid = 42;
+        state->status = kStatusLive;
+        state->uptime_ns = bridge::uptimeNs();
+        state->midi.hooked = 1;
+        uint32_t seq = 0;
+        auto event = [&](int status, int data1, int data2) {
+            ++seq;
+            BridgeMidiEvent &e = state->midi.events[(seq - 1) % kMidiEvents];
+            e.status = uint8_t(status); e.data1 = uint8_t(data1); e.data2 = uint8_t(data2);
+            e.seq = seq;
+            state->midi.written = seq;
+        };
+        event(0xB6, 0x40, 0x01);  // before Wave looked: not Wave's
+        bridge::Tap tap(path);
+        QVERIFY(tap.take().empty());
+        QVERIFY(tap.hooked());
+        event(0xB6, 0x40, 0x7F);
+        event(0x96, 0x46, 0x7F);
+        auto got = tap.take();
+        QCOMPARE(int(got.size()), 2);
+        QCOMPARE(got[0][2], 0x7F);
+        QCOMPARE(got[1][1], 0x46);
+        QVERIFY(tap.take().empty());  // each once
+        for (int i = 0; i < int(kMidiEvents) + 10; ++i) event(0xB6, 0x40, 1);  // Wave fell behind: the newest ring
+        QCOMPARE(int(tap.take().size()), int(kMidiEvents));
+        // A half-written event waits for its number.
+        BridgeMidiEvent &next = state->midi.events[seq % kMidiEvents];
+        state->midi.written = seq + 1;
+        next.status = 0x96;
+        QVERIFY(tap.take().empty());
+        next.seq = seq + 1; ++seq;
+        QCOMPARE(int(tap.take().size()), 1);
+        // Keeping: the controls, a note-off as its note-on, and a fresh heartbeat; nothing kept clears both.
+        tap.keep({{0xB6, 0x40}, {0x86, 0x46}});
+        QCOMPARE(state->midi.keep_count, 2u);
+        QCOMPARE(int(state->midi.keep[0]), 0xB640);
+        QCOMPARE(int(state->midi.keep[1]), 0x9646);
+        QVERIFY(state->midi.wave_ns > 0 && bridge::uptimeNs() - state->midi.wave_ns < 1000000000ULL);
+        tap.keep({});
+        QCOMPARE(state->midi.keep_count, 0u);
+        QCOMPARE(state->midi.wave_ns, uint64_t(0));
+        // A bridge that stopped (no heartbeat), or doesn't hear the controller, is not heard through.
+        state->midi.hooked = 0;
+        tap.take();
+        QVERIFY(!tap.hooked());
+        file.unmap(reinterpret_cast<uchar *>(state));
     }
 
     // --- Updates and setup -----------------------------------------------------------------------
@@ -326,6 +408,65 @@ private slots:
         int coloured = 0;
         for (int x = 100; x < 1200; x += 7) if (qRed(shot.pixel(x, 120)) > 150) ++coloured;
         QVERIFY2(coloured > 20, qPrintable(QString::number(coloured)));
+    }
+
+    void theControllerDrivesWavesBrowserWhenRekordboxDoesnt() {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("master.db");
+        sqlite3 *db = nullptr;
+        sqlite3_open(path.toUtf8().constData(), &db);
+        const QByteArray key = databaseKey(false);
+        sqlite3_key(db, key.constData(), int(key.size()));
+        sqlite3_exec(db, R"(
+          CREATE TABLE djmdContent(ID TEXT,Title TEXT,ArtistID TEXT,KeyID TEXT,BPM INTEGER,Length INTEGER,FolderPath TEXT,rb_local_deleted INTEGER);
+          CREATE TABLE djmdArtist(ID TEXT,Name TEXT);
+          CREATE TABLE djmdKey(ID TEXT,ScaleName TEXT);
+          INSERT INTO djmdContent VALUES('1','Ten','','',10000,300,'/ten.wav',0);
+          INSERT INTO djmdContent VALUES('2','Nine','','',9000,90,'/nine.wav',0);
+        )", nullptr, nullptr, nullptr);
+        sqlite3_close(db);
+        qputenv("RKBX_WAVE_MASTER_DB", path.toUtf8());
+        Session session(dir.filePath("settings.json"), true);
+        session.settings.setView("browser", "wave");
+        MainWindow window(&session);
+        window.resize(1280, 800);
+        window.show();
+        midi::Listener controller;
+        window.useController(&controller);
+        controller.setKeeping(true);
+        controller.assumeThroughRekordbox(true);  // the bridge keeps the knob from Rekordbox
+        QVERIFY(controller.keeping());
+        BrowserPage *page = window.browser();
+        QSignalSpy loads(page, &BrowserPage::loadRequested);
+        auto *table = page->findChild<QTableView *>();
+        QTRY_COMPARE(table->model()->rowCount(), 2);
+        // The knob turned on the waveforms: Wave's browser opens; turned again, its highlight moves.
+        emit controller.controller(midi::Kind::Browse, 1, -1);
+        QTRY_VERIFY(page->isVisible());
+        emit controller.controller(midi::Kind::Browse, 1, -1);
+        QTRY_VERIFY(page->selectedTrack().has_value());
+        QCOMPARE(page->selectedTrack()->title, QStringLiteral("Nine"));
+        emit controller.controller(midi::Kind::Browse, 1, -1);
+        QTRY_COMPARE(page->selectedTrack()->title, QStringLiteral("Ten"));
+        // The push on deck 2: Wave's pick goes onto deck 2 (Rekordbox never heard it). Demo decks refuse loads, so
+        // the decks are opened up for this moment, as a live Rekordbox's are.
+        page->setDecks({0, 1, 2, 3}, {}, {}, {});
+        emit controller.controller(midi::Kind::Press, 0, 1);
+        QCoreApplication::processEvents();
+        QCOMPARE(loads.count(), 1);
+        QCOMPARE(loads[0][0].toInt(), 1);
+        QCOMPARE(loads[0][1].value<CatalogTrack>().title, QStringLiteral("Ten"));
+        // Not kept (Rekordbox's browser has the controls): the push is Rekordbox's to load, never Wave's too.
+        controller.setKeeping(false);
+        page->setDecks({0, 1, 2, 3}, {}, {}, {});
+        emit controller.controller(midi::Kind::Press, 0, 1);
+        QCoreApplication::processEvents();
+        QCOMPARE(loads.count(), 1);
+        // VIEW closes the browser.
+        emit controller.controller(midi::Kind::View, 0, -1);
+        QTRY_VERIFY(!page->isVisible());
+        page->shutdown();
+        qunsetenv("RKBX_WAVE_MASTER_DB");
     }
 
     void controlsKeepTheirSettings() {
@@ -435,39 +576,6 @@ private slots:
         bool located = false;
         page.locate({}, {2, 1}, 2, [&](std::optional<Located> found) { located = found && found->name == QLatin1String("Friday"); });
         QTRY_VERIFY(located);
-        // Rekordbox's own list, as its knob moves it: titled from the library, its cursor highlighted, headed by
-        // the playlist's name; BACK leaves it for Wave's own playlists.
-        bridge::Browser rb;
-        rb.rows = 2; rb.cursor = 1; rb.first = 0; rb.focus = "list";
-        rb.tracks = {{2, "/nine.wav"}, {1, "/ten.wav"}};
-        page.mirror(rb);
-        QVERIFY(page.mirroring());
-        QTRY_COMPARE(table->model()->index(0, 1).data().toString(), QStringLiteral("Nine"));
-        QCOMPARE(table->model()->index(1, 1).data().toString(), QStringLiteral("Ten"));
-        QCOMPARE(page.selectedTrack()->title, QStringLiteral("Ten"));
-        bool counted = false;
-        for (QLabel *l : page.findChildren<QLabel *>()) counted |= l->text().contains(QStringLiteral("2 of 2"));
-        QVERIFY(counted);  // where Rekordbox's cursor is, in its list
-        bool headed = false;
-        for (int i = 0; i < 100 && !headed; ++i) {
-            for (QAbstractButton *b : page.findChildren<QAbstractButton *>()) headed |= b->text().contains(QStringLiteral("Friday"));
-            for (QLabel *l : page.findChildren<QLabel *>()) headed |= l->text().contains(QStringLiteral("Friday"));
-            if (!headed) QTest::qWait(20);
-        }
-        QVERIFY(headed);
-        rb.cursor = 0;
-        page.mirror(rb);
-        QCOMPARE(page.selectedTrack()->title, QStringLiteral("Nine"));  // the knob turned back
-        rb.cursor = 1; rb.focus = "";  // Rekordbox behind Wave: no pane focused, the cursor still counts
-        page.mirror(rb);
-        QCOMPARE(page.selectedTrack()->title, QStringLiteral("Ten"));
-        rb.cursor = 0; rb.focus = "list";
-        page.mirror(rb);
-        loads.clear();
-        page.setDecks({0, 1}, {{0, ""}, {1, ""}}, {}, {});
-        QVERIFY(page.goBack());
-        QVERIFY(!page.mirroring());
-        QTRY_COMPARE(list->model()->rowCount(), 1);
         page.shutdown();
         qunsetenv("RKBX_WAVE_MASTER_DB");
     }

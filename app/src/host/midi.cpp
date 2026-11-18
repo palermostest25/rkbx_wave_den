@@ -1,5 +1,6 @@
 #include "host/midi.h"
 
+#include "core/bridge.h"
 #include "host/rekordbox.h"
 
 #include <QDir>
@@ -271,22 +272,40 @@ void Listener::receive(quintptr port, const QByteArray &data) {
         if (it == devices_.end()) return;
         table = it->second.second;
     }
-    for (const auto &[status, data1, value] : messages(data)) {
-        const auto it = table.find({status, data1});
-        if (it == table.end()) continue;
-        const Action &a = it->second;
-        if (a.kind == Kind::Browse || a.kind == Kind::Zoom) {
-            // An endless encoder: 1 = one step clockwise, 127 = one step back.
-            const int steps = value < 64 ? value : value - 128;
-            if (steps) emit controller(a.kind, steps, -1);
-        } else if (a.kind == Kind::SamplerZoom) {
-            emit controller(a.kind, value, -1);
-        } else if (value) {  // presses only: note-on velocity or button CC value above zero
-            emit controller(a.kind, 0, a.deck);
-        }
+    for (const auto &[status, data1, value] : messages(data)) receiveMessage(table, status, data1, value);
+}
+
+void Listener::receiveMessage(const Table &table, int status, int data1, int value) {
+    const auto it = table.find({status, data1});
+    if (it == table.end()) return;
+    const Action &a = it->second;
+    if (a.kind == Kind::Browse || a.kind == Kind::Zoom) {
+        // An endless encoder: 1 = one step clockwise, 127 = one step back.
+        const int steps = value < 64 ? value : value - 128;
+        if (steps) emit controller(a.kind, steps, -1);
+    } else if (a.kind == Kind::SamplerZoom) {
+        emit controller(a.kind, value, -1);
+    } else if (value) {  // presses only: note-on velocity or button CC value above zero
+        emit controller(a.kind, 0, a.deck);
     }
 }
 
+Table Listener::merged() const {
+    std::lock_guard l(lock_);
+    Table all;
+    for (const auto &[port, device] : devices_) for (const auto &[key, action] : device.second) all.try_emplace(key, action);
+    return all;
+}
+
+std::vector<std::pair<int, int>> Listener::keys(const Table &table) {
+    // The browser's own controls; the zoom knobs and everything else stay Rekordbox's (Wave only listens).
+    std::vector<std::pair<int, int>> out;
+    for (const auto &[key, action] : table)
+        if (action.kind == Kind::Browse || action.kind == Kind::Press || action.kind == Kind::Back ||
+            action.kind == Kind::View || action.kind == Kind::Load)
+            out.push_back(key);
+    return out;
+}
 
 void Listener::run() {
     double retry = 0;
@@ -294,7 +313,7 @@ void Listener::run() {
 #ifdef Q_OS_WIN
     struct Port { HMIDIIN handle; std::unique_ptr<std::pair<Listener *, quintptr>> who; };
     std::vector<Port> ports;
-    std::optional<QStringList> names;
+    std::optional<QStringList> opened;  // the device list the open ports belong to
     struct Self { static void CALLBACK cb(HMIDIIN, UINT message, DWORD_PTR instance, DWORD_PTR param, DWORD_PTR) {
         if (message != MIM_DATA) return;
         auto *who = reinterpret_cast<std::pair<Listener *, quintptr> *>(instance);
@@ -304,58 +323,76 @@ void Listener::run() {
     auto closeAll = [&] {
         for (Port &p : ports) { midiInStop(p.handle); midiInClose(p.handle); }
         ports.clear();
-        std::lock_guard l(lock_);
-        devices_.clear();
+        opened.reset();
     };
-    // Rekordbox comes first: Wave opens the controller only once Rekordbox is running with it (allowed_), lets
-    // go the moment Rekordbox isn't, and after a controller is plugged in waits for Rekordbox to take it.
-    // Where Windows shares MIDI (Windows MIDI Services) both read it; where it doesn't, Rekordbox keeps it.
-    double settleUntil = 0;
+    bridge::Tap tap(QDir(bridge::defaultFolder()).filePath(QStringLiteral("state.bin")));
+    QStringList names;          // Windows' MIDI inputs, by index (port = index + 1)
+    double listAt = 0, settleUntil = 0;
+    bool wasThrough = false;
+    Table table;
+    std::vector<std::pair<int, int>> keep;
     while (!stop_) {
-        if (maps_.empty() && now() >= retry) {
-            retry = now() + 5;
+        const double t = now();
+        if (maps_.empty() && t >= retry) {
+            retry = t + 5;
             loadMaps();
-            if (!maps_.empty()) names.reset();  // reopen with maps to match against
+            listAt = 0;
         }
-        // Only where Windows shares MIDI: with classic Windows MIDI, opening the port in a moment Rekordbox let go of
-        // it (a re-plug, its own MIDI settings) would take the controller from Rekordbox's decks.
-        if (!allowed_ || !shared()) {
-            if (names) { closeAll(); names.reset(); }
-            for (int i = 0; i < 25 && !stop_; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(20));
-            continue;
+        // Which controllers are connected, by name: Windows lists them without opening them, Rekordbox's or not.
+        if (t >= listAt) {
+            listAt = t + 1;
+            QStringList current;
+            for (UINT i = 0; i < midiInGetNumDevs(); ++i) {
+                MIDIINCAPSW caps{};
+                current << (midiInGetDevCapsW(i, &caps, sizeof caps) == MMSYSERR_NOERROR ? QString::fromWCharArray(caps.szPname) : QString());
+            }
+            if (current != names) {
+                if (opened) { closeAll(); settleUntil = t + 15; }  // port numbers shift: reopen, after Rekordbox has
+                names = current;
+                {
+                    std::lock_guard l(lock_);
+                    devices_.clear();
+                }
+                for (int i = 0; i < names.size(); ++i) if (!names[i].isEmpty()) attach(quintptr(i + 1), names[i]);
+                table = merged();
+                keep = keys(table);
+                qCInfo(lcMidi) << "MIDI inputs" << names << "; controllers with a Rekordbox map" << controllers();
+            }
         }
-        QStringList current;
-        for (UINT i = 0; i < midiInGetNumDevs(); ++i) {
-            MIDIINCAPSW caps{};
-            current << (midiInGetDevCapsW(i, &caps, sizeof caps) == MMSYSERR_NOERROR ? QString::fromWCharArray(caps.szPname) : QString());
+        // Through Rekordbox: the bridge hears what Rekordbox's input receives, and keeps Wave's controls from it.
+        for (const auto &[status, data1, value] : tap.take()) receiveMessage(table, status, data1, value);
+        const bool through = tap.hooked();
+        throughRekordbox_ = through;
+        tap.keep(through && keeping_ ? keep : std::vector<std::pair<int, int>>{});
+        if (through != wasThrough) {
+            wasThrough = through;
+            qCInfo(lcMidi) << (through ? "Wave hears the controller through Rekordbox" : "The bridge doesn't hear the controller");
+            std::lock_guard l(lock_);
+            status_ = through ? QString() : status_;
         }
-        if (names && *names != current) {
-            closeAll();  // port numbers shift when devices come and go: reopen all, after Rekordbox has
-            names.reset();
-            settleUntil = now() + 15;
-        }
-        if (!names && now() >= settleUntil) {
-            names = current;
+        // Otherwise only where Windows shares MIDI: with classic Windows MIDI, opening the port in a moment Rekordbox
+        // let go of it (a re-plug, its own MIDI settings) would take the controller from Rekordbox's decks.
+        const bool direct = !through && allowed_ && shared();
+        if (!direct && opened) closeAll();
+        if (direct && !opened && t >= settleUntil) {
+            opened = names;
             QStringList busy;
-            for (int i = 0; i < current.size(); ++i) {
-                if (current[i].isEmpty() || !findMap(current[i], maps_)) continue;
+            for (int i = 0; i < names.size(); ++i) {
+                if (names[i].isEmpty() || !findMap(names[i], maps_)) continue;
                 Port p{nullptr, std::make_unique<std::pair<Listener *, quintptr>>(this, quintptr(i + 1))};
                 if (midiInOpen(&p.handle, UINT(i), reinterpret_cast<DWORD_PTR>(&Self::cb), reinterpret_cast<DWORD_PTR>(p.who.get()),
                                CALLBACK_FUNCTION) != MMSYSERR_NOERROR) {
-                    busy << current[i];  // classic Windows MIDI allows one app per port
+                    busy << names[i];
                     continue;
                 }
-                attach(quintptr(i + 1), current[i]);
                 midiInStart(p.handle);
                 ports.push_back(std::move(p));
             }
-            {
-                std::lock_guard l(lock_);
-                if (!busy.isEmpty()) status_ = busy.join(", ") + QStringLiteral(" MIDI is held by Rekordbox");
-            }
-            qCInfo(lcMidi) << "MIDI ports" << current << "; reading" << controllers() << "; held elsewhere" << busy;
+            std::lock_guard l(lock_);
+            if (!busy.isEmpty()) status_ = busy.join(", ") + QStringLiteral(" MIDI is held by Rekordbox");
+            qCInfo(lcMidi) << "Opened the controller directly; held elsewhere:" << busy;
         }
-        for (int i = 0; i < 100 && !stop_; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));  // a knob detent is ~20 ms at speed
     }
     closeAll();
 #elif defined(Q_OS_MACOS)
