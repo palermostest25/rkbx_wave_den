@@ -17,7 +17,7 @@ else()
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Test)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent Test)
 
 # The core: Rekordbox's files and engine state, and the waveform pictures. No widgets.
 add_library(wavecore STATIC
@@ -31,16 +31,49 @@ add_library(wavecore STATIC
 target_include_directories(wavecore PUBLIC src)
 target_link_libraries(wavecore PUBLIC Qt6::Core Qt6::Gui)
 
-# SQLCipher, for Rekordbox's encrypted libraries: vcpkg's (Windows, macOS releases), else pkg-config's (apt).
-find_package(unofficial-sqlcipher CONFIG QUIET)
-if(unofficial-sqlcipher_FOUND)
-  target_link_libraries(wavecore PUBLIC unofficial::sqlcipher::sqlcipher)
+# SQLCipher, for Rekordbox's encrypted libraries: its amalgamation, built in, with the platform's own
+# crypto (CommonCrypto on macOS, CNG on Windows; OpenSSL on Linux, where Wave is only tested).
+enable_language(C)
+add_library(sqlcipher STATIC third_party/sqlcipher/sqlite3.c third_party/sqlcipher/crypto_cng.c)
+target_include_directories(sqlcipher PUBLIC third_party/sqlcipher)
+target_compile_definitions(sqlcipher PUBLIC SQLITE_HAS_CODEC SQLITE_TEMP_STORE=2 SQLITE_THREADSAFE=1
+  SQLITE_OMIT_LOAD_EXTENSION SQLITE_OMIT_DEPRECATED SQLITE_DEFAULT_MEMSTATUS=0)
+if(MSVC)
+  target_compile_options(sqlcipher PRIVATE /W0)
 else()
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(SQLCIPHER REQUIRED IMPORTED_TARGET sqlcipher)
-  target_link_libraries(wavecore PUBLIC PkgConfig::SQLCIPHER)
+  target_compile_options(sqlcipher PRIVATE -w)
 endif()
-target_compile_definitions(wavecore PUBLIC SQLITE_HAS_CODEC)
+if(WIN32)
+  target_compile_definitions(sqlcipher PRIVATE SQLCIPHER_CRYPTO_CUSTOM)
+  target_link_libraries(sqlcipher PRIVATE bcrypt)
+elseif(APPLE)
+  target_compile_definitions(sqlcipher PRIVATE SQLCIPHER_CRYPTO_CC)
+  target_link_libraries(sqlcipher PRIVATE "-framework Security" "-framework CoreFoundation")
+else()
+  find_package(OpenSSL REQUIRED)
+  target_compile_definitions(sqlcipher PRIVATE SQLCIPHER_CRYPTO_OPENSSL)
+  target_link_libraries(sqlcipher PRIVATE OpenSSL::Crypto)
+  find_package(Threads REQUIRED)
+  target_link_libraries(sqlcipher PRIVATE Threads::Threads ${CMAKE_DL_LIBS} m)
+endif()
+target_link_libraries(wavecore PUBLIC sqlcipher)
+
+# Wave itself: Rekordbox host, reader, session and the windows.
+file(GLOB WAVE_APP_SOURCES CONFIGURE_DEPENDS src/host/*.cpp src/app/*.cpp src/ui/*.cpp)
+list(FILTER WAVE_APP_SOURCES EXCLUDE REGEX "/main\\.cpp$")
+add_library(waveapp STATIC ${WAVE_APP_SOURCES})
+target_link_libraries(waveapp PUBLIC wavecore Qt6::Widgets Qt6::Network Qt6::Concurrent)
+target_compile_definitions(waveapp PUBLIC WAVE_VERSION="${PROJECT_VERSION}")
+option(WAVE_PACKAGED "A release build: it updates and installs itself" OFF)
+if(WAVE_PACKAGED)
+  target_compile_definitions(waveapp PUBLIC WAVE_PACKAGED)
+endif()
+if(WIN32)
+  target_link_libraries(waveapp PUBLIC user32 advapi32 shell32 ole32 oleaut32 uuid winmm dwmapi powrprof)
+elseif(APPLE)
+  target_link_libraries(waveapp PUBLIC "-framework ApplicationServices" "-framework CoreMIDI" "-framework CoreFoundation"
+                                       "-framework IOKit")
+endif()
 
 enable_testing()
 add_executable(core_tests tests/core_tests.cpp)

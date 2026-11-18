@@ -18,11 +18,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 
-#if __has_include(<sqlcipher/sqlite3.h>)
-#include <sqlcipher/sqlite3.h>
-#else
 #include <sqlite3.h>
-#endif
 
 #include <cmath>
 #include <cstring>
@@ -304,6 +300,22 @@ private slots:
         QVERIFY(!Library::openFile(dir.filePath("none.db"), false, &error));
         QCOMPARE(databaseKey(false).size(), 64);
         QVERIFY(databaseKey(false).startsWith("402fd482"));  // pyrekordbox's published master key
+    }
+
+    // A library encrypted elsewhere (SQLCipher with OpenSSL, as Rekordbox's is): every platform's own
+    // crypto (CNG on Windows, CommonCrypto on macOS) must read it.
+    void aLibraryEncryptedElsewhereOpens() {
+        QTemporaryDir dir;
+        const QString copy = dir.filePath("master.db");
+        QVERIFY(QFile::copy(QStringLiteral(WAVE_TEST_DATA "/encrypted-master.db"), copy));
+        QString error;
+        auto lib = Library::openFile(copy, false, &error);
+        QVERIFY2(lib, qPrintable(error));
+        const auto [total, rows] = lib->browse({}, "Title", false, 0, 10);
+        QCOMPARE(total, 1);
+        QCOMPARE(rows[0].title, QStringLiteral("Encrypted elsewhere"));
+        QCOMPARE(rows[0].artist, QStringLiteral("Made with OpenSSL"));
+        QCOMPARE(rows[0].bpm, 123.45);
     }
 
     void playlistsDrillDownInRunningOrder() {

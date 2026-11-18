@@ -18,7 +18,7 @@ const QColor kDeckBlue("#1f8fff");
 const QColor kLoopOrange("#ffa21a");
 const QColor kWarnRed("#ff3b30");
 
-QFont font(double size, bool bold = false) {
+QFont arial(double size, bool bold = false) {
     QFont f(QStringLiteral("Arial"));
     f.setPixelSize(std::max(9, int(std::lround(size))));
     f.setBold(bold);
@@ -35,14 +35,14 @@ void rounded(QPainter &p, const QRectF &rect, double radius) {
 
 void text(QPainter &p, const QRectF &rect, const QString &s, double size, const QColor &colour,
           Qt::Alignment align = Qt::AlignLeft, bool bold = false) {
-    p.setFont(font(size, bold));
+    p.setFont(arial(size, bold));
     p.setPen(colour);
     p.drawText(rect, align | Qt::AlignVCenter, p.fontMetrics().elidedText(s, Qt::ElideRight, std::max(1, int(rect.width()))));
 }
 
 // Text that fits sits still; longer text scrolls through, pausing at its start, as the AZ does.
 void marquee(QPainter &p, const QRectF &rect, const QString &s, double size, const QColor &colour, bool bold, bool *moving) {
-    p.setFont(font(size, bold));
+    p.setFont(arial(size, bold));
     p.setPen(colour);
     const double width = p.fontMetrics().horizontalAdvance(s);
     if (width <= rect.width()) {
@@ -60,7 +60,7 @@ void marquee(QPainter &p, const QRectF &rect, const QString &s, double size, con
 }
 
 QRectF chip(QPainter &p, double x, double y, double h, const QString &s, const QColor &fill, const QColor &ink, bool alignRight = false) {
-    p.setFont(font(h * .62, true));
+    p.setFont(arial(h * .62, true));
     const double w = p.fontMetrics().horizontalAdvance(s) + h * .7;
     const QRectF box(alignRight ? x - w : x, y, w, h);
     p.setPen(Qt::NoPen);
@@ -203,7 +203,7 @@ void Canvas::drawDeck(QPainter &p, int idx, const QRectF &bounds) {
     const DeckView &deck = session_->deck(idx);
     const double scale = s.uiScale(), laneH = bounds.height();
     const double fontSize = std::clamp(laneH * .075, 14.0, 23.0) * scale;
-    const QFont base = font(fontSize);
+    const QFont base = arial(fontSize);
     p.setFont(base);
     const double rail = std::max(54.0, fontSize * 2.7);
     p.fillRect(QRectF(0, bounds.top(), rail - 7, bounds.height()), QColor("#101010"));
@@ -213,7 +213,7 @@ void Canvas::drawDeck(QPainter &p, int idx, const QRectF &bounds) {
     p.setBrush(playing ? QBrush(kDeckBlue) : Qt::NoBrush);
     p.setPen(QPen(playing ? kDeckBlue : QColor("#5b636d"), 1));
     rounded(p, badge, 6);
-    p.setFont(font(fontSize * 1.5, true));
+    p.setFont(arial(fontSize * 1.5, true));
     p.setPen(playing ? Qt::white : QColor("#d6dade"));
     p.drawText(badge, Qt::AlignCenter, QString::number(idx + 1));
     p.setFont(base);
@@ -270,7 +270,7 @@ void Canvas::drawDeck(QPainter &p, int idx, const QRectF &bounds) {
             tint.setAlpha(55);
             p.fillRect(QRectF(xAt(c.timeSec), signal.top(), xAt(*c.endSec) - xAt(c.timeSec), signal.height()), tint);
         }
-        const QFont pillFont = font(fontSize * .72, true);
+        const QFont pillFont = arial(fontSize * .72, true);
         auto pill = [&](double x, const QString &label) {
             p.setFont(pillFont);
             const double w = p.fontMetrics().horizontalAdvance(label) + 12;
@@ -530,7 +530,7 @@ void Canvas::drawPanel(QPainter &p, int idx, const QRectF &r) {
             const double pct = (current / original - 1) * 100;
             const QString pctText = QStringLiteral("%1%2%").arg(pct >= 0 ? "+" : "").arg(pct, 0, 'f', 2);
             text(p, QRectF(x, details, info * 4, info), pctText, info * .62, std::abs(pct) >= .005 ? QColor("#f1f3f5") : QColor("#7d858e"));
-            p.setFont(font(info * .62));
+            p.setFont(arial(info * .62));
             x += p.fontMetrics().horizontalAdvance(pctText) + gap;
         }
         if (deck.status) if (const char *range = tempoRange(deck.status->tempoRange))

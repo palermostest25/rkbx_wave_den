@@ -12,11 +12,7 @@
 #include <QStorageInfo>
 #include <QUrl>
 
-#if __has_include(<sqlcipher/sqlite3.h>)
-#include <sqlcipher/sqlite3.h>
-#else
 #include <sqlite3.h>
-#endif
 
 #include <algorithm>
 #include <set>
