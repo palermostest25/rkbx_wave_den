@@ -6,6 +6,10 @@ controller's browse knob. Install it, open it, and nothing else: Wave installs t
 if you don't have it, starts Rekordbox behind itself, connects to it, keeps it running and handles its
 popups. Rekordbox stays the audio engine and keeps your controller; Wave is the screen.
 
+**New in 3.0:** Wave is native C++ now. It draws only while something on screen moves and uses a fraction
+of the CPU the earlier versions did (about a fifth with four decks playing), so a Surface or laptop stays
+cool through a set. Your settings carry over.
+
 [**Download the latest release**](https://github.com/palermostest25/rkbx_wave_den/releases/latest) ·
 Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
 
@@ -19,7 +23,7 @@ Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
   tempo and tempo range (±6 / ±10 / ±16 / WIDE), MASTER, SYNC and MT (tap MT to toggle key lock),
   loop state, a bar countdown and a track overview that warns near the end.
 - **Touch browser, driven by the knob:** your collection or a USB stick, by playlist, history, artist,
-  album or key, with search and an on-screen keyboard. Turn the controller's browse knob and Wave's
+  album or key, with search and your choice of keyboard: Wave's own keys, or Windows' touch keyboard. Turn the controller's browse knob and Wave's
   highlight moves; press the knob to open a playlist, BACK to go up; press LOAD on the controller and
   the track picked in Wave goes onto that deck. Or tap a deck's LOAD button on screen.
 - **Or Rekordbox's own browser, over Wave** (Settings › Browser): it goes away by itself after a load.
@@ -40,11 +44,9 @@ Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
 ## What you need
 
 - **Rekordbox 7.2.19.** Wave reads Rekordbox's engine directly and checks the exact build first; with any
-  other version it says so and stays off rather than guess. You don't need to install it yourself: Wave's
-  installer offers to, and on Windows it can sit beside a newer Rekordbox (Wave starts 7.2.19). (Without the bridge,
-  Windows falls back to an older reader for Rekordbox 7.2.2 and 7.2.14 and macOS to a read-only screen
-  reader, both with fewer features and no touch loading.)
-- Windows 10 or 11 (64-bit), or macOS 14 Sonoma or later.
+  other version it says so and stays off rather than guess. You don't need to install it yourself: Wave
+  offers to, and on Windows it can sit beside a newer Rekordbox (Wave starts 7.2.19).
+- Windows 10 or 11 (64-bit), or macOS 12 Monterey or later.
 - A touchscreen is optional: everything also works with a mouse.
 
 ## Install
@@ -64,7 +66,9 @@ Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
    DOWNLOADED INSTALLER**.
 
 Prefer no installer? **`Rekordbox-Wave-Windows-x64.exe`** is the same app as a single file that runs
-from anywhere.
+from anywhere. Press its **INSTALL** button (top right, or Settings → System) to put it in
+`C:\Program Files\Rekordbox Wave` with Start menu and desktop shortcuts; Windows asks for permission
+once, and it can be removed from **Settings → Apps**.
 
 ### macOS
 
@@ -116,6 +120,7 @@ use **Settings → Rekordbox → SHOW REKORDBOX**. Every one of these behaviours
 | Use Rekordbox itself | **REKORDBOX** at the top: Rekordbox comes in front. Tap Wave to come back. |
 | Two or four decks | **2 DECKS / 4 DECKS** at the top. Change the order in Settings → Display. |
 | Use a second monitor | Settings → Display → **Monitor**. Wave fills it whenever it is connected. |
+| Type with Windows' touch keyboard | Settings → Display → *Typing in the browser* → **Windows touch keyboard**: tapping the search box brings it up. With **Wave's keyboard**, Windows' own is turned off while Wave runs and put back when it closes (Settings → Display shows both). |
 | Settings | **SETTINGS** or **F2**. **Escape** goes back; **F11** toggles full screen. |
 
 ![Settings](docs/images/settings.png)
@@ -162,30 +167,26 @@ OS, Rekordbox version and the status text Wave shows.
 
 ## Build from source
 
-Python 3.10 or later (releases use 3.12).
+Wave is C++20 with Qt 6 (`app/`; see [app/README.md](app/README.md)). SQLCipher is built in.
 
 ```sh
-python -m pip install .
-python rkbx_wave.py            # or: python rkbx_wave.py --demo  (synthetic decks, no Rekordbox needed)
-python -m unittest discover -s tests
+cmake -S app -B app-build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build app-build
+"app-build/Rekordbox Wave" --demo          # synthetic decks, no Rekordbox needed
+QT_QPA_PLATFORM=offscreen ctest --test-dir app-build --output-on-failure
 ```
 
-Packaging (`python -m pip install pyinstaller`, then `python scripts/build_app.py`) makes
-`Rekordbox Wave.exe` on Windows and `Rekordbox Wave.app` on macOS. The bridges live in `native/`:
-`native/mac_bridge/build.sh` builds the macOS library, and CI builds the Windows DLL with MSVC
-(see `.github/workflows/build.yml`). Pushing a `v*` tag builds every platform and drafts a release.
-
-### OSC input
-
-**Settings → Rekordbox → Advanced → OSC** listens on localhost UDP 4460 for another tool to drive the display
-(deck IDs are zero-based): `/track/0/anlz_path`, `/time/0`, `/bpm/0/current`, `/bpm/0/original`,
-`/playing/0`, `/rate/0`, and `/loop/0` (start seconds, end seconds, enabled).
+Releases build Windows as one static exe (Qt from vcpkg) and macOS as an app bundle; see
+`.github/workflows/build.yml`. The bridges live in `native/`: `native/mac_bridge/build.sh` builds the
+macOS library, and CI builds the Windows DLL with MSVC. The Python app it replaced is still in
+`rb_waveform_core/`, with its tests, for reference.
 
 ## Credits
 
 A fork of [mrmilbe/rkbx_wave](https://github.com/mrmilbe/rkbx_wave) (MIT; original notices retained).
-Uses [pyrekordbox](https://github.com/dylanljones/pyrekordbox), Qt / PySide6 under the
-[LGPL](https://www.qt.io/licensing/open-source-lgpl-obligations), and memory layouts from
+Uses Qt under the [LGPL](https://www.qt.io/licensing/open-source-lgpl-obligations),
+[SQLCipher](https://github.com/sqlcipher/sqlcipher) (BSD), Rekordbox's database keys as
+[pyrekordbox](https://github.com/dylanljones/pyrekordbox) (MIT) publishes them, and memory layouts from
 [rkbx_link](https://github.com/grufkork/rkbx_link). Waveform format references:
 [Deep Symmetry](https://djl-analysis.deepsymmetry.org/djl-analysis/track_metadata.html).
 
