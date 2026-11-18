@@ -132,6 +132,7 @@ public:
     }
     QVariant headerData(int section, Qt::Orientation o, int role) const override {
         static const char *names[] = {"", "TITLE", "BPM", "KEY", "TIME"};
+        if (o == Qt::Horizontal && role == Qt::TextAlignmentRole && section == 1) return int(Qt::AlignLeft | Qt::AlignVCenter);
         return o == Qt::Horizontal && role == Qt::DisplayRole ? QString::fromLatin1(names[section]) : QVariant();
     }
     void replace(std::vector<CatalogTrack> rows, int count) { beginResetModel(); tracks = std::move(rows); total = count; endResetModel(); }
