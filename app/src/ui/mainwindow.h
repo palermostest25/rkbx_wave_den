@@ -156,7 +156,7 @@ private:
     QPointer<QScreen> connectedScreen_;
     bool holdWindowed_ = false;
     double boundAt_ = -1e9;
-    bool animating_ = false;
+    double infoAt_ = 0;               // when the info bar was last drawn
 };
 
 QString screenKey(const QScreen *screen);

@@ -3,6 +3,7 @@
 #include "app/session.h"
 #include "core/clock.h"
 
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QMouseEvent>
 #include <QNativeGestureEvent>
@@ -179,17 +180,49 @@ const QPixmap &Canvas::scaledTile(const DeckView &deck, int tile, int reduction,
     return scaled_.front().second;
 }
 
-void Canvas::paintEvent(QPaintEvent *) {
+QRect Canvas::lanesRect() const {
+    return QRect(0, 0, width(), height() - int(std::ceil(infoHeight(int(session_->order().size())))));
+}
+
+void Canvas::frame(bool withInfo) {
+    // The lanes scroll every frame; the info bar (times in tenths, a slow overview playhead) 20 times a second.
+    if (withInfo) update();
+    else update(lanesRect());
+}
+
+void Canvas::paintEvent(QPaintEvent *event) {
+    static const bool profile = qEnvironmentVariableIsSet("WAVE_PROFILE");
+    static QElapsedTimer clock;
+    static double lanesMs = 0, infoMs = 0;
+    static int frames = 0;
+    if (profile && !clock.isValid()) clock.start();
+    QElapsedTimer t;
+    t.start();
     QPainter p(this);
-    needsFrames_ = false;
-    p.fillRect(rect(), Qt::black);
     const auto order = session_->order();
     const double info = infoHeight(int(order.size()));
     const double lane = (height() - info) / order.size();
+    const QRect dirty = event->rect();
+    const bool lanes = dirty.top() < height() - info, bar = info > 0 && dirty.bottom() >= height() - info - 1;
     upcoming_.clear();
-    for (size_t row = 0; row < order.size(); ++row) drawDeck(p, order[row], QRectF(0, row * lane, width(), lane));
-    if (info > 0) drawInfo(p, QRectF(0, height() - info, width(), info), order);
+    if (lanes) {
+        p.fillRect(QRectF(0, 0, width(), height() - info), Qt::black);
+        for (size_t row = 0; row < order.size(); ++row) drawDeck(p, order[row], QRectF(0, row * lane, width(), lane));
+    }
+    const qint64 lanesNs = t.nsecsElapsed();
+    if (bar) {
+        needsFrames_ = false;
+        drawInfo(p, QRectF(0, height() - info, width(), info), order);
+    }
     p.end();
+    if (profile) {
+        lanesMs += lanesNs / 1e6;
+        infoMs += (t.nsecsElapsed() - lanesNs) / 1e6;
+        if (++frames % 120 == 0) {
+            qInfo("paint: lanes %.2f ms, info %.2f ms a frame; %.1f frames a second", lanesMs / 120, infoMs / 120, 120000.0 / clock.restart());
+            lanesMs = infoMs = 0;
+        }
+    }
     // Render one tile ahead per frame (a couple of milliseconds), so four decks never fill a frame at once.
     for (const Ahead &a : upcoming_)
         if (a.tile >= 0 && a.tile * kTileColumns < a.analysis->columns() && !tiles_.cached(a.analysis.get(), a.tile, palette(), levels(), a.reduction)) {

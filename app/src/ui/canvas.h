@@ -23,6 +23,8 @@ public:
     explicit Canvas(Session *session, QWidget *parent = nullptr);
     void invalidate();                // colours or levels changed: draw the tiles again
     bool needsFrames() const { return needsFrames_; }  // a marquee or a warning is moving
+    void frame(bool withInfo);        // the next frame: the lanes, and the info bar too if asked
+    QRect lanesRect() const;
 
 signals:
     void settingsRequested();

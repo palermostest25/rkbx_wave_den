@@ -330,28 +330,38 @@ QPushButton *MainWindow::toolbarButton(const QString &title, std::function<void(
 // --- Frames --------------------------------------------------------------------------------------------
 
 void MainWindow::frame() {
-    const bool moving = session_->animating() || canvas_->needsFrames();
-    if (!moving || pages_->currentWidget() != canvas_ || isMinimized()) {
+    const bool playing = session_->animating();
+    if (!(playing || canvas_->needsFrames()) || pages_->currentWidget() != canvas_ || isMinimized()) {
         frameTimer_.stop();  // idle: no frames until something changes
         canvas_->update();
+        return;
+    }
+    if (!playing) {  // only a long title scrolling or the end warning: the info bar alone, 20 times a second
+        if (frameTimer_.interval() != 50) frameTimer_.setInterval(50);
+        canvas_->frame(true);
         return;
     }
 #ifdef Q_OS_WIN
     // Wake just before the refresh and let the compositor release the paint: one paint per refresh.
     DwmFlush();
 #endif
-    canvas_->update();
+    const double t = now();
+    const bool info = t - infoAt_ >= .05;
+    if (info) infoAt_ = t;
+    canvas_->frame(info);
+    paceFrames();
 }
 
 void MainWindow::paceFrames() {
     if (pages_->currentWidget() != canvas_ || isMinimized()) return;
-    if (!(session_->animating() || canvas_->needsFrames())) return;
+    const bool playing = session_->animating();
+    if (!(playing || canvas_->needsFrames())) return;
     QScreen *s = screen() ? screen() : QGuiApplication::primaryScreen();
     const double hz = std::clamp(std::min(session_->settings.number("refresh_hz"), s ? s->refreshRate() : 60.0), 20.0, 240.0);
 #ifdef Q_OS_WIN
-    const int interval = std::max(1, int(std::floor(1000 / hz)) - 4);
+    const int interval = playing ? std::max(1, int(std::floor(1000 / hz)) - 4) : 50;
 #else
-    const int interval = std::max(1, int(std::lround(1000 / hz)));
+    const int interval = playing ? std::max(1, int(std::lround(1000 / hz))) : 50;
 #endif
     if (frameTimer_.interval() != interval) frameTimer_.setInterval(interval);
     if (!frameTimer_.isActive()) frameTimer_.start();
@@ -646,6 +656,7 @@ bool MainWindow::redirectControllerLoad(const std::map<int, QString> &before, co
 // --- Rekordbox behind Wave ---------------------------------------------------------------------------------
 
 void MainWindow::watch() {
+    paceFrames();  // frames start as soon as something moves (a deck starts, a preview begins)
     syncLoadTargets();
     watchRekordbox();
     updateStatus();
