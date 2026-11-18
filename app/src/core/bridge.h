@@ -58,12 +58,14 @@ public:
     ~Client();
     bool open(QString *error = nullptr);
     std::optional<Snapshot> snapshot() const;
+    bool older() const { return older_; }  // open failed on an earlier Wave's layout
     // Asks the bridge; (accepted, Rekordbox's answer). Waits up to ``timeoutMs`` for the answer.
     std::pair<bool, QString> request(Command kind, int deck, uint32_t value, int64_t device = 0, int timeoutMs = 2500);
 
 private:
     QFile file_;
     uchar *map_ = nullptr;
+    bool older_ = false;
 };
 
 }  // namespace wave::bridge

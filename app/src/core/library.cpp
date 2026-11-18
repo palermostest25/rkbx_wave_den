@@ -1,7 +1,10 @@
 #include "core/library.h"
 
+#include "core/clock.h"
+
 #include <QDir>
 #include <QFile>
+#include <QDateTime>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -436,6 +439,37 @@ SourceStats Library::stats() {
         s.free = volume.bytesAvailable();
     }
     return s;
+}
+
+std::optional<LibraryTrack> Libraries::resolvePath(const QString &audioPath) {
+    if (!main_ && now() >= nextOpen_) {
+        main_ = Library::open({});
+        if (!main_) nextOpen_ = now() + 5;  // no collection yet (a fresh install): look again later
+    }
+    if (main_) if (auto track = main_->resolvePath(audioPath)) return track;
+    // Sticks mounted now, reopened when a stick's library changes.
+    const QStringList paths = stickLibraries();
+    for (auto it = sticks_.begin(); it != sticks_.end();) it = paths.contains(it->first) ? std::next(it) : sticks_.erase(it);
+    for (const QString &path : paths) {
+        const qint64 modified = QFileInfo(path).lastModified().toMSecsSinceEpoch();
+        auto &stick = sticks_[path];
+        if (!stick.library || stick.modified != modified) {
+            stick.library = Library::open(path);  // an unreadable or older-format stick is skipped, never fatal
+            stick.modified = modified;
+        }
+        if (stick.library) if (auto track = stick.library->resolvePath(audioPath)) return track;
+    }
+    return std::nullopt;
+}
+
+std::vector<Cue> Libraries::cues(const QString &analysisFolder) {
+    if (!main_) main_ = Library::open({});
+    return main_ ? main_->cues(analysisFolder) : std::vector<Cue>{};
+}
+
+void Libraries::close() {
+    main_.reset();
+    sticks_.clear();
 }
 
 }  // namespace wave

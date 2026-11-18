@@ -8,6 +8,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -70,6 +71,20 @@ private:
     sqlite3 *db_ = nullptr;
     bool device_ = false;
     QString path_;
+};
+
+// The collection first, then any USB stick mounted, for decks playing from either. One thread at a time.
+class Libraries {
+public:
+    std::optional<LibraryTrack> resolvePath(const QString &audioPath);
+    std::vector<Cue> cues(const QString &analysisFolder);  // the collection's, for its tracks
+    void close();
+
+private:
+    std::unique_ptr<Library> main_;
+    struct Stick { qint64 modified; std::unique_ptr<Library> library; };
+    std::map<QString, Stick> sticks_;
+    double nextOpen_ = 0;
 };
 
 QString masterDatabase();                   // where Rekordbox keeps master.db
