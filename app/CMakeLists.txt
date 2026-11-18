@@ -75,6 +75,40 @@ elseif(APPLE)
                                        "-framework IOKit")
 endif()
 
+# The bridge Wave puts inside Rekordbox, embedded: the Windows DLL as CI builds it (WAVE_BRIDGE_LIBRARY), the
+# macOS dylib from the repository.
+set(WAVE_BRIDGE_LIBRARY "" CACHE FILEPATH "The Rekordbox bridge library to embed")
+if(NOT WAVE_BRIDGE_LIBRARY AND APPLE)
+  set(WAVE_BRIDGE_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/../rb_waveform_core/data/wave-bridge.dylib")
+endif()
+set(WAVE_RESOURCES resources/resources.qrc)
+if(WAVE_BRIDGE_LIBRARY)
+  get_filename_component(bridge_name "${WAVE_BRIDGE_LIBRARY}" NAME)
+  string(REGEX REPLACE "^.*(\\.[a-z]+)$" "wave-bridge\\1" bridge_alias "${bridge_name}")
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/bridge.qrc"
+       "<RCC><qresource prefix=\"/bridge\"><file alias=\"${bridge_alias}\">${WAVE_BRIDGE_LIBRARY}</file></qresource></RCC>\n")
+  list(APPEND WAVE_RESOURCES "${CMAKE_CURRENT_BINARY_DIR}/bridge.qrc")
+else()
+  message(STATUS "No Rekordbox bridge embedded (set WAVE_BRIDGE_LIBRARY): Wave can't start Rekordbox connected")
+endif()
+
+qt_add_executable(RekordboxWave WIN32 MACOSX_BUNDLE src/main.cpp ${WAVE_RESOURCES})
+target_link_libraries(RekordboxWave PRIVATE waveapp)
+set_target_properties(RekordboxWave PROPERTIES OUTPUT_NAME "Rekordbox Wave")
+if(WIN32)
+  target_sources(RekordboxWave PRIVATE resources/wave.rc)
+elseif(APPLE)
+  set_source_files_properties(resources/icon.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+  target_sources(RekordboxWave PRIVATE resources/icon.icns)
+  set_target_properties(RekordboxWave PROPERTIES
+    MACOSX_BUNDLE_GUI_IDENTIFIER io.github.palermostest25.rekordbox-wave
+    MACOSX_BUNDLE_BUNDLE_NAME "Rekordbox Wave"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_ICON_FILE icon.icns
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/resources/Info.plist.in")
+endif()
+
 enable_testing()
 add_executable(core_tests tests/core_tests.cpp)
 target_link_libraries(core_tests PRIVATE wavecore Qt6::Test)

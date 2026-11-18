@@ -539,8 +539,13 @@ void Canvas::drawPanel(QPainter &p, int idx, const QRectF &r) {
         const auto loop = deck.timeline.activeLoop();
         if (loop && original > 0)
             right = chip(p, right, y, chipH, "LOOP " + beatLabel((loop->second - loop->first) * original / 60), kLoopOrange, Qt::black, true).left() - gap;
-        if (const auto bars = countdown(position, deck.cues, original))
-            text(p, QRectF(right - info * 5, details, info * 5, info), *bars + QStringLiteral(" Bars"), info * .62, QColor("#d6dade"), Qt::AlignRight);
+        if (const auto bars = countdown(position, deck.cues, original)) {
+            // Only where it fits beside the key and tempo: a narrow panel drops it rather than overlap.
+            const QString label = *bars + QStringLiteral(" Bars");
+            p.setFont(arial(info * .62));
+            const double w = p.fontMetrics().horizontalAdvance(label) + 4;
+            if (right - w >= x) text(p, QRectF(right - w, details, w, info), label, info * .62, QColor("#d6dade"), Qt::AlignRight);
+        }
     }
     const QRectF ov(inner.left(), details + info + gap * .5, inner.width(), inner.bottom() - details - info - gap * .5);
     // Whole-track overview: played part dimmed, cues above and below, the playhead white.

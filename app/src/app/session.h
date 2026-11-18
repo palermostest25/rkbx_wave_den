@@ -71,6 +71,7 @@ public:
     QString loadUnavailable() const;  // why touch loading can't be used now, "" when it can
     bool loadTrack(int idx, const CatalogTrack &track, const QString &source = {});
     bool loadedByWave(int idx, const QString &path) const;
+    bool loading() const { return loading_.has_value(); }
     void toggleMasterTempo(int idx);
     void showRekordboxBrowser(bool on, int x, int y);
     void connectRekordbox();
