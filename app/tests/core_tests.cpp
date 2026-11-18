@@ -3,6 +3,8 @@
 // timeline's own tests, ported case by case.
 #include "core/anlz.h"
 #include "core/bridge.h"
+#include "core/library.h"
+#include "core/settings.h"
 #include "core/timeline.h"
 #include "core/waveform.h"
 
@@ -13,7 +15,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QTemporaryDir>
 #include <QTest>
+
+#include <sqlite3.h>
 
 #include <cmath>
 #include <cstring>
@@ -184,6 +189,208 @@ private slots:
             t.observe(at(std::floor(truth * 10) / 10, now), now);
             if (tick > 30) QVERIFY(std::abs(*t.position(now) - truth) < .2);
         }
+    }
+
+    // --- Settings ------------------------------------------------------------------------------
+    void settingsKeepWhatThisVersionDoesNotKnow() {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("default_config.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(R"({"color": {"low_color": [1, 2, 3]}, "render": {"deck_count": 2, "deck_order": "2,1,3,4"},
+                      "view": {"zoom_beats": 64, "future_key": "kept", "settings_version": 1}, "extra": 5})");
+        file.close();
+        Settings s;
+        QString error;
+        QVERIFY2(s.load(path, &error), qPrintable(error));
+        QCOMPARE(s.number("zoom_beats"), 64.0);
+        QCOMPARE(s.text("browser"), QStringLiteral("rekordbox"));  // as 2.5 moved everyone
+        QCOMPARE(s.text("keyboard"), QStringLiteral("wave"));
+        QCOMPARE(s.text("tap_to_open"), QStringLiteral("double"));
+        QCOMPARE(s.order(), (std::vector<int>{1, 0}));
+        QCOMPARE(s.colours()[0], QColor(1, 2, 3));
+        QCOMPARE(s.gains()[1], 1.0f);  // filled in from the defaults
+        s.setView("keyboard", "windows");
+        QVERIFY(s.save(path));
+        Settings again;
+        QVERIFY(again.load(path));
+        QCOMPARE(again.text("keyboard"), QStringLiteral("windows"));
+        QCOMPARE(again.json()["view"].toObject()["future_key"].toString(), QStringLiteral("kept"));
+        QCOMPARE(again.json()["extra"].toInt(), 5);
+        QCOMPARE(again.view("settings_version").toInt(), Settings::kVersion);
+    }
+
+    void damagedSettingsAreRefusedWhole() {
+        QTemporaryDir dir;
+        for (const char *text : {"not json", R"({"view": []})", R"({"view": {"zoom_beats": 2}})",
+                                 R"({"render": {"deck_order": "1,1,2,3"}})", R"({"view": {"playhead": "x"}})"}) {
+            QFile file(dir.filePath("bad.json"));
+            QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            file.write(text);
+            file.close();
+            Settings s;
+            QString error;
+            QVERIFY2(!s.load(file.fileName(), &error), text);
+            QVERIFY(!error.isEmpty());
+            QCOMPARE(s.number("zoom_beats"), 32.0);
+        }
+        Settings fresh;
+        QVERIFY(fresh.load(dir.filePath("missing.json")));  // no file yet is fine
+        QCOMPARE(fresh.order(), (std::vector<int>{2, 0, 1, 3}));
+        QCOMPARE(fresh.colours()[0], QColor(0, 84, 226));
+    }
+
+    void untouchedOldPalettesMoveToTheRekordboxLook() {
+        QTemporaryDir dir;
+        QFile file(dir.filePath("c.json"));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(R"({"color": {"low_color": [0,80,224], "mid_color": [248,160,0], "overlap_color": [176,96,0], "high_color": [244,234,214]}})");
+        file.close();
+        Settings s;
+        QVERIFY(s.load(file.fileName()));
+        QCOMPARE(s.colours()[1], QColor(255, 166, 0));
+        QCOMPARE(s.text("style"), QStringLiteral("Rekordbox"));
+    }
+
+    // --- Rekordbox's library -------------------------------------------------------------------
+    // The Python app's catalog fixture, in a database encrypted as Rekordbox's is.
+    static QString makeLibrary(const QTemporaryDir &dir) {
+        const QString path = dir.filePath("master.db");
+        sqlite3 *db = nullptr;
+        sqlite3_open(path.toUtf8().constData(), &db);
+        const QByteArray key = databaseKey(false);
+        sqlite3_key(db, key.constData(), int(key.size()));
+        sqlite3_exec(db, R"(
+          CREATE TABLE djmdContent(ID TEXT,Title TEXT,ArtistID TEXT,KeyID TEXT,BPM INTEGER,Length INTEGER,FolderPath TEXT,
+            rb_local_deleted INTEGER,AnalysisDataPath TEXT,DJPlayCount INTEGER,updated_at TEXT,ImagePath TEXT);
+          CREATE TABLE djmdArtist(ID TEXT,Name TEXT);
+          CREATE TABLE djmdKey(ID TEXT,ScaleName TEXT);
+          CREATE TABLE djmdCue(ContentID TEXT,InMsec INTEGER,OutMsec INTEGER,Kind INTEGER,rb_local_deleted INTEGER);
+          INSERT INTO djmdArtist VALUES('a','Artist');
+          INSERT INTO djmdKey VALUES('k','8A');
+          INSERT INTO djmdContent VALUES('1','Ten','a','k',10000,300,'/ten.wav',0,'/PIONEER/USBANLZ/aa/ten/ANLZ0000.DAT',3,'2024','/PIONEER/Artwork/ten.jpg');
+          INSERT INTO djmdContent VALUES('2','Nine','a','k',9000,90,'/nine.wav',0,'/PIONEER/USBANLZ/aa/nine/ANLZ0000.DAT',0,'2023','');
+          INSERT INTO djmdContent VALUES('3','100%_remix','a','k',12800,240,'/remix.wav',0,'',0,'','');
+          INSERT INTO djmdContent VALUES('4','100abc remix','a','k',12900,240,'/other.wav',1,'',0,'','');
+          INSERT INTO djmdContent VALUES('5','$A7:v1:abc==:def==','a','k',12000,200,'spotify:track:x',0,'',0,'','');
+          INSERT INTO djmdContent VALUES('6','Ten copy','a','k',10000,300,'/ten.wav',0,'/PIONEER/USBANLZ/bb/old/ANLZ0000.DAT',1,'2020','');
+          INSERT INTO djmdCue VALUES('1',1500,4000,1,0);
+          INSERT INTO djmdCue VALUES('1',500,-1,0,0);
+          INSERT INTO djmdCue VALUES('1',9000,-1,5,0);
+          INSERT INTO djmdCue VALUES('1',9500,-1,2,1);
+          CREATE TABLE djmdPlaylist(ID TEXT,Seq INTEGER,Name TEXT,Attribute INTEGER,ParentID TEXT);
+          CREATE TABLE djmdSongPlaylist(PlaylistID TEXT,ContentID TEXT,TrackNo INTEGER);
+          INSERT INTO djmdPlaylist VALUES('f',1,'Gigs',1,'root');
+          INSERT INTO djmdPlaylist VALUES('p',1,'Friday',0,'f');
+          INSERT INTO djmdPlaylist VALUES('s',2,'Smart',4,'root');
+          INSERT INTO djmdSongPlaylist VALUES('p','2',1);
+          INSERT INTO djmdSongPlaylist VALUES('p','1',2);
+        )", nullptr, nullptr, nullptr);
+        sqlite3_close(db);
+        return path;
+    }
+
+    void theLibraryOpensOnlyWithRekordboxsKey() {
+        QTemporaryDir dir;
+        const QString path = makeLibrary(dir);
+        QString error;
+        QVERIFY2(Library::openFile(path, false, &error), qPrintable(error));
+        QVERIFY(!Library::openFile(path, true, &error));  // a stick's key doesn't open the collection
+        QVERIFY(error.contains("could not be read"));
+        QVERIFY(!Library::openFile(dir.filePath("none.db"), false, &error));
+        QCOMPARE(databaseKey(false).size(), 64);
+        QVERIFY(databaseKey(false).startsWith("402fd482"));  // pyrekordbox's published master key
+    }
+
+    // A library encrypted elsewhere (SQLCipher with OpenSSL, as Rekordbox's is): every platform's own
+    // crypto (CNG on Windows, CommonCrypto on macOS) must read it.
+    void aLibraryEncryptedElsewhereOpens() {
+        QTemporaryDir dir;
+        const QString copy = dir.filePath("master.db");
+        QVERIFY(QFile::copy(QStringLiteral(WAVE_TEST_DATA "/encrypted-master.db"), copy));
+        QString error;
+        auto lib = Library::openFile(copy, false, &error);
+        QVERIFY2(lib, qPrintable(error));
+        const auto [total, rows] = lib->browse({}, "Title", false, 0, 10);
+        QCOMPARE(total, 1);
+        QCOMPARE(rows[0].title, QStringLiteral("Encrypted elsewhere"));
+        QCOMPARE(rows[0].artist, QStringLiteral("Made with OpenSSL"));
+        QCOMPARE(rows[0].bpm, 123.45);
+    }
+
+    void playlistsDrillDownInRunningOrder() {
+        QTemporaryDir dir;
+        auto lib = Library::openFile(makeLibrary(dir), false);
+        const auto top = lib->categories("PLAYLIST");
+        QCOMPARE(int(top.size()), 1);  // smart lists stay in Rekordbox
+        QCOMPARE(top[0].name, QStringLiteral("Gigs"));
+        QVERIFY(top[0].folder);
+        const auto inner = lib->categories("PLAYLIST", top[0].id);
+        QCOMPARE(int(inner.size()), 1);
+        QCOMPARE(inner[0].name, QStringLiteral("Friday"));
+        QCOMPARE(inner[0].count, 2);
+        const auto [total, rows] = lib->browse({}, "Order", false, 0, 50, std::pair<QString, QString>{"PLAYLIST", "p"});
+        QCOMPARE(total, 2);
+        QCOMPARE(rows[0].title, QStringLiteral("Nine"));
+        QCOMPARE(rows[1].title, QStringLiteral("Ten"));
+        QCOMPARE(lib->categories("KEY")[0].name, QStringLiteral("8A"));
+        QCOMPARE(lib->categories("ARTIST")[0].count, 4);
+        QCOMPARE(lib->browse({}, "Order", false, 0, 50).first, 0);  // no order outside a list
+    }
+
+    void rekordboxsListIsFoundByItsTracks() {
+        QTemporaryDir dir;
+        auto lib = Library::openFile(makeLibrary(dir), false);
+        const auto found = lib->locate({2, 1}, 2);
+        QVERIFY(found);
+        QCOMPARE(found->kind, QStringLiteral("PLAYLIST"));
+        QCOMPARE(found->id, QStringLiteral("p"));
+        QCOMPARE(found->name, QStringLiteral("Friday"));
+        QCOMPARE(int(found->trail.size()), 1);
+        QCOMPARE(found->trail[0].second, QStringLiteral("Gigs"));
+        QCOMPARE(lib->locate({1, 2, 3}, 4)->kind, QStringLiteral("TRACK"));  // the whole collection
+        QVERIFY(!lib->locate({1}, 1));
+        QVERIFY(!lib->locate({}, 5));
+    }
+
+    void searchIsLiteralAndScoped() {
+        QTemporaryDir dir;
+        auto lib = Library::openFile(makeLibrary(dir), false);
+        const std::pair<QString, QString> friday{"PLAYLIST", "p"};
+        QCOMPARE(lib->browse("nine", "Title", false, 0, 50, friday).second[0].title, QStringLiteral("Nine"));
+        QCOMPARE(lib->browse("nine", "Title", false, 0, 50, friday).first, 1);
+        QCOMPARE(lib->browse("artist", "Title", false, 0, 50).first, 4);
+        QCOMPARE(lib->browse("no such track", "Title", false, 0, 50).first, 0);
+        QCOMPARE(lib->browse("100%_ Artist", "Title", false, 0, 50).second[0].title, QStringLiteral("100%_remix"));
+        QCOMPARE(lib->browse("100%_ Artist", "Title", false, 0, 50).first, 1);
+        QCOMPARE(lib->browse("' OR 1=1 --", "Title", false, 0, 50).first, 0);
+        QCOMPARE(lib->browse({}, "BPM; DROP TABLE djmdContent", false, 0, 50).first, 0);
+        for (const auto &t : lib->browse({}, "Title", false, 0, 50).second) QVERIFY(!t.title.startsWith("$A7"));
+        const auto [total, page] = lib->browse({}, "BPM", false, 1, 1);
+        QCOMPARE(total, 4);
+        QCOMPARE(page[0].bpm, 100.0);
+        QCOMPARE(page[0].key, QStringLiteral("8A"));
+        QCOMPARE(lib->browse({}, "Time", true, 0, 1).second[0].duration, 300.0);
+        QVERIFY(lib->browse("ten", "Title", false, 0, 1).second[0].artwork.endsWith("share/PIONEER/Artwork/ten.jpg"));
+    }
+
+    void aLoadedFileFindsItsPreparedCopyAndCues() {
+        QTemporaryDir dir;
+        auto lib = Library::openFile(makeLibrary(dir), false);
+        QVERIFY(QDir().mkpath(dir.filePath("share/PIONEER/USBANLZ/aa/ten")));
+        const auto track = lib->resolvePath("/ten.wav");
+        QVERIFY(track);
+        QCOMPARE(track->id, QStringLiteral("1"));  // the copy with analysis on disk and cues
+        QCOMPARE(track->bpm, 100.0);
+        QCOMPARE(track->key, QStringLiteral("8A"));
+        QVERIFY(track->analysisFolder.endsWith("share/PIONEER/USBANLZ/aa/ten"));
+        QVERIFY(!lib->resolvePath("/missing.wav"));
+        const auto cues = lib->cues(track->analysisFolder);
+        QCOMPARE(int(cues.size()), 3);  // the deleted one isn't shown
+        QVERIFY(cues[0].memory && cues[0].timeSec == .5 && !cues[0].endSec);
+        QCOMPARE(cues[1].number, 1);
+        QCOMPARE(*cues[1].endSec, 4.0);
+        QCOMPARE(cues[2].number, 4);  // Kind 5 is hot cue D
     }
 
     // --- The bridge's shared file ------------------------------------------------------------

@@ -1,0 +1,25 @@
+// Windows: Wave's icon, its version, and a manifest asking for per-monitor DPI and the modern controls.
+#include <winver.h>
+IDI_ICON1 ICON "@CMAKE_CURRENT_SOURCE_DIR@/resources/icon.ico"
+1 24 "@CMAKE_CURRENT_SOURCE_DIR@/resources/wave.manifest"
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Rekordbox Wave contributors"
+      VALUE "FileDescription", "Rekordbox Wave"
+      VALUE "FileVersion", "@PROJECT_VERSION@"
+      VALUE "ProductName", "Rekordbox Wave"
+      VALUE "ProductVersion", "@PROJECT_VERSION@"
+      VALUE "OriginalFilename", "Rekordbox Wave.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

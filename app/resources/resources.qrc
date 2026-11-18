@@ -1,0 +1,7 @@
+<RCC>
+  <qresource prefix="/ui">
+    <file>chevron.png</file>
+    <file>check.png</file>
+    <file>icon.png</file>
+  </qresource>
+</RCC>

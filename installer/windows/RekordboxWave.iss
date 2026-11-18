@@ -1,7 +1,7 @@
 ; Rekordbox Wave for Windows: installs for the signed-in user (no administrator needed), with Start menu and
 ; desktop shortcuts and an uninstaller. Rekordbox itself is AlphaTheta's: when the version Wave supports is
 ; missing, Wave downloads AlphaTheta's own installer on first start, checks its signature and runs it.
-; Built by CI: iscc /DAppVersion=x.y.z installer\windows\RekordboxWave.iss (after scripts/build_app.py).
+; Built by CI: iscc /DAppVersion=x.y.z installer\windows\RekordboxWave.iss, with the C++ app in dist\.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"

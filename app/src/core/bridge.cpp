@@ -143,7 +143,13 @@ bool Client::open(QString *error) {
     }
 #endif
     if (file_.size() < qint64(sizeof(BridgeState))) {
-        if (error) *error = QStringLiteral("Wave bridge state file is not complete");
+        // Mapping past a short file would fault on read: an earlier layout is reported instead.
+        const QByteArray header = file_.peek(12);
+        uint32_t version = 0;
+        if (header.size() == 12) std::memcpy(&version, header.constData() + 8, 4);
+        older_ = header.startsWith(QByteArray(kBridgeMagic, 8)) && version != kBridgeVersion;
+        if (error) *error = older_ ? QStringLiteral("Rekordbox has an older Wave bridge loaded: press CONNECT to restart it")
+                                   : QStringLiteral("Wave bridge state file is not complete");
         return false;
     }
     map_ = file_.map(0, sizeof(BridgeState));
