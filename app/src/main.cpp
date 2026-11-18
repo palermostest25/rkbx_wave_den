@@ -13,6 +13,7 @@
 #include <QLoggingCategory>
 #include <QStyleFactory>
 #include <QSysInfo>
+#include <QThread>
 #include <QTimer>
 
 Q_LOGGING_CATEGORY(lcMain, "wave")
@@ -56,6 +57,11 @@ int main(int argc, char **argv) {
     std::unique_ptr<wave::SingleInstance> instance;
     if (!smokeTest && !demoMode) {
         instance = std::make_unique<wave::SingleInstance>();
+        // A Wave that just started this one (an update, INSTALL) may still be closing: give it a few seconds.
+        for (int i = 0; i < 30 && !instance->primary(); ++i) {
+            QThread::msleep(200);
+            instance = std::make_unique<wave::SingleInstance>();
+        }
         if (!instance->primary()) {
             qCInfo(lcMain) << "Wave is already running: brought it forward";
             return 0;

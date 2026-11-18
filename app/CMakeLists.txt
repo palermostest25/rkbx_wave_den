@@ -98,6 +98,7 @@ set_target_properties(RekordboxWave PROPERTIES OUTPUT_NAME "Rekordbox Wave")
 if(WIN32)
   configure_file(resources/wave.rc.in "${CMAKE_CURRENT_BINARY_DIR}/wave.rc" @ONLY)
   target_sources(RekordboxWave PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/wave.rc")
+  target_link_options(RekordboxWave PRIVATE /MANIFEST:NO)  # ours is in wave.rc
 elseif(APPLE)
   set_source_files_properties(resources/icon.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
   target_sources(RekordboxWave PRIVATE resources/icon.icns)
