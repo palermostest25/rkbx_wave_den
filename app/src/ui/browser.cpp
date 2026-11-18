@@ -1,6 +1,7 @@
 #include "ui/browser.h"
 
 #include "app/gig.h"
+#include "app/reader.h"
 #include "core/clock.h"
 #include "ui/widgets.h"
 
@@ -907,6 +908,10 @@ void BrowserPage::backTo(int level) {
 }
 
 bool BrowserPage::goBack() {
+    if (mirroring()) {  // out of Rekordbox's list, into Wave's own
+        openCategory(QStringLiteral("PLAYLIST"));
+        return true;
+    }
     if (!trail_.empty()) {
         const auto [title, view] = trail_.back();
         trail_.pop_back();
@@ -1051,6 +1056,87 @@ bool BrowserPage::enter() {
     return false;
 }
 
+void BrowserPage::mirror(const bridge::Browser &b) {
+    lastMirror_ = b;
+    if (!mirroring()) {
+        trail_.clear();
+        kind_.clear();
+        view_ = View{"rekordbox", {}, {}, std::nullopt};
+        title_ = QStringLiteral("REKORDBOX");
+        if (!search_->text().isEmpty()) {
+            const bool blocked = search_->blockSignals(true);
+            search_->clear();
+            search_->blockSignals(blocked);
+        }
+        stack_->setCurrentWidget(table_);
+        table_->horizontalHeader()->setSortIndicatorShown(false);
+        mirrored_.clear();
+        setHeading();
+    }
+    // The rows only when Rekordbox shows other ones (a new list, or scrolled on): a tap stays where it is otherwise.
+    if (b.tracks != mirrored_) {
+        const bool newList = mirrored_.empty() || b.tracks.empty() ||
+                             std::none_of(b.tracks.begin(), b.tracks.end(), [&](const auto &r) {
+                                 return std::find(mirrored_.begin(), mirrored_.end(), r) != mirrored_.end(); });
+        mirrored_ = b.tracks;
+        std::vector<CatalogTrack> rows;
+        std::map<QString, std::vector<uint32_t>> missing;  // source -> ids not yet named
+        for (const auto &[id, path] : b.tracks) {
+            const auto it = known_.find(path);
+            if (it != known_.end()) { rows.push_back(it->second); continue; }
+            rows.push_back(CatalogTrack{id ? QString::number(id) : QString(), path.isEmpty() ? QStringLiteral("…") : QFileInfo(path).completeBaseName(),
+                                        {}, 0, {}, 0, path, {}});
+            if (!path.isEmpty() && id) missing[sourceFor(path)].push_back(id);
+        }
+        model_->replace(rows, int(rows.size()));
+        if (!missing.empty() && !resolving_) {
+            resolving_ = true;
+            std::map<uint32_t, QString> paths(b.tracks.begin(), b.tracks.end());
+            tracksForIds(missing, [this, paths](std::map<uint32_t, CatalogTrack> found) {
+                resolving_ = false;
+                if (known_.size() > 5000) known_.clear();
+                for (const auto &[id, path] : paths) {
+                    const auto it = found.find(id);
+                    CatalogTrack t = it != found.end() ? it->second : CatalogTrack{QString::number(id), QFileInfo(path).completeBaseName(), {}, 0, {}, 0, {}, {}};
+                    t.path = path;  // as Rekordbox has it, for loading
+                    if (t.title.startsWith(QLatin1String("$A")) || t.title.isEmpty()) {  // streamed: its metadata is encrypted
+                        const QString service = streamingService(path);
+                        t.title = service.isEmpty() ? QStringLiteral("Streamed track") : service + QStringLiteral(" track");
+                    }
+                    if (t.artist.startsWith(QLatin1String("$A"))) t.artist.clear();
+                    known_[path] = t;
+                }
+                if (mirroring() && lastMirror_) { mirrored_.clear(); mirror(*lastMirror_); }
+            });
+        }
+        if (newList && !b.tracks.empty()) {
+            // Which of the DJ's lists this is, by its tracks: its name heads the browser.
+            std::vector<uint32_t> ids;
+            QString first;
+            for (const auto &[id, path] : b.tracks) { ids.push_back(id); if (first.isEmpty()) first = path; }
+            locate(sourceFor(first), ids, b.rows, [this](std::optional<Located> found) {
+                if (!mirroring()) return;
+                title_ = !found ? QStringLiteral("REKORDBOX") : found->kind == QLatin1String("TRACK") ? QStringLiteral("COLLECTION") : found->name;
+                setHeading();
+            });
+        }
+    }
+    const int row = b.cursor - b.first;
+    // Rekordbox behind Wave may report neither pane focused: its cursor row is still what its push and LOAD load.
+    if (b.focus != QLatin1String("tree") && row >= 0 && row < model_->rowCount()) {
+        table_->selectRow(row);
+        table_->scrollTo(model_->index(row, 1), QAbstractItemView::PositionAtCenter);
+    } else if (b.focus == QLatin1String("tree")) {
+        table_->clearSelection();
+    }
+    message_->setText(b.focus == QLatin1String("tree")
+        ? QStringLiteral("Rekordbox's playlists: turn the knob to pick one, push it to open it")
+        : b.rows >= 0 && b.cursor >= 0
+            ? QStringLiteral("%1 of %2 · push the knob or LOAD to load it, or tap a track and a deck below")
+                  .arg(QLocale().toString(b.cursor + 1), QLocale().toString(b.rows))
+            : QStringLiteral("Turn the knob to move through Rekordbox's list"));
+}
+
 bool BrowserPage::showsList() const { return stack_->currentWidget() == list_; }
 
 void BrowserPage::focusForKnob() { (stack_->currentWidget() == list_ ? static_cast<QWidget *>(list_) : table_)->setFocus(); }
@@ -1090,7 +1176,10 @@ void BrowserPage::load(int deck) {
     const auto track = selectedTrack();
     if (!track) message_->setText(QStringLiteral("Tap a track first."));
     else if (!locked_[deck].isEmpty()) message_->setText(locked_[deck]);
-    else emit loadRequested(deck, *track, sourcePath_);
+    else if (mirroring()) {
+        const auto [t, source] = forLoading(*track);
+        emit loadRequested(deck, t, source);
+    } else emit loadRequested(deck, *track, sourcePath_);
 }
 
 void BrowserPage::setDecks(const std::vector<int> &order, const std::map<int, QString> &locked, const QString &unavailable,
@@ -1155,6 +1244,17 @@ void BrowserPage::locate(const QString &source, const std::vector<uint32_t> &ids
     }, std::move(done));
 }
 
+void BrowserPage::tracksForIds(const std::map<QString, std::vector<uint32_t>> &ids, std::function<void(std::map<uint32_t, CatalogTrack>)> done) {
+    work<std::map<uint32_t, CatalogTrack>>([ids](CatalogCache &c) {
+        std::map<uint32_t, CatalogTrack> found;
+        for (const auto &[source, list] : ids) {
+            QString error;
+            if (Library *lib = c.get(source, &error)) found.merge(lib->tracks(list));
+        }
+        return found;
+    }, std::move(done));
+}
+
 void BrowserPage::tracksForPaths(const QStringList &paths, std::function<void(std::map<QString, CatalogTrack>)> done) {
     work<std::map<QString, CatalogTrack>>([paths](CatalogCache &c) {
         std::map<QString, CatalogTrack> found;
@@ -1162,6 +1262,12 @@ void BrowserPage::tracksForPaths(const QStringList &paths, std::function<void(st
             const auto t = path.isEmpty() ? std::nullopt : c.libraries.resolvePath(path);
             found[path] = t ? CatalogTrack{t->id, t->title, t->artist, t->bpm, t->key, t->lengthSec, path, t->artwork}
                             : CatalogTrack{{}, QFileInfo(path).completeBaseName(), {}, 0, {}, 0, path, {}};
+            CatalogTrack &row = found[path];
+            if (row.title.startsWith(QLatin1String("$A")) || row.title.isEmpty()) {  // a streamed track: its title is encrypted
+                const QString service = streamingService(path);
+                row.title = service.isEmpty() ? QStringLiteral("Streamed track") : service + QStringLiteral(" track");
+                if (row.artist.startsWith(QLatin1String("$A"))) row.artist.clear();
+            }
         }
         return found;
     }, std::move(done));

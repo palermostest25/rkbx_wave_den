@@ -22,10 +22,11 @@ Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
 - **Deck info bar:** artwork, title and artist, time remaining or elapsed, BPM, key and key shift,
   tempo and tempo range (±6 / ±10 / ±16 / WIDE), MASTER, SYNC and MT (tap MT to toggle key lock),
   loop state, a bar countdown and a track overview that warns near the end.
-- **Touch browser, driven by the knob:** your collection or a USB stick, by playlist, history, artist,
-  album or key, with search and your choice of keyboard: Wave's own keys, or Windows' touch keyboard. Turn the controller's browse knob and Wave's
-  highlight moves; press the knob to open a playlist, BACK to go up; press LOAD on the controller and
-  the track picked in Wave goes onto that deck. Or tap a deck's LOAD button on screen.
+- **Touch browser, and the knob's list:** your collection or a USB stick, by playlist, history, artist,
+  album or key, with search and your choice of keyboard: Wave's own keys, or Windows' touch keyboard. Turn
+  the controller's browse knob and Wave's browser opens on the list Rekordbox's knob is in, highlighted
+  where Rekordbox's cursor is, so pushing the knob or pressing LOAD loads exactly the track Wave shows.
+  Or tap a track and a deck's LOAD button on screen.
 - **Beatport and Spotify:** the BEATPORT and SPOTIFY tiles in Wave's browser bring Rekordbox's own browser
   over Wave on that service (sign in there the first time; Rekordbox shows only then). Load a track and Wave
   is back on the waveforms, with the streamed track's waveform once Rekordbox has analysed it.
@@ -113,7 +114,7 @@ use **Settings → Rekordbox → SHOW REKORDBOX**. Every one of these behaviours
 | To | Do this |
 | --- | --- |
 | Browse and load | **BROWSE**, pick a source and category, double-tap a playlist to open it (single tap in Settings › Browser), tap a track, tap a deck's **LOAD**. Drag to scroll. Once the track is on the deck, Wave goes back to the waveforms. Wave never loads onto a playing deck. |
-| Browse from the controller | **VIEW** opens the browser where you left it, and closes it again. In the open browser, turn the **browse knob** to move the highlight, push it to open a playlist, **BACK** to go up a level (at the top it closes the browser), **LOAD** to load the highlighted track. VIEW, BACK and the push need Wave to read the controller itself: Settings › Browser › *Controller* says whether it can. With nothing highlighted, a stray LOAD is undone: the deck gets its track back. |
+| Browse from the controller | Turn the **browse knob**: Wave's browser opens on Rekordbox's list, its cursor highlighted, and follows the knob. Push the knob or press a deck's **LOAD** to load the highlighted track; **BACK** goes up, as in Rekordbox. After a load, or 20 s left alone, Wave goes back to the waveforms. **VIEW** opens and closes Wave's browser where Wave can read the controller itself (macOS, or Windows 11 with Windows MIDI Services): Settings › Browser › *Controller* says. |
 | Go back several levels | Tap any level in the path at the top of the browser (COLLECTION › PLAYLIST › Gigs › …). |
 | Use Rekordbox's own browser | Settings › Browser › **Rekordbox's browser**: BROWSE (or the knob) then brings Rekordbox's browser over Wave, and it goes away after a load. |
 | Preview another part of a track | Touch or drag the deck's overview, at the bottom of its panel. |
@@ -162,10 +163,12 @@ OS, Rekordbox version and the status text Wave shows.
   Rekordbox is new in 2.5. Try it at home before a gig.
 - **Windows:** Rekordbox's browser is its Split Screen window when it is open (View › Show Split Screen,
   once), otherwise Rekordbox's main window, laid over Wave below Wave's toolbar.
-- **Windows:** Wave reads the controller itself (exact knob, BACK and LOAD, and SHIFT + BROWSE zoom) only on
-  Windows 11 with Windows MIDI Services, which lets two apps share a controller. On other Windows it follows
-  the knob through Rekordbox's own browser instead, which works well in a playlist's track list; moving
-  between playlists with the knob then follows whichever playlist Rekordbox is on.
+- **Windows:** the knob, its push, BACK and LOAD always work (Rekordbox acts on them and Wave shows its
+  list). VIEW, SHIFT + BROWSE zoom and the sampler-knob zoom need Wave to read the controller too, which
+  Windows allows only with Windows MIDI Services (Windows 11, from Windows Update): classic Windows MIDI
+  gives a controller to one app, and Wave never takes it from Rekordbox.
+- **Moving between playlists with the knob:** Wave shows the tracks of the playlist Rekordbox's cursor is
+  on and names it; the tree of playlists itself is Rekordbox's.
 - Wave shows Rekordbox; it doesn't replace it. Playback, effects and the mixer stay in Rekordbox.
 
 ## Build from source

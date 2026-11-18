@@ -307,8 +307,9 @@ void SettingsPage::build() {
     controller_ = p->row(QStringLiteral("Controller"), nullptr, QStringLiteral(" "));
     p->row(QStringLiteral("Open a playlist with"), seg("tap_to_open", {{QStringLiteral("Double tap"), "double"}, {QStringLiteral("Single tap"), "single"}}),
            QStringLiteral("Double tap lets a finger scroll the list and pick without opening anything by accident."));
-    p->row(QStringLiteral("The knob drives Wave's browser"), sw("knob_loads_wave"),
-           QStringLiteral("Turning the browse knob moves Wave's highlight, and LOAD on the controller loads the track picked here."));
+    p->row(QStringLiteral("The knob opens Wave's browser"), sw("knob_loads_wave"),
+           QStringLiteral("Turning the browse knob opens Wave's browser on the list Rekordbox's knob is in, highlighted where it is, "
+                          "so pushing the knob or LOAD loads exactly what Wave shows. Left alone for 20 s it goes back to the waveforms."));
 
     // REKORDBOX ----------------------------------------------------------------------------------------
     p = page(QStringLiteral("REKORDBOX"), QStringLiteral("Rekordbox"));
