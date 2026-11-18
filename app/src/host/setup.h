@@ -38,7 +38,7 @@ private:
     void finish(bool ok, const QString &message);
     QNetworkAccessManager *net_;
     QString folder_;
-    bool busy_ = false;
+    bool busy_ = false, triedMirror_ = false, triedSite_ = false;
 };
 
 }  // namespace wave::host
