@@ -220,9 +220,11 @@ jobs:
           path: ${{ runner.temp }}/vcpkg-cache
           key: vcpkg-${{ matrix.triplet }}-${{ env.VCPKG_TAG }}-${{ hashFiles('app/vcpkg.json', 'app/triplets/*') }}
       - name: Test
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir app-build --output-on-failure
+        shell: bash
+        # Off screen on Linux and macOS; Windows' static Qt draws on the runner's own desktop.
+        run: |
+          if [ "$RUNNER_OS" != Windows ]; then export QT_QPA_PLATFORM=offscreen; fi
+          ctest --test-dir app-build --output-on-failure --timeout 300
       - name: Package for Windows
         if: runner.os == 'Windows'
         shell: pwsh
