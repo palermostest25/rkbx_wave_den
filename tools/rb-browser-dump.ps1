@@ -5,7 +5,9 @@
 #   -Tree: also walks Rekordbox's sidebar tree (objects, their class names, every text they reach), to find its items.
 #   -Find "text": the chains of objects (with class names and offsets) from Rekordbox's browser view, and from its sidebar
 #   tree, that lead to a text containing it, e.g. the title of a track Rekordbox shows now.
-param([int]$Rows = 6, [switch]$Tree, [string]$Find = "", [int]$Depth = 6, [int]$Nodes = 150000)
+#   -Classes "regex": every object reachable from the browser view whose C++ class matches, with its chain, and for
+#   list-like objects the rows / tracks fields the bridge reads for Rekordbox's own track list.
+param([int]$Rows = 6, [switch]$Tree, [string]$Find = "", [string]$Classes = "", [int]$Depth = 6, [int]$Nodes = 150000)
 
 Add-Type -TypeDefinition @"
 using System;
@@ -56,6 +58,43 @@ public static class Rb {
                     continue;
                 }
                 if ((v & 7) != 0 || depth[obj] >= maxDepth || depth.ContainsKey(v)) continue;
+                depth[v] = depth[obj] + 1; parent[v] = Tuple.Create(obj, o); queue.Enqueue(v);
+            }
+        }
+        found.Add(String.Format("(visited {0} objects)", visited));
+        return found;
+    }
+    // Breadth-first: objects whose RTTI class matches the pattern, with their chain from root.
+    public static System.Collections.Generic.List<string> FindClass(long root, string pattern, int maxDepth, int maxNodes, long imageBase) {
+        var re = new System.Text.RegularExpressions.Regex(pattern);
+        var found = new System.Collections.Generic.List<string>();
+        var parent = new System.Collections.Generic.Dictionary<long, Tuple<long, int>>();
+        var depth = new System.Collections.Generic.Dictionary<long, int>();
+        var queue = new System.Collections.Generic.Queue<long>();
+        queue.Enqueue(root); depth[root] = 0; parent[root] = null;
+        int visited = 0;
+        while (queue.Count > 0 && visited < maxNodes && found.Count < 400) {
+            long obj = queue.Dequeue(); visited++;
+            var raw = Read(obj, 0x400) ?? Read(obj, 0x100); if (raw == null) continue;
+            string c = Class(obj, imageBase);
+            if (c != null && re.IsMatch(c)) {
+                var chain = new System.Text.StringBuilder();
+                long cur = obj;
+                var hops = new System.Collections.Generic.List<string>();
+                while (parent.ContainsKey(cur) && parent[cur] != null) {
+                    var p = parent[cur];
+                    hops.Insert(0, String.Format("+0x{0:x}->{1}", p.Item2, Class(cur, imageBase) ?? "?"));
+                    cur = p.Item1;
+                }
+                // The bridge's list fields: rows (+0x240), cursor box (+0x220), tracks array (+0x250: data, count at +0xc).
+                long tracks = Q(obj + 0x250); long data = tracks != 0 ? Q(tracks) : 0; int stored = tracks != 0 ? I(tracks + 0xc) : 0;
+                string first = data != 0 ? Class(Q(data), imageBase) : null;
+                found.Add(String.Format("0x{0:x} {1} rows@240={2} stored={3} first={4} :: {5}", obj, c, I(obj + 0x240), stored, first,
+                                        String.Join(" ", hops)));
+            }
+            for (int o = 0; o + 8 <= raw.Length; o += 8) {
+                long v = BitConverter.ToInt64(raw, o);
+                if (v < 0x10000 || v > 0x7FFFFFFFFFFF || (v & 7) != 0 || depth[obj] >= maxDepth || depth.ContainsKey(v)) continue;
                 depth[v] = depth[obj] + 1; parent[v] = Tuple.Create(obj, o); queue.Enqueue(v);
             }
         }
@@ -138,4 +177,9 @@ if ($Find) {
     $viewer = [Rb]::Q([Rb]::Q($view + 0x240) + 0x100)
     "=== '$Find' from the sidebar tree viewer 0x{0:x}" -f $viewer
     [Rb]::FindText($viewer, $Find, $Depth, $Nodes, $base) | ForEach-Object { $_ }
+}
+
+if ($Classes) {
+    "=== classes /$Classes/ from the browser view 0x{0:x}" -f $view
+    [Rb]::FindClass($view, $Classes, $Depth, $Nodes, $base) | ForEach-Object { $_ }
 }
