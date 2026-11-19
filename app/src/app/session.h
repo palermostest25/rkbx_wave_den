@@ -76,7 +76,8 @@ public:
     bool loadedByWave(int idx, const QString &path) const;
     bool loading() const { return loading_.has_value(); }
     void toggleMasterTempo(int idx);
-    void showRekordboxBrowser(bool on, int x, int y);
+    // Rekordbox's own browser window (macOS: shown at x, y; Windows: its split screen toggled). ``answered``: Rekordbox's reply.
+    void showRekordboxBrowser(bool on, int x, int y, std::function<void(bool, QString)> answered = {});
     void connectRekordbox();
 
 signals:

@@ -467,10 +467,14 @@ void Session::toggleMasterTempo(int idx) {
     request([idx, on](bridge::Client &c) { return c.request(bridge::MasterTempo, idx, on ? 1 : 0); }, [](bool, const QString &) {});
 }
 
-void Session::showRekordboxBrowser(bool on, int x, int y) {
-    if (!bridged()) return;
+void Session::showRekordboxBrowser(bool on, int x, int y, std::function<void(bool, QString)> answered) {
+    if (!bridged()) {
+        if (answered) answered(false, QStringLiteral("Rekordbox is not connected"));
+        return;
+    }
     const int64_t packed = on ? int64_t((uint64_t(uint32_t(y)) << 32) | uint32_t(x)) : 0;
-    request([on, packed](bridge::Client &c) { return c.request(bridge::ShowBrowser, 0, on ? 1 : 0, packed); }, [](bool, const QString &) {});
+    request([on, packed](bridge::Client &c) { return c.request(bridge::ShowBrowser, 0, on ? 1 : 0, packed); },
+            [answered](bool ok, const QString &message) { if (answered) answered(ok, message); });
 }
 
 void Session::connectRekordbox() {
