@@ -870,9 +870,10 @@ bool MainWindow::browseInRekordbox(const QString &service) {
                 splitWindow_ = w.hwnd;
                 break;
             }
-    if (!target && c.main && !splitAsked_ && session_->bridged()) {
+    if (!target && c.main && !splitAsked_) {
         // Only the browser, in the window of its own that Rekordbox's split screen button (bottom right of its browser)
-        // opens, through the bridge as that button runs it. The window it adds is the browser.
+        // opens: through the bridge as that button runs it, or by pressing that button (btnMultiWindow) when the bridge
+        // isn't there. The window it adds is the browser. Rekordbox's main window is never shown in its place.
         splitAsked_ = true;
         std::set<quintptr> before;
         for (const host::Win &w : windows) before.insert(w.hwnd);
@@ -894,30 +895,44 @@ bool MainWindow::browseInRekordbox(const QString &service) {
                 QTimer::singleShot(250, this, [look, left] { (*look)(left - 1); });
                 return;
             }
-            if (!splitWindow_) qCWarning(lcWindow) << "Rekordbox's split screen browser didn't open: showing its main window";
-            const bool shown = browseInRekordbox(service);
+            bool shown = false;
+            if (splitWindow_) shown = browseInRekordbox(service);
+            else {
+                qCWarning(lcWindow) << "Rekordbox's split screen browser didn't open";
+                showBanner(QStringLiteral("Rekordbox's browser didn't open: tap %1 again").arg(service.isEmpty() ? QStringLiteral("BROWSE") : service),
+                           "warn", {}, {}, 8000, "split");
+            }
             splitAsked_ = false;
             if (!shown && pages_->currentWidget() == browser_) toggleBrowser();
         };
-        session_->showRekordboxBrowser(true, 0, 0, [this, look](bool ok, const QString &message) {
-            if (ok) { QTimer::singleShot(250, this, [look] { (*look)(16); }); return; }
-            // An older bridge (Rekordbox not restarted since Wave updated) doesn't know the command.
-            qCWarning(lcWindow) << "Split screen browser:" << message;
-            showBanner(QStringLiteral("Rekordbox runs an older Wave bridge: press CONNECT to restart it, then the browser opens inside Wave"),
-                       "warn", QStringLiteral("CONNECT"), [this] { session_->connectRekordbox(); }, 12000, "split");
-            (*look)(0);
+        const quintptr main = c.main->hwnd;
+        auto byButton = [this, look, main] {
+            // Rekordbox's own split screen button, as a tap on it: off the UI thread (Rekordbox may be slow to answer).
+            QThreadPool::globalInstance()->start([this, look, main] {
+                host::Automation automation;
+                const bool pressed = automation.press(main, QStringLiteral("btnMultiWindow"));
+                QMetaObject::invokeMethod(this, [look, pressed] {
+                    if (!pressed) qCWarning(lcWindow) << "Rekordbox's split screen button wasn't there";
+                    QTimer::singleShot(250, [look] { (*look)(16); });
+                });
+            });
+        };
+        if (!session_->bridged()) { byButton(); return true; }
+        session_->showRekordboxBrowser(true, 0, 0, [look, byButton](bool ok, const QString &message) {
+            if (ok) { QTimer::singleShot(250, [look] { (*look)(16); }); return; }
+            qCWarning(lcWindow) << "Split screen browser through the bridge:" << message;  // an older bridge: its button then
+            byButton();
         });
         return true;
     }
-    if (!target) target = c.main;
-    if (!target) return false;
+    if (!target) return splitAsked_;  // never Rekordbox's main window: only its browser belongs inside Wave
     if (streaming) setOnTop(false);
-    // The split browser becomes part of Wave: in Wave's page, under its toolbar, without a frame of its own. Rekordbox's
-    // main window (only when there is no split browser) is laid there as it is.
+    // The split browser becomes part of Wave: in Wave's page, under its toolbar, without a frame of its own.
     const bool split = !c.main || target->hwnd != c.main->hwnd;
     if (pages_->currentWidget() == browser_) toggleBrowser();  // the waveforms behind it, for when it goes
     std::optional<host::Embedded> embedded;
     if (split) embedded = host::embed(target->hwnd, quintptr(winId()), pageRect());
+    if (embedded && c.main) host::sendToBack(c.main->hwnd);  // opening the split browser can bring Rekordbox forward
     if (!embedded) host::present(target->hwnd, pageRect(), std::nullopt, true, !streaming);
     rekordboxBrowsing_ = Browsing{"window", deckPaths(), target->hwnd, c.main && target->hwnd == c.main->hwnd, windowState(), service, embedded};
     if (streaming) {
@@ -948,8 +963,9 @@ void MainWindow::openStreaming(const QString &service) {
         return;
     }
 #ifdef Q_OS_WIN
-    // Natively: Wave's own browser on the service, searched through Rekordbox (see BrowserPage::showStreaming).
-    if (session_->settings.flag("native_streaming") && session_->bridged()) {
+    // Archived (3.0.10): Wave's own browser on the service, searched through Rekordbox (BrowserPage::showStreaming).
+    // Rekordbox's search box wasn't reliably reachable; off, with no switch in Settings. Kept for later.
+    if (session_->settings.flag("native_streaming_archived") && session_->bridged()) {
         if (pages_->currentWidget() != browser_) toggleBrowser();
         browser_->showStreaming(service);
         listFirst_ = 0;

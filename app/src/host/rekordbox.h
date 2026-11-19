@@ -30,6 +30,10 @@ std::vector<Install> installed(const QString &root = {});  // every Rekordbox fo
 std::optional<Install> supportedInstall();
 QString summary();                                         // one line for Settings
 
+// Closes Rekordbox's update manager (Windows: "Upmgr rekordbox.exe") wherever it runs: Wave keeps Rekordbox at the
+// version its bridge supports, so updates are never offered. Returns how many were closed.
+int stopUpdater();
+
 // The running Rekordbox, 0 for none.
 uint32_t rekordboxPid();
 std::optional<double> processAge(uint32_t pid);            // seconds since it started

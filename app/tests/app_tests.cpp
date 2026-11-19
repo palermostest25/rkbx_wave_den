@@ -197,6 +197,15 @@ private slots:
         QCOMPARE(*host::dismissWith(popup("", {"Try rekordbox Creative plan"}, {"Learn more", "Not now"})), QStringLiteral("Not now"));
         QCOMPARE(*host::dismissWith(popup("What's new", {"Stems, cloud and more"}, {"Learn more", "Close"})), QStringLiteral("Close"));
         QVERIFY(!host::dismissWith(popup("", {"Analyse 30 tracks?"}, {"Analyse", "Close"})));
+        QCOMPARE(*host::dismissWith(popup("Sync with My Tag",
+                                          {"My Tag in this device is synced with another computer. Do you want to delete My Tag stored "
+                                           "in the device and sync with My Tag in this computer?"},
+                                          {"Sync with My Tag", "Do not sync with My Tag"})),
+                 QStringLiteral("Do not sync with My Tag"));
+        QCOMPARE(*host::dismissWith(popup("rekordbox", {"rekordbox 7.2.20 is available. Do you want to quit rekordbox and update now?"},
+                                          {"Update", "Cancel"})),
+                 QStringLiteral("Cancel"));
+        QVERIFY(!host::dismissWith(popup("", {"The library needs an update. Update the database now?"}, {"Update", "Cancel"})));
         for (const auto &p : {popup("", {"Sync your library now?"}, {"Sync", "Cancel"}), popup("", {"Learn more about plans"}, {"Learn more"}),
                               popup("Sign in", {"Log in to your account"}, {"Later"}),
                               popup("", {"The database is damaged: restore the backup?"}, {"OK"}), popup("", {"Something"}, {}),
