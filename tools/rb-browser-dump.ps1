@@ -1,8 +1,9 @@
-# Development tool, read-only: dumps the rows of Rekordbox 7.2.19's browser list (what its knob moves through), as the
+﻿# Development tool, read-only: dumps the rows of Rekordbox 7.2.19's browser list (what its knob moves through), as the
 # Wave bridge finds them, with every text each row object points to. Used to learn where Rekordbox keeps a streamed
 # (Beatport, Spotify) result's title, artist and ids for Wave's native browser. Reads Rekordbox's memory; changes nothing.
-#   powershell -ExecutionPolicy Bypass -File rb-browser-dump.ps1 [-Rows 6] [-Select "Beatport"]
-param([int]$Rows = 6, [string]$Select = "")
+#   powershell -ExecutionPolicy Bypass -File rb-browser-dump.ps1 [-Rows 6] [-Tree]
+#   -Tree: also walks Rekordbox's sidebar tree (objects, their class names, every text they reach), to find its items.
+param([int]$Rows = 6, [switch]$Tree)
 
 Add-Type -TypeDefinition @"
 using System;
@@ -20,36 +21,28 @@ public static class Rb {
     }
     public static long Q(long addr) { var b = Read(addr, 8); return b == null ? 0 : BitConverter.ToInt64(b, 0); }
     public static int I(long addr) { var b = Read(addr, 4); return b == null ? 0 : BitConverter.ToInt32(b, 0); }
+    // The C++ class of an object, from its vtable's RTTI (MSVC x64: vtable[-1] -> complete object locator).
+    public static string Class(long obj, long imageBase) {
+        long vt = Q(obj); if (vt < imageBase || vt > imageBase + 0x8000000) return null;
+        long col = Q(vt - 8); if (col == 0 || I(col) != 1) return null;
+        string name = Text(imageBase + (uint)I(col + 12) + 16);
+        return name;
+    }
     // A NUL-terminated UTF-8 text of at least 2 printable characters at addr, or null.
     public static string Text(long addr) {
         var b = Read(addr, 160); if (b == null) return null;
         int n = Array.IndexOf(b, (byte)0); if (n < 2) return null;
         var s = Encoding.UTF8.GetString(b, 0, n);
-        foreach (char c in s) if (char.IsControl(c) || c == '�') return null;
+        foreach (char c in s) if (char.IsControl(c) || c == (char)0xFFFD) return null;
         return s;
     }
 }
 "@
 
-$p = Get-Process rekordbox -ErrorAction Stop | Select-Object -First 1
+$p = Get-Process rekordbox -ErrorAction Stop | Select-Object -First 1  # (its MainWindowHandle may be a dialog; not used)
 $base = $p.MainModule.BaseAddress.ToInt64()
 [Rb]::Open($p.Id)
 "rekordbox pid $($p.Id) base 0x{0:x} version {1}" -f $base, $p.MainModule.FileVersionInfo.ProductVersion
-
-if ($Select) {
-    # Rekordbox's tree item by name (as Wave does), through UI Automation, then a moment for its list to fill.
-    Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
-    $root = [System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle)
-    $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $Select)
-    $item = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
-    if ($item) {
-        "selecting '$Select' ($($item.Current.ControlType.ProgrammaticName))"
-        $sel = $null
-        if ($item.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$sel)) { $sel.Select() }
-        else { $inv = $null; if ($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$inv)) { $inv.Invoke() } }
-        Start-Sleep -Seconds 4
-    } else { "no UI Automation element named '$Select' in Rekordbox's main window" }
-}
 
 $rel = { param($a) $a - 0x140000000 + $base }
 $view = [Rb]::Q((& $rel 0x145f38738))
@@ -74,4 +67,26 @@ for ($row = 0; $row -lt [Math]::Min($Rows, $rowCount); $row++) {
         if ($inner) { for ($k = 0; $k -lt 0x40; $k += 8) { $s2 = [Rb]::Text([BitConverter]::ToInt64($inner, $k)); if ($s2) { "  +0x{0:x3} -> +0x{1:x2} -> '{2}'" -f $o, $k, $s2 } } }
     }
     "  ints: " + ((0..31 | ForEach-Object { "{0:x2}={1}" -f ($_*4), [BitConverter]::ToInt32($raw, $_*4) }) -join ' ')
+}
+
+if ($Tree) {
+    # Rekordbox's sidebar: the tree manager (+0x240 of the view) and its tree viewer (+0x100), walked breadth-first through
+    # pointers (up to 4 levels, 4000 objects), printing each object's class and the texts its fields point at.
+    $trees = [Rb]::Q($view + 0x240); $viewer = [Rb]::Q($trees + 0x100)
+    "=== tree manager 0x{0:x} ({1}) viewer 0x{2:x} ({3})" -f $trees, [Rb]::Class($trees, $base), $viewer, [Rb]::Class($viewer, $base)
+    $seen = @{}; $queue = New-Object System.Collections.Queue; $queue.Enqueue(@($viewer, 0, "viewer")); $count = 0
+    while ($queue.Count -gt 0 -and $count -lt 4000) {
+        $node = $queue.Dequeue(); $obj = $node[0]; $depth = $node[1]; $path = $node[2]
+        if ($seen.ContainsKey($obj)) { continue }; $seen[$obj] = 1; $count++
+        $raw = [Rb]::Read($obj, 0x300); if (-not $raw) { continue }
+        $cls = [Rb]::Class($obj, $base)
+        $texts = @()
+        for ($o = 0; $o -lt 0x300; $o += 8) {
+            $v = [BitConverter]::ToInt64($raw, $o)
+            $s = [Rb]::Text($v)
+            if ($s) { $texts += ("+0x{0:x}='{1}'" -f $o, $s) }
+            elseif ($depth -lt 4 -and $v -gt 0x10000 -and $v -lt 0x7FFFFFFFFFFF -and ($v % 8) -eq 0) { $queue.Enqueue(@($v, ($depth + 1), ("{0}+0x{1:x}" -f $path, $o))) }
+        }
+        if ($cls -or $texts.Count) { "{0} 0x{1:x} {2} {3}" -f $path, $obj, $cls, ($texts -join ' ') }
+    }
 }
