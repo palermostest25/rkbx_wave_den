@@ -53,7 +53,7 @@ enum : int { NUM_PLAYERS, IS_LOADED, IS_LOADING, IS_PLAYING, POSITION_MS, TOTAL_
              TRACK_CTOR, TRACK_DTOR, TRACK_BASIC_INFO, BROWSE_INSTANCE, BROWSE_MANAGERS, LIST_CONTAINER,
              CONTAINER_LIST, TREE_VIEWER, ROW_TRACK, SELECTED_ROWS, LIST_BOX, HAS_FOCUS, DEVICE_ROOT,
              ALL_DEVICES, CRT_FREE, STICK_DATABASE, STICK_LOAD, STICK_ROW, MIDI_CALLBACK, MIDI_OPEN, PERFORM, SPLIT_SCREEN,
-             CODE_COUNT };
+             SET_TEXT, SEARCH_RETURN, SEARCH_RUN, CODE_COUNT };
 // FNV-1a of each function's first bytes; entries never called pin what the bridge reads directly:
 // PLAYER_CONTROL the graph's players (+0x430/+0x43c), ENGINE_GET and DATABASE_GET the singletons,
 // MAIN_COMPONENT its static, LOAD_TEMPLATE (whole) the load message and UiManager offset.
@@ -119,7 +119,17 @@ constexpr Code kCode[CODE_COUNT] = {
     // toggles the split browser window through +0x328's slot 0x190, reading nothing else of the request.
     {0x141824840, 0x30, 0xea4f7fb0902eb0edULL},  // MainComponent::perform(const InvocationInfo &)
     {0x141826fa9, 0x20, 0x882a3c70274bc1ceULL},  // ... its Show Split Screen case
+    // The browser's search box (browse::SearchFilter): its juce::TextEditor at +0x110, and its TextEditor::Listener (at
+    // +0xf0) whose Return handler runs the search (Beatport's too, on Search Tracks) as pressing Return does.
+    {0x142b91710, 0x30, 0x0ccbe7cbebbbd10cULL},  // juce::TextEditor::setText(const String &, bool sendTextChangeMessage)
+    {0x14163e420, 0x15, 0x58dc6bf2e1f56077ULL},  // SearchFilter::textEditorReturnKeyPressed(TextEditor &)
+    {0x14163e2e0, 0x30, 0xd2fac023c246035cULL},  // ... what it runs: the search, posted to run next
 };
+constexpr uint64_t kSearchFilterVtable = 0x143938ca0ULL;   // browse::SearchFilter (its Component)
+constexpr uint64_t kSearchListenerVtable = 0x143938e38ULL; // its TextEditor::Listener, at +0xf0
+constexpr uint64_t kSearchEditor = 0x110;                  // its juce::TextEditor*
+constexpr uint64_t kStringCtor = 0x142a6e420ULL;           // juce::String::String(const char *) (UTF-8)
+constexpr uint64_t kRowTitle = 0x20, kRowArtist = 0xd0;    // db::RowDataTrack's title and artist (juce::String)
 constexpr uint64_t kCommandTargetVtable = 0x1439e11c8ULL;  // MainComponent's ApplicationCommandTarget vtable
 constexpr uint64_t kCommandTarget = 0x238;                 // that base, inside MainComponent
 constexpr int kShowSplitScreen = 0xB04C;
@@ -316,6 +326,8 @@ bool open_shared() {
     memset(shared->devices, 0, sizeof shared->devices);
     memset(&shared->browser, 0, sizeof shared->browser);
     memset(&shared->midi, 0, sizeof shared->midi);
+    memset(shared->texts, 0, sizeof shared->texts);
+    memset(&shared->search, 0, sizeof shared->search);
     shared->browser.rows = -1;
     shared->browser.cursor = -1;
     shared->browser.focus = 2;
@@ -465,6 +477,12 @@ void read_browser() {
         out.id = track ? field<uint32_t>(track, 0x8) : 0;
         const char *path = track ? field<const char *>(track, 0x98) : nullptr;  // the full path; +0xa8 is its name
         snprintf(out.path, sizeof out.path, "%s", path ? path : "");
+        // As Rekordbox shows the row: a streamed one (Beatport, its search results) has no file to look up.
+        BrowseText &text = shared->texts[count];
+        const char *title = track ? field<const char *>(track, kRowTitle) : nullptr;
+        const char *artist = track ? field<const char *>(track, kRowArtist) : nullptr;
+        snprintf(text.title, sizeof text.title, "%s", title ? title : "");
+        snprintf(text.artist, sizeof text.artist, "%s", artist ? artist : "");
     }
     b.rows = rows; b.cursor = cursor; b.first = first; b.count = count;
 }

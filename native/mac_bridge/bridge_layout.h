@@ -8,7 +8,7 @@
 #endif
 
 constexpr char kBridgeMagic[8] = {'R', 'K', 'W', 'B', 'R', 'D', 'G', '1'};
-constexpr uint32_t kBridgeVersion = 6;
+constexpr uint32_t kBridgeVersion = 7;
 constexpr const char *kBridgeStateFile = "state.bin";
 constexpr uint32_t kBridgeDecks = 4;
 constexpr uint32_t kBridgeDevices = 4;
@@ -20,7 +20,9 @@ enum : uint32_t { kStatusStarting = 0, kStatusLive = 1, kStatusUnsupported = 2, 
 enum : uint32_t { kDeckLoaded = 1, kDeckPlaying = 2, kDeckLooping = 4, kDeckMasterTempo = 8, kDeckSync = 16,
                   kDeckSlip = 32, kDeckKeySync = 64 };
 enum : uint32_t { kCommandLoad = 1, kCommandMasterTempo = 2, kCommandLoadDevice = 3,
-                  kCommandBrowser = 4 };  // content_id 1: show Rekordbox's own browser window (device: Wave's
+                  kCommandBrowser = 4,     // see below
+                  kCommandLoadRow = 5,     // the row of Rekordbox's browser list at `device`, whose id is content_id, onto deck
+                  kCommandSearch = 6 };    // Rekordbox's browser search box: BridgeSearch.query, as if typed and Return pressed  // content_id 1: show Rekordbox's own browser window (device: Wave's
                                                 // window centre, x low 32 bits, y high), 0: put it away
 enum : int32_t { kReplyRequested = 1, kReplyBadRequest = -1, kReplyExpired = -2, kReplyBadDeck = -3,
                  kReplyDeckPlaying = -4, kReplyDeckBusy = -5, kReplyNoTrack = -6, kReplyNotReady = -7,
@@ -95,6 +97,15 @@ struct BridgeMidi {            // outside the seqlock: each event carries its ow
     uint16_t keep[kMidiKeeps]; // Wave: (status << 8) | data1 of each note or control change to keep
 };
 
+struct BrowseText {            // what Rekordbox shows of one row of its track list (rows_[i] has its id and path)
+    char title[160];
+    char artist[96];
+};
+
+struct BridgeSearch {          // written by Wave before a kCommandSearch; content_id = FNV-1a 32 of query's bytes
+    char query[256];
+};
+
 struct BridgeState {           // seqlock: odd while the bridge writes
     char magic[8];
     uint32_t version;
@@ -112,6 +123,8 @@ struct BridgeState {           // seqlock: odd while the bridge writes
     BridgeDevice devices[kBridgeDevices];
     BridgeBrowser browser;
     BridgeMidi midi;
+    BrowseText texts[kBrowseRows];  // in the seqlock, with browser
+    BridgeSearch search;
 };
 
 static_assert(sizeof(BridgeDeck) == 1080, "layout");
@@ -122,4 +135,5 @@ static_assert(sizeof(BrowseRow) == 264, "layout");
 static_assert(sizeof(BridgeBrowser) == 32 + 512 + 64 * 264, "layout");
 static_assert(sizeof(BridgeMidiEvent) == 8, "layout");
 static_assert(sizeof(BridgeMidi) == 8 + 128 * 8 + 16 + 48 * 2, "layout");
-static_assert(sizeof(BridgeState) == 176 + 4 * 1080 + 40 + 128 + 4 * 256 + 32 + 512 + 64 * 264 + 1144, "layout");
+static_assert(sizeof(BrowseText) == 256, "layout");
+static_assert(sizeof(BridgeState) == 176 + 4 * 1080 + 40 + 128 + 4 * 256 + 32 + 512 + 64 * 264 + 1144 + 64 * 256 + 256, "layout");

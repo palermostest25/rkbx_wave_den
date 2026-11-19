@@ -10,7 +10,8 @@
 #   -Target 0x...: every chain of plain fields (accessibility objects skipped) from the browser view to that object.
 #   -Search: each SearchFilter@browse reachable from the view, its text editor (+0x110) and the text in that editor's
 #   value (TextEditor +0x3c0 -> ValueSource -> var), to tell which is the browser's search box.
-param([int]$Rows = 6, [switch]$Tree, [string]$Find = "", [string]$Classes = "", [string]$Target = "", [switch]$Search, [int]$Depth = 6, [int]$Nodes = 150000)
+#   -From 0x...: with -Find, start from that object instead (e.g. a TextEditor, to read the text it holds).
+param([int]$Rows = 6, [switch]$Tree, [string]$Find = "", [string]$Classes = "", [string]$Target = "", [switch]$Search, [string]$From = "", [int]$Depth = 6, [int]$Nodes = 150000)
 
 Add-Type -TypeDefinition @"
 using System;
@@ -206,7 +207,11 @@ if ($Tree) {
     }
 }
 
-if ($Find) {
+if ($Find -and $From) {
+    $root = [Convert]::ToInt64($From.Replace("0x", ""), 16)
+    "=== '$Find' from 0x{0:x} ({1})" -f $root, [Rb]::Class($root, $base)
+    [Rb]::FindText($root, $Find, $Depth, $Nodes, $base) | ForEach-Object { $_ }
+} elseif ($Find) {
     "=== '$Find' from the browser view 0x{0:x} ({1})" -f $view, [Rb]::Class($view, $base)
     [Rb]::FindText($view, $Find, $Depth, $Nodes, $base) | ForEach-Object { $_ }
     $viewer = [Rb]::Q([Rb]::Q($view + 0x240) + 0x100)
