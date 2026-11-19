@@ -198,6 +198,10 @@ BridgeState *shared = nullptr;
 uint64_t ticks = 0;
 LARGE_INTEGER frequency;
 bool failed = false;
+// Rekordbox's browser is read apart from its decks: a fault there (a list, a row or the tree laid out otherwise than
+// verified) turns off only Wave's view of the browser, never the decks, and says where it failed.
+bool browser_failed = false;
+const char *volatile browser_step = "";
 
 // --- The controller, as Rekordbox hears it ------------------------------------------------------------------
 // Rekordbox's MIDI callback is detoured to midi_hook: every short message it receives is shared with Wave, and the
@@ -477,7 +481,9 @@ void read_browser() {
     const void *container = lists ? field<const void *>(lists, 0x108) : nullptr;
     const void *list = container ? field<const void *>(container, 0x110) : nullptr;
     const void *tree = trees ? field<const void *>(trees, 0x100) : nullptr;
+    browser_step = "focus";
     b.focus = tree && api.has_focus(tree, true) ? 1 : list && api.has_focus(list, true) ? 0 : 2;
+    browser_step = "tree path";
     // Where the sidebar is (BrowseTreeViewer's path, a StringArray at +0x2e8: Root, Beatport, Search Tracks...).
     b.tree_path[0] = 0;
     const JString *path = tree ? field<const JString *>(tree, 0x2e8) : nullptr;
@@ -489,6 +495,7 @@ void read_browser() {
         used += n;
     }
     if (!list) { b.rows = -1; b.cursor = -1; b.first = 0; b.count = 0; return; }
+    browser_step = "list cursor";
     const int rows = field<int>(list, 0x240);
     const void *box = field<const void *>(list, 0x220);
     const int *ranges = box ? field<const int *>(box, 0x138) : nullptr;
@@ -499,11 +506,13 @@ void read_browser() {
     first = first < 0 ? 0 : first;
     int count = 0;
     for (int row = first; row < rows && count < int(kBrowseRows); ++row, ++count) {
+        browser_step = "row track";
         const void *track = row_track(list, row);
         BrowseRow &out = b.rows_[count];
         out.id = track ? field<uint32_t>(track, 0x8) : 0;
         const char *path = track ? field<const char *>(track, 0x98) : nullptr;  // the full path; +0xa8 is its name
         snprintf(out.path, sizeof out.path, "%s", path ? path : "");
+        browser_step = "row title";
         // As Rekordbox shows the row: a streamed one (Beatport, its search results) has no file to look up.
         BrowseText &text = shared->texts[count];
         const char *title = track ? field<const char *>(track, kRowTitle) : nullptr;
@@ -512,6 +521,24 @@ void read_browser() {
         snprintf(text.artist, sizeof text.artist, "%s", artist ? artist : "");
     }
     b.rows = rows; b.cursor = cursor; b.first = first; b.count = count;
+}
+
+void browser_fault(const char *what) {
+    browser_failed = true;
+    BridgeBrowser &b = shared->browser;
+    b.rows = -1; b.cursor = -1; b.first = 0; b.count = 0; b.focus = 2;
+    memset(shared->texts, 0, sizeof shared->texts);
+    // Wave reads a path starting with '!' as this note, not as a place in the tree.
+    snprintf(b.tree_path, sizeof b.tree_path, "!Rekordbox's browser could not be read (%s at %s)", what, browser_step);
+}
+
+void guarded_read_browser() {
+    if (browser_failed) return;
+    __try {
+        read_browser();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        browser_fault("reading");
+    }
 }
 
 uint64_t command_check(const BridgeCommand &c) {
@@ -666,6 +693,22 @@ bool show_split_screen(char *message, size_t size) {
     return true;
 }
 
+// LoadRow and Search work on the browser: guarded as reading it is.
+int guarded_browser_command(const void *dj, int players, const BridgeCommand &c, char *message, size_t size) {
+    if (browser_failed) {
+        snprintf(message, size, "%s", shared->browser.tree_path + 1);
+        return kReplyUnsupported;
+    }
+    __try {
+        browser_step = c.kind == kCommandSearch ? "search" : "load row";
+        return c.kind == kCommandSearch ? search(c, message, size) : load_row(dj, players, c, message, size);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        browser_fault(c.kind == kCommandSearch ? "searching" : "loading a row");
+        snprintf(message, size, "%s", shared->browser.tree_path + 1);
+        return kReplyUnsupported;
+    }
+}
+
 void run_command(const void *dj, int players) {
     const BridgeCommand c = shared->command;  // a copy: Wave may be writing the next one
     if (c.seq == shared->reply.seq || command_check(c) != c.check) return;
@@ -687,10 +730,8 @@ void run_command(const void *dj, int players) {
     } else if (c.kind == kCommandMasterTempo) {
         snprintf(message, sizeof message, "Deck %u has no track", c.deck + 1);
         result = kReplyBadDeck;
-    } else if (c.kind == kCommandLoadRow) {
-        result = load_row(dj, players, c, message, sizeof message);
-    } else if (c.kind == kCommandSearch) {
-        result = search(c, message, sizeof message);
+    } else if (c.kind == kCommandLoadRow || c.kind == kCommandSearch) {
+        result = guarded_browser_command(dj, players, c, message, sizeof message);
     } else if (c.kind == kCommandBrowser && c.content_id) {
         result = show_split_screen(message, sizeof message) ? kReplyRequested : kReplyNotReady;
     } else if (c.kind == kCommandBrowser) {
@@ -767,7 +808,7 @@ void tick() {
         }
         deck.flags = flags;
     }
-    if (ticks % 5 == 0) read_browser();
+    if (ticks % 5 == 0) guarded_read_browser();
     if (ticks % 200 == 1) read_devices();
     seq_end();
     run_command(dj, players);

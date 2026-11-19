@@ -4,6 +4,7 @@
 #include "core/clock.h"
 #include "ui/widgets.h"
 
+#include <QDebug>
 #include <QAbstractListModel>
 #include <QDateTime>
 #include <QDir>
@@ -1108,6 +1109,15 @@ void BrowserPage::showStreaming(const QString &service) {
 void BrowserPage::streamingList(const bridge::Browser &b) {
     if (!streaming()) return;
     const QString service = view_.category;
+    if (b.treePath.startsWith(QLatin1Char('!'))) {  // the bridge couldn't read Rekordbox's browser: it says why
+        if (streamedPath_ != b.treePath) {
+            streamedPath_ = b.treePath;
+            message_->setText(b.treePath.mid(1) +
+                              QStringLiteral(". Turn off \"Beatport and Spotify in Wave's browser\" in Settings to use Rekordbox's own."));
+            qWarning().noquote() << "Streaming browser:" << b.treePath.mid(1);
+        }
+        return;
+    }
     if (!b.treePath.contains(service, Qt::CaseInsensitive)) {
         if (streamedPath_ != b.treePath) {
             streamedPath_ = b.treePath;

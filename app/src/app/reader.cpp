@@ -5,6 +5,7 @@
 #include "core/library.h"
 #include "host/rekordbox.h"
 
+#include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 
@@ -152,8 +153,10 @@ void Reader::run() {
                         : snapshot->status == bridge::Live       ? host::State::Busy
                                                                  : host::State::Starting;
             else f.state = host::State::None;
-            if (pid && snapshot && snapshot->pid == pid && (snapshot->status == bridge::Unsupported || snapshot->status == bridge::Failed))
+            if (pid && snapshot && snapshot->pid == pid && (snapshot->status == bridge::Unsupported || snapshot->status == bridge::Failed)) {
+                if (last.status != snapshot->note) qWarning().noquote() << "Bridge stopped:" << snapshot->note;
                 f.status = snapshot->note;
+            }
             else if (pid && snapshot && snapshot->pid == pid)
                 f.status = snapshot->status == bridge::Live ? kBusy : kStarting;  // live and stopped: stuck, not starting
             else if (pid)
