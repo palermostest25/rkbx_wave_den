@@ -30,7 +30,8 @@ Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
 - **Beatport and Spotify:** streamed tracks in your playlists and histories show in Wave's browser with
   their real titles and artists (Rekordbox keeps them encrypted; Wave reads them as Rekordbox does) and
   load like any other. To search or browse the services themselves, the BEATPORT and SPOTIFY tiles bring
-  up Rekordbox's own split-screen browser, full screen, on that service (sign in there the first time).
+  up Rekordbox's own split-screen browser inside Wave, under Wave's toolbar, on that service (sign in
+  there the first time).
   Load a track, or press VIEW, and Wave is back on the waveforms.
 - **Or Rekordbox's own browser, over Wave** (Settings › Browser): it goes away by itself after a load.
 - **Touch preview:** touch or drag a deck's whole-track overview to see that part of the track in its
@@ -164,8 +165,8 @@ OS, Rekordbox version and the status text Wave shows.
 - **Windows:** the bridge is new in 2.3 and still being tested on hardware, and connecting live to a running
   Rekordbox is new in 2.5. Try it at home before a gig.
 - **Windows:** Rekordbox's browser is its split-screen window (the button at the bottom right of
-  Rekordbox's browser, or View › Show Split Screen): Wave opens it through the bridge and lays it over
-  Wave's whole screen.
+  Rekordbox's browser, or View › Show Split Screen): Wave opens it through the bridge and shows it inside
+  its own page, without Rekordbox's frame; it gets its frame back when Wave puts it away.
 - **Windows:** Rekordbox holds the controller, so Wave hears it through its bridge inside Rekordbox, which
   also keeps the browser controls (knob, push, BACK, VIEW, LOAD) from Rekordbox while Wave runs. Everything
   else on the controller is Rekordbox's as always. If Wave quits, Rekordbox has them back within a second.

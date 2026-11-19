@@ -32,12 +32,17 @@ Classified classify(const std::vector<Win> &windows, const std::set<quintptr> &p
 std::vector<Win> windowsOf(uint32_t pid);
 bool alive(quintptr hwnd);
 QRect windowRect(quintptr hwnd);
-QRect monitorRect(quintptr hwnd);   // the whole screen the window is on, in physical pixels
 // Put a Rekordbox window above Wave's always-on-top window: into ``rect`` (physical pixels), or centred at
 // ``centre``, or where it is.
 void present(quintptr hwnd, std::optional<QRect> rect = {}, std::optional<QPoint> centre = {}, bool activate = true,
              bool topmost = true);
 void putBack(quintptr hwnd, bool minimize = true);         // undo present
+// A Rekordbox window shown as part of Wave: owned by Wave (it moves and stacks with it), without its own frame or
+// title bar, filling ``rect`` (physical pixels). unembed gives it back its frame and owner as they were.
+struct Embedded { quintptr hwnd = 0; qint64 style = 0, exStyle = 0, owner = 0; };
+std::optional<Embedded> embed(quintptr hwnd, quintptr wave, const QRect &rect);
+void place(quintptr hwnd, const QRect &rect);              // an embedded window, kept where Wave's page is
+void unembed(const Embedded &embedded);
 bool splitScreenFromMenu(quintptr hwnd);                   // View › Show Split Screen, when there is a native menu
 void setTopmost(quintptr hwnd, bool on);
 

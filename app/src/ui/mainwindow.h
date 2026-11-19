@@ -8,6 +8,7 @@
 #include "host/midi.h"
 #include "host/popups.h"
 #include "host/setup.h"
+#include "host/windows.h"
 
 #include <QMainWindow>
 #include <QPointer>
@@ -144,7 +145,8 @@ private:
     std::optional<double> stuckSince_;
     double closedSeen_ = 0;
     bool toldAccessibility_ = false;
-    struct Browsing { QString kind; std::map<int, QString> tracks; quintptr hwnd = 0; bool main = false; Qt::WindowStates state; QString service; };
+    struct Browsing { QString kind; std::map<int, QString> tracks; quintptr hwnd = 0; bool main = false; Qt::WindowStates state; QString service;
+                      std::optional<host::Embedded> embedded; };  // the split browser, shown inside Wave's page
     std::optional<Browsing> rekordboxBrowsing_;
     bool splitAsked_ = false;
     QString pendingStreaming_;                    // a streaming service asked for while Rekordbox was starting
