@@ -77,6 +77,13 @@ QRect windowRect(quintptr hwnd) {
     return QRect(QPoint(r.left, r.top), QPoint(r.right - 1, r.bottom - 1));
 }
 
+QRect clientRect(quintptr hwnd) {
+    RECT r{};
+    POINT origin{0, 0};
+    if (!GetClientRect(h(hwnd), &r) || !ClientToScreen(h(hwnd), &origin)) return windowRect(hwnd);
+    return QRect(origin.x, origin.y, r.right - r.left, r.bottom - r.top);
+}
+
 void present(quintptr hwnd, std::optional<QRect> rect, std::optional<QPoint> centre, bool activate, bool topmost) {
     HWND w = h(hwnd);
     const HWND order = topmost ? HWND_TOPMOST : HWND_TOP;
@@ -283,6 +290,7 @@ bool Automation::select(quintptr hwnd, const QString &name) {
 std::vector<Win> windowsOf(uint32_t) { return {}; }
 bool alive(quintptr) { return false; }
 QRect windowRect(quintptr) { return {}; }
+QRect clientRect(quintptr) { return {}; }
 void present(quintptr, std::optional<QRect>, std::optional<QPoint>, bool, bool) {}
 void putBack(quintptr, bool) {}
 void sendToBack(quintptr) {}
