@@ -615,6 +615,7 @@ private slots:
         QCOMPARE(streamingService("spotify:track:4uLU6hMCjMI75M1A2tKUQC"), QStringLiteral("Spotify"));
         QCOMPARE(streamingService("https://api.beatport.com/v4/catalog/tracks/123"), QStringLiteral("Beatport"));
         QCOMPARE(streamingService("tidal:track:1"), QStringLiteral("TIDAL"));
+        QCOMPARE(streamingService("/v4/catalog/tracks/20817385/"), QStringLiteral("Beatport"));  // as Rekordbox 7 names it on Windows
         QVERIFY(streamingService("C:/Music/Spotify Hits/track.mp3").isEmpty());  // a file is a file
         QVERIFY(streamingService("/Volumes/USB/Contents/a.mp3").isEmpty());
     }

@@ -42,6 +42,7 @@ QString streamingService(const QString &path) {
         {"spotify", "Spotify"}, {"beatport", "Beatport"}, {"beatsource", "Beatsource"}, {"tidal", "TIDAL"},
         {"soundcloud", "SoundCloud"}, {"apple", "Apple Music"}};
     const QString p = path.toLower();
+    if (p.startsWith(QLatin1String("/v4/catalog/"))) return QStringLiteral("Beatport");  // Beatport's own API path for a track
     for (const auto &[key, name] : services)
         if (p.startsWith(QLatin1String(key)) || p.contains(QLatin1String(key) + QLatin1Char(':')) || p.contains(QLatin1String(key) + QLatin1String(".com")))
             return QString::fromLatin1(name);
@@ -78,6 +79,9 @@ void Reader::run() {
     bool bridged = false, stale = false, checked = false;
     int misses = 0;
     std::map<int, QString> paths;
+    // A track Rekordbox hadn't analysed or added to a library yet (a stream, a file it hadn't seen): looked up again
+    // every 2 s for 2 minutes, as Rekordbox analyses it a little after loading it.
+    std::map<int, double> retryAt, retryUntil;
     ReaderFrame last;
     const QString stateFile = QDir(bridge::defaultFolder()).filePath("state.bin");
     auto wait = [&](double seconds) {
@@ -189,14 +193,21 @@ void Reader::run() {
         f.when = now() - std::max<int64_t>(0, int64_t(bridge::uptimeNs() - snapshot->uptimeNs)) / 1e9;
         for (int idx = 0; idx < int(f.decks.size()); ++idx) {
             const QString path = f.decks[idx].path;
-            if (paths.count(idx) && paths[idx] == path) continue;
+            const bool retry = retryAt.count(idx) && now() >= retryAt[idx];
+            if (paths.count(idx) && paths[idx] == path && !retry) continue;
             if (!paths.count(idx) && path.isEmpty()) { paths[idx] = path; continue; }
+            if (paths.count(idx) && paths[idx] != path) { retryAt.erase(idx); retryUntil.erase(idx); }
             paths[idx] = path;
             TrackInfo info;
             info.path = path;
             if (!path.isEmpty()) {
                 const QString service = streamingService(path);
-                if (auto track = libraries.resolvePath(path)) {
+                auto track = libraries.resolvePath(path);
+                if (!retryUntil.count(idx)) retryUntil[idx] = now() + 120;
+                if (track || now() > retryUntil[idx]) retryAt.erase(idx);
+                else retryAt[idx] = now() + 2;
+                if (retry && !track && retryAt.count(idx)) continue;  // still analysing: the deck keeps what it shows
+                if (track) {
                     info.analysisFolder = track->analysisFolder;
                     info.title = track->title;
                     info.artist = track->artist;
@@ -211,7 +222,10 @@ void Reader::run() {
                     info.title = QStringLiteral("%1 track").arg(service);
                     info.error = QStringLiteral("Streaming from %1: the waveform shows once Rekordbox has analysed it").arg(service);
                 } else {
-                    info.error = QStringLiteral("%1 is not in the Rekordbox library or a mounted USB").arg(QFileInfo(path).fileName());
+                    const QString name = QFileInfo(path).fileName();
+                    info.title = name.isEmpty() ? path : QFileInfo(path).completeBaseName();
+                    info.error = retryAt.count(idx) ? QStringLiteral("Waiting for Rekordbox to analyse it")
+                                                    : QStringLiteral("%1 is not in the Rekordbox library or a mounted USB").arg(name.isEmpty() ? path : name);
                 }
             }
             f.tracks[idx] = info;
