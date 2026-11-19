@@ -23,7 +23,7 @@ const std::map<QString, QVariant> &viewDefaults() {
         {"artwork", true}, {"end_warning", 30}, {"start_rekordbox", true}, {"hide_rekordbox", true},
         {"check_updates", true}, {"grid", true}, {"cues", true}, {"loops", true}, {"bar_numbers", true},
         {"source", "Native"}, {"settings_scale", 1.0}, {"always_on_top", true}, {"refresh_hz", 60},
-        {"style", "Rekordbox"}, {"browser", "wave"}, {"knob_loads_wave", true}, {"auto_connect", true},
+        {"style", "Rekordbox"}, {"browser", "wave"}, {"knob_loads_wave", true}, {"native_streaming", true}, {"auto_connect", true},
         {"keep_rekordbox_running", true}, {"quit_rekordbox", true}, {"close_popups", true}, {"keep_awake", true},
         {"settings_version", Settings::kVersion}, {"tap_to_open", "double"}, {"sampler_zoom", true},
         {"sampler_zoom_reverse", false}, {"touch_keyboard_off", true}, {"touch_keyboard_restore", QVariant()},

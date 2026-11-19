@@ -104,8 +104,11 @@ std::optional<Snapshot> parse(const uchar *data, qint64 size) {
         b.rows = raw.rows; b.cursor = raw.cursor; b.first = raw.first;
         b.focus = raw.focus == 0 ? QStringLiteral("list") : raw.focus == 1 ? QStringLiteral("tree") : QString();
         b.treePath = text(raw.tree_path, sizeof raw.tree_path);
-        for (int i = 0; i < std::min<int>(raw.count, kBrowseRows); ++i)
+        for (int i = 0; i < std::min<int>(raw.count, kBrowseRows); ++i) {
             b.tracks.emplace_back(raw.rows_[i].id, text(raw.rows_[i].path, sizeof raw.rows_[i].path));
+            const BrowseText &t = state->texts[i];
+            b.texts.emplace_back(text(t.title, sizeof t.title), text(t.artist, sizeof t.artist));
+        }
         s.browser = b;
         if (seqOf(data) == seq) return s;  // nothing changed underneath: consistent
     }
@@ -160,6 +163,22 @@ bool Client::open(QString *error) {
 
 std::optional<Snapshot> Client::snapshot() const {
     return parse(map_, map_ ? qint64(sizeof(BridgeState)) : 0);
+}
+
+std::pair<bool, QString> Client::search(const QString &query) {
+    if (!map_) return {false, QStringLiteral("Rekordbox is not connected")};
+    auto *state = reinterpret_cast<BridgeState *>(map_);
+    QByteArray utf8 = query.trimmed().toUtf8().left(int(sizeof state->search.query) - 1);
+    while (!utf8.isEmpty() && (uchar(utf8.back()) & 0xC0) == 0x80) utf8.chop(1);  // never half a character
+    std::memset(state->search.query, 0, sizeof state->search.query);
+    std::memcpy(state->search.query, utf8.constData(), size_t(utf8.size()));
+    uint32_t check = 0x811c9dc5u;
+    for (const char c : utf8) check = (check ^ uchar(c)) * 0x01000193u;
+    return request(Search, 0, check);
+}
+
+void Client::listFrom(int first) {
+    if (map_) reinterpret_cast<std::atomic<int32_t> *>(&reinterpret_cast<BridgeState *>(map_)->search.first)->store(first);
 }
 
 std::pair<bool, QString> Client::request(Command kind, int deck, uint32_t value, int64_t device, int timeoutMs) {

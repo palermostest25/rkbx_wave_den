@@ -31,6 +31,7 @@ struct Browser {
     QString focus;                       // "list", "tree" or ""
     QString treePath;
     std::vector<std::pair<uint32_t, QString>> tracks;  // (id, file) of the rows around the cursor
+    std::vector<std::pair<QString, QString>> texts;    // (title, artist) of the same rows, as Rekordbox shows them
 };
 
 struct Snapshot {
@@ -51,7 +52,7 @@ uint64_t fnv(const uchar *data, size_t n);
 bool live(const std::optional<Snapshot> &snapshot, uint32_t pid, uint64_t now = uptimeNs());
 QString defaultFolder();                 // where the bridge keeps state.bin
 
-enum Command : uint32_t { Load = 1, MasterTempo = 2, LoadDevice = 3, ShowBrowser = 4 };
+enum Command : uint32_t { Load = 1, MasterTempo = 2, LoadDevice = 3, ShowBrowser = 4, LoadRow = 5, Search = 6 };
 
 class Client {
 public:
@@ -62,6 +63,9 @@ public:
     bool older() const { return older_; }  // open failed on an earlier Wave's layout
     // Asks the bridge; (accepted, Rekordbox's answer). Waits up to ``timeoutMs`` for the answer.
     std::pair<bool, QString> request(Command kind, int deck, uint32_t value, int64_t device = 0, int timeoutMs = 2500);
+    // Rekordbox's search box: the query, as if typed there and Return pressed.
+    std::pair<bool, QString> search(const QString &query);
+    void listFrom(int first);  // the rows of Rekordbox's list Wave reads from now on: from ``first``, or -1 its cursor's
 
 private:
     QFile file_;

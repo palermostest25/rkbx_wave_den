@@ -199,6 +199,22 @@ MainWindow::MainWindow(Session *session, QWidget *parent)
     browser_->setOpenOn(session_->settings.text("tap_to_open"));
     browser_->setKeyboard(session_->settings.text("keyboard"));
     connect(browser_, &BrowserPage::streamingRequested, this, &MainWindow::openStreaming);
+    // Beatport (or Spotify) in Wave's own browser: searched in Rekordbox, whose results Wave reads and loads.
+    connect(browser_, &BrowserPage::streamingSearch, this, [this](const QString &query) {
+        listFirst_ = 0;
+        session_->readRekordboxList(0);
+        session_->searchRekordbox(query, [this](bool ok, const QString &message) {
+            if (!ok) browser_->showLoadStatus(message);
+            qCInfo(lcWindow) << "Search in Rekordbox:" << ok << message;
+        });
+    });
+    connect(browser_, &BrowserPage::streamingRows, this, [this](int first) {
+        listFirst_ = first;
+        session_->readRekordboxList(first);
+    });
+    connect(browser_, &BrowserPage::loadRowRequested, this, [this](int deck, int row, uint32_t id, const QString &title, const QString &path) {
+        session_->loadRow(deck, row, id, title, path);
+    });
     connect(browser_, &BrowserPage::loadRequested, this, [this](int deck, const CatalogTrack &t, const QString &source) {
         session_->loadTrack(deck, t, source);
     });
@@ -562,6 +578,12 @@ void MainWindow::followRekordboxBrowser(std::shared_ptr<const ReaderFrame> f) {
     for (const auto &[h, root] : f->devices) roots << root;
     browser_->setDeviceRoots(roots);
     if (!f->bridged || !f->browser) { mirrored_.reset(); return; }
+    if (browser_->streaming() && pages_->currentWidget() == browser_) {
+        browser_->streamingList(*f->browser);
+    } else if (listFirst_ != -1) {
+        listFirst_ = -1;
+        session_->readRekordboxList(-1);  // Rekordbox's list around its cursor again, for the knob
+    }
     const bridge::Browser &b = *f->browser;
     std::vector<uint32_t> ids;
     for (const auto &[id, path] : b.tracks) ids.push_back(id);
@@ -925,6 +947,16 @@ void MainWindow::openStreaming(const QString &service) {
         showBanner(QStringLiteral("%1 streams through Rekordbox: start Wave without --demo").arg(service), "info", {}, {}, 5000);
         return;
     }
+#ifdef Q_OS_WIN
+    // Natively: Wave's own browser on the service, searched through Rekordbox (see BrowserPage::showStreaming).
+    if (session_->settings.flag("native_streaming") && session_->bridged()) {
+        if (pages_->currentWidget() != browser_) toggleBrowser();
+        browser_->showStreaming(service);
+        listFirst_ = 0;
+        session_->readRekordboxList(0);
+        return;
+    }
+#endif
     if (browseInRekordbox(service)) return;  // Wave's browser stays until Rekordbox's is up in its place
     if (pages_->currentWidget() == browser_) toggleBrowser();
     pendingStreaming_ = service;

@@ -149,7 +149,8 @@ private:
                       std::optional<host::Embedded> embedded; };  // the split browser, shown inside Wave's page
     std::optional<Browsing> rekordboxBrowsing_;
     bool splitAsked_ = false;
-    quintptr splitWindow_ = 0;                    // Rekordbox's split screen browser, once Wave has seen it open
+    quintptr splitWindow_ = 0;
+    int listFirst_ = -1;                          // the rows of Rekordbox's list Wave reads: -1 around its cursor                    // Rekordbox's split screen browser, once Wave has seen it open
     QString pendingStreaming_;                    // a streaming service asked for while Rekordbox was starting
     double pendingSince_ = 0;
     // The controller.
