@@ -948,8 +948,9 @@ void MainWindow::openStreaming(const QString &service) {
         return;
     }
 #ifdef Q_OS_WIN
-    // Natively: Wave's own browser on the service, searched through Rekordbox (see BrowserPage::showStreaming).
-    if (session_->settings.flag("native_streaming") && session_->bridged()) {
+    // Archived (3.0.10): Wave's own browser on the service, searched through Rekordbox (BrowserPage::showStreaming).
+    // Rekordbox's search box wasn't reliably reachable; off, with no switch in Settings. Kept for later.
+    if (session_->settings.flag("native_streaming_archived") && session_->bridged()) {
         if (pages_->currentWidget() != browser_) toggleBrowser();
         browser_->showStreaming(service);
         listFirst_ = 0;
