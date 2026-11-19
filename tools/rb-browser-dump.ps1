@@ -3,7 +3,9 @@
 # (Beatport, Spotify) result's title, artist and ids for Wave's native browser. Reads Rekordbox's memory; changes nothing.
 #   powershell -ExecutionPolicy Bypass -File rb-browser-dump.ps1 [-Rows 6] [-Tree]
 #   -Tree: also walks Rekordbox's sidebar tree (objects, their class names, every text they reach), to find its items.
-param([int]$Rows = 6, [switch]$Tree)
+#   -Find "text": the chains of objects (with class names and offsets) from Rekordbox's browser view, and from its sidebar
+#   tree, that lead to a text containing it, e.g. the title of a track Rekordbox shows now.
+param([int]$Rows = 6, [switch]$Tree, [string]$Find = "", [int]$Depth = 6, [int]$Nodes = 150000)
 
 Add-Type -TypeDefinition @"
 using System;
@@ -21,6 +23,45 @@ public static class Rb {
     }
     public static long Q(long addr) { var b = Read(addr, 8); return b == null ? 0 : BitConverter.ToInt64(b, 0); }
     public static int I(long addr) { var b = Read(addr, 4); return b == null ? 0 : BitConverter.ToInt32(b, 0); }
+    // Breadth-first through pointers from root: every chain that reaches a text containing needle.
+    public static System.Collections.Generic.List<string> FindText(long root, string needle, int maxDepth, int maxNodes, long imageBase) {
+        var found = new System.Collections.Generic.List<string>();
+        var parent = new System.Collections.Generic.Dictionary<long, Tuple<long, int>>();
+        var depth = new System.Collections.Generic.Dictionary<long, int>();
+        var queue = new System.Collections.Generic.Queue<long>();
+        queue.Enqueue(root); depth[root] = 0; parent[root] = null;
+        int visited = 0;
+        while (queue.Count > 0 && visited < maxNodes && found.Count < 40) {
+            long obj = queue.Dequeue(); visited++;
+            var raw = Read(obj, 0x400) ?? Read(obj, 0x100); if (raw == null) continue;
+            for (int o = 0; o + 8 <= raw.Length; o += 8) {
+                long v = BitConverter.ToInt64(raw, o);
+                if (v < 0x10000 || v > 0x7FFFFFFFFFFF) continue;
+                string t = Text(v);
+                if (t != null) {
+                    if (t.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0) {
+                        var chain = new System.Collections.Generic.List<string>();
+                        chain.Add(String.Format("+0x{0:x}='{1}'", o, t.Length > 80 ? t.Substring(0, 80) : t));
+                        long cur = obj;
+                        while (cur != 0 && parent.ContainsKey(cur)) {
+                            var c = Class(cur, imageBase);
+                            var p = parent[cur];
+                            chain.Insert(0, String.Format("[0x{0:x} {1}]", cur, c ?? "?") + (p == null ? "" : ""));
+                            if (p == null) break;
+                            chain.Insert(0, String.Format("+0x{0:x}->", p.Item2));
+                            cur = p.Item1;
+                        }
+                        found.Add(String.Join(" ", chain));
+                    }
+                    continue;
+                }
+                if ((v & 7) != 0 || depth[obj] >= maxDepth || depth.ContainsKey(v)) continue;
+                depth[v] = depth[obj] + 1; parent[v] = Tuple.Create(obj, o); queue.Enqueue(v);
+            }
+        }
+        found.Add(String.Format("(visited {0} objects)", visited));
+        return found;
+    }
     // The C++ class of an object, from its vtable's RTTI (MSVC x64: vtable[-1] -> complete object locator).
     public static string Class(long obj, long imageBase) {
         long vt = Q(obj); if (vt < imageBase || vt > imageBase + 0x8000000) return null;
@@ -48,11 +89,11 @@ $rel = { param($a) $a - 0x140000000 + $base }
 $view = [Rb]::Q((& $rel 0x145f38738))
 $lists = [Rb]::Q($view + 0x238); $container = [Rb]::Q($lists + 0x108); $list = [Rb]::Q($container + 0x110)
 "view 0x{0:x} lists 0x{1:x} list 0x{2:x}" -f $view, $lists, $list
-if ($list -eq 0) { "no browser list"; exit }
+if ($list -eq 0) { "no browser list" }
 $rowCount = [Rb]::I($list + 0x240); $order = [Rb]::Q($list + 0x228); $ordered = [Rb]::I($list + 0x234)
 $tracks = [Rb]::Q($list + 0x250); $stored = [Rb]::I($tracks + 0xc); $data = [Rb]::Q($tracks)
 "rows $rowCount ordered $ordered stored $stored"
-for ($row = 0; $row -lt [Math]::Min($Rows, $rowCount); $row++) {
+if ($list -ne 0) { for ($row = 0; $row -lt [Math]::Min($Rows, $rowCount); $row++) {
     $index = if ($row -lt $ordered -and $order) { [Rb]::I($order + 4 * $row) } else { 0 }
     $t = [Rb]::Q($data + 8 * $index)
     "=== row $row index $index object 0x{0:x} vtable 0x{1:x} id {2}" -f $t, ([Rb]::Q($t) - $base + 0x140000000), [Rb]::I($t + 8)
@@ -67,7 +108,7 @@ for ($row = 0; $row -lt [Math]::Min($Rows, $rowCount); $row++) {
         if ($inner) { for ($k = 0; $k -lt 0x40; $k += 8) { $s2 = [Rb]::Text([BitConverter]::ToInt64($inner, $k)); if ($s2) { "  +0x{0:x3} -> +0x{1:x2} -> '{2}'" -f $o, $k, $s2 } } }
     }
     "  ints: " + ((0..31 | ForEach-Object { "{0:x2}={1}" -f ($_*4), [BitConverter]::ToInt32($raw, $_*4) }) -join ' ')
-}
+} }
 
 if ($Tree) {
     # Rekordbox's sidebar: the tree manager (+0x240 of the view) and its tree viewer (+0x100), walked breadth-first through
@@ -89,4 +130,12 @@ if ($Tree) {
         }
         if ($cls -or $texts.Count) { "{0} 0x{1:x} {2} {3}" -f $path, $obj, $cls, ($texts -join ' ') }
     }
+}
+
+if ($Find) {
+    "=== '$Find' from the browser view 0x{0:x} ({1})" -f $view, [Rb]::Class($view, $base)
+    [Rb]::FindText($view, $Find, $Depth, $Nodes, $base) | ForEach-Object { $_ }
+    $viewer = [Rb]::Q([Rb]::Q($view + 0x240) + 0x100)
+    "=== '$Find' from the sidebar tree viewer 0x{0:x}" -f $viewer
+    [Rb]::FindText($viewer, $Find, $Depth, $Nodes, $base) | ForEach-Object { $_ }
 }
