@@ -837,11 +837,13 @@ bool MainWindow::browseInRekordbox(const QString &service) {
     // The split screen browser, by the window it opened as (it can be small: it isn't told apart by its size).
     if (splitWindow_ && host::alive(splitWindow_))
         for (const host::Win &w : windows) if (w.hwnd == splitWindow_) target = w;
-    // Already open (Wave puts it away minimised): any resizable window of Rekordbox's besides its main one, as asking
-    // again would close it (the command is a toggle).
-    if (!target)
+    // Already open (Wave puts it away minimised; asking again would close it, as the command is a toggle): the window
+    // with the split browser's title, as Wave saw it the first time it opened. Never another of Rekordbox's windows
+    // (OneLibrary, INFO, Product registration... share its window class).
+    const QString splitTitle = session_->settings.text("split_window_title");
+    if (!target && !splitTitle.isEmpty())
         for (const host::Win &w : windows)
-            if (w.resizable && !w.tool && (w.visible || w.minimized) && (!c.main || w.hwnd != c.main->hwnd) && w.area() > 0) {
+            if (w.title == splitTitle && !w.tool && (w.visible || w.minimized) && (!c.main || w.hwnd != c.main->hwnd)) {
                 target = w;
                 splitWindow_ = w.hwnd;
                 break;
@@ -857,7 +859,15 @@ bool MainWindow::browseInRekordbox(const QString &service) {
             const auto f = session_->lastFrame();
             const uint32_t pid = f && f->pid ? f->pid : host::rekordboxPid();
             for (const host::Win &w : host::windowsOf(pid))
-                if (!before.count(w.hwnd) && w.visible && !w.tool && w.area() > 0) { splitWindow_ = w.hwnd; break; }
+                if (!before.count(w.hwnd) && w.visible && !w.tool && w.area() > 0) {
+                    splitWindow_ = w.hwnd;
+                    if (w.title != session_->settings.text("split_window_title")) {
+                        session_->settings.setView("split_window_title", w.title);  // known from now on, also after a restart
+                        saveTimer_.start();
+                    }
+                    qCInfo(lcWindow) << "Rekordbox's split screen browser opened:" << w.title << w.rect;
+                    break;
+                }
             if (!splitWindow_ && left > 0) {
                 QTimer::singleShot(250, this, [look, left] { (*look)(left - 1); });
                 return;
