@@ -7,7 +7,8 @@
 #   tree, that lead to a text containing it, e.g. the title of a track Rekordbox shows now.
 #   -Classes "regex": every object reachable from the browser view whose C++ class matches, with its chain, and for
 #   list-like objects the rows / tracks fields the bridge reads for Rekordbox's own track list.
-param([int]$Rows = 6, [switch]$Tree, [string]$Find = "", [string]$Classes = "", [int]$Depth = 6, [int]$Nodes = 150000)
+#   -Target 0x...: every chain of plain fields (accessibility objects skipped) from the browser view to that object.
+param([int]$Rows = 6, [switch]$Tree, [string]$Find = "", [string]$Classes = "", [string]$Target = "", [int]$Depth = 6, [int]$Nodes = 150000)
 
 Add-Type -TypeDefinition @"
 using System;
@@ -101,6 +102,38 @@ public static class Rb {
         found.Add(String.Format("(visited {0} objects)", visited));
         return found;
     }
+    public static System.Collections.Generic.List<string> FindTarget(long root, long target, int maxDepth, int maxNodes, long imageBase) {
+        var found = new System.Collections.Generic.List<string>();
+        var parent = new System.Collections.Generic.Dictionary<long, Tuple<long, int>>();
+        var depth = new System.Collections.Generic.Dictionary<long, int>();
+        var queue = new System.Collections.Generic.Queue<long>();
+        queue.Enqueue(root); depth[root] = 0; parent[root] = null;
+        int visited = 0;
+        while (queue.Count > 0 && visited < maxNodes && found.Count < 40) {
+            long obj = queue.Dequeue(); visited++;
+            string c = Class(obj, imageBase);
+            if (c != null && (c.Contains("Accessib") || c.Contains("ComponentPeer"))) continue;  // UI plumbing, not ownership
+            var raw = Read(obj, 0x400) ?? Read(obj, 0x100); if (raw == null) continue;
+            for (int o = 0; o + 8 <= raw.Length; o += 8) {
+                long v = BitConverter.ToInt64(raw, o);
+                if (v == target) {
+                    var hops = new System.Collections.Generic.List<string>();
+                    hops.Add(String.Format("+0x{0:x}->TARGET", o));
+                    long cur = obj;
+                    while (parent.ContainsKey(cur) && parent[cur] != null) {
+                        var p = parent[cur];
+                        hops.Insert(0, String.Format("+0x{0:x}->{1}", p.Item2, Class(cur, imageBase) ?? "?"));
+                        cur = p.Item1;
+                    }
+                    found.Add("view " + String.Join(" ", hops) + String.Format("   (holder 0x{0:x} {1})", obj, c));
+                }
+                if (v < 0x10000 || v > 0x7FFFFFFFFFFF || (v & 7) != 0 || depth[obj] >= maxDepth || depth.ContainsKey(v)) continue;
+                depth[v] = depth[obj] + 1; parent[v] = Tuple.Create(obj, o); queue.Enqueue(v);
+            }
+        }
+        found.Add(String.Format("(visited {0} objects)", visited));
+        return found;
+    }
     // The C++ class of an object, from its vtable's RTTI (MSVC x64: vtable[-1] -> complete object locator).
     public static string Class(long obj, long imageBase) {
         long vt = Q(obj); if (vt < imageBase || vt > imageBase + 0x8000000) return null;
@@ -182,4 +215,10 @@ if ($Find) {
 if ($Classes) {
     "=== classes /$Classes/ from the browser view 0x{0:x}" -f $view
     [Rb]::FindClass($view, $Classes, $Depth, $Nodes, $base) | ForEach-Object { $_ }
+}
+
+if ($Target) {
+    $t = [Convert]::ToInt64($Target.Replace("0x", ""), 16)
+    "=== chains to 0x{0:x} ({1}) from the browser view" -f $t, [Rb]::Class($t, $base)
+    [Rb]::FindTarget($view, $t, $Depth, $Nodes, $base) | ForEach-Object { $_ }
 }
