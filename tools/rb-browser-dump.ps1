@@ -11,7 +11,8 @@
 #   -Search: each SearchFilter@browse reachable from the view, its text editor (+0x110) and the text in that editor's
 #   value (TextEditor +0x3c0 -> ValueSource -> var), to tell which is the browser's search box.
 #   -From 0x...: with -Find, start from that object instead (e.g. a TextEditor, to read the text it holds).
-param([int]$Rows = 6, [switch]$Tree, [string]$Find = "", [string]$Classes = "", [string]$Target = "", [switch]$Search, [string]$From = "", [int]$Depth = 6, [int]$Nodes = 150000)
+#   -Exact: -Find matches case-sensitively (a typed "fred" apart from "Fred again..").
+param([int]$Rows = 6, [switch]$Tree, [string]$Find = "", [string]$Classes = "", [string]$Target = "", [switch]$Search, [string]$From = "", [switch]$Exact, [int]$Depth = 6, [int]$Nodes = 150000)
 
 Add-Type -TypeDefinition @"
 using System;
@@ -30,6 +31,7 @@ public static class Rb {
     public static long Q(long addr) { var b = Read(addr, 8); return b == null ? 0 : BitConverter.ToInt64(b, 0); }
     public static int I(long addr) { var b = Read(addr, 4); return b == null ? 0 : BitConverter.ToInt32(b, 0); }
     // Breadth-first through pointers from root: every chain that reaches a text containing needle.
+    public static bool Exact = false;
     public static System.Collections.Generic.List<string> FindText(long root, string needle, int maxDepth, int maxNodes, long imageBase) {
         var found = new System.Collections.Generic.List<string>();
         var parent = new System.Collections.Generic.Dictionary<long, Tuple<long, int>>();
@@ -37,7 +39,7 @@ public static class Rb {
         var queue = new System.Collections.Generic.Queue<long>();
         queue.Enqueue(root); depth[root] = 0; parent[root] = null;
         int visited = 0;
-        while (queue.Count > 0 && visited < maxNodes && found.Count < 40) {
+        while (queue.Count > 0 && visited < maxNodes && found.Count < 200) {
             long obj = queue.Dequeue(); visited++;
             var raw = Read(obj, 0x400) ?? Read(obj, 0x100); if (raw == null) continue;
             for (int o = 0; o + 8 <= raw.Length; o += 8) {
@@ -45,7 +47,7 @@ public static class Rb {
                 if (v < 0x10000 || v > 0x7FFFFFFFFFFF) continue;
                 string t = Text(v);
                 if (t != null) {
-                    if (t.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0) {
+                    if (t.IndexOf(needle, Exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase) >= 0) {
                         var chain = new System.Collections.Generic.List<string>();
                         chain.Add(String.Format("+0x{0:x}='{1}'", o, t.Length > 80 ? t.Substring(0, 80) : t));
                         long cur = obj;
@@ -155,6 +157,7 @@ public static class Rb {
 }
 "@
 
+if ($Exact) { [Rb]::Exact = $true }
 $p = Get-Process rekordbox -ErrorAction Stop | Select-Object -First 1  # (its MainWindowHandle may be a dialog; not used)
 $base = $p.MainModule.BaseAddress.ToInt64()
 [Rb]::Open($p.Id)
