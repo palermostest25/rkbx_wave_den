@@ -53,7 +53,7 @@ enum : int { NUM_PLAYERS, IS_LOADED, IS_LOADING, IS_PLAYING, POSITION_MS, TOTAL_
              TRACK_CTOR, TRACK_DTOR, TRACK_BASIC_INFO, BROWSE_INSTANCE, BROWSE_MANAGERS, LIST_CONTAINER,
              CONTAINER_LIST, TREE_VIEWER, ROW_TRACK, SELECTED_ROWS, LIST_BOX, HAS_FOCUS, DEVICE_ROOT,
              ALL_DEVICES, CRT_FREE, STICK_DATABASE, STICK_LOAD, STICK_ROW, MIDI_CALLBACK, MIDI_OPEN, PERFORM, SPLIT_SCREEN,
-             SET_TEXT, SEARCH_RETURN, SEARCH_RUN, CODE_COUNT };
+             SET_TEXT, SEARCH_RETURN, SEARCH_RUN, STRING_CTOR, CODE_COUNT };
 // FNV-1a of each function's first bytes; entries never called pin what the bridge reads directly:
 // PLAYER_CONTROL the graph's players (+0x430/+0x43c), ENGINE_GET and DATABASE_GET the singletons,
 // MAIN_COMPONENT its static, LOAD_TEMPLATE (whole) the load message and UiManager offset.
@@ -124,12 +124,14 @@ constexpr Code kCode[CODE_COUNT] = {
     {0x142b91710, 0x30, 0x0ccbe7cbebbbd10cULL},  // juce::TextEditor::setText(const String &, bool sendTextChangeMessage)
     {0x14163e420, 0x15, 0x58dc6bf2e1f56077ULL},  // SearchFilter::textEditorReturnKeyPressed(TextEditor &)
     {0x14163e2e0, 0x30, 0xd2fac023c246035cULL},  // ... what it runs: the search, posted to run next
+    {0x142a6e420, 0x20, 0xdc98d15944a5e9f5ULL},  // juce::String::String(const char *)
 };
 constexpr uint64_t kSearchFilterVtable = 0x143938ca0ULL;   // browse::SearchFilter (its Component)
 constexpr uint64_t kSearchListenerVtable = 0x143938e38ULL; // its TextEditor::Listener, at +0xf0
 constexpr uint64_t kSearchEditor = 0x110;                  // its juce::TextEditor*
-constexpr uint64_t kStringCtor = 0x142a6e420ULL;           // juce::String::String(const char *) (UTF-8)
 constexpr uint64_t kRowTitle = 0x20, kRowArtist = 0xd0;    // db::RowDataTrack's title and artist (juce::String)
+// From the browser view to its search box's TextEditor, then that editor's parent component (the SearchFilter).
+constexpr uint64_t kSearchPath[4] = {0x228, 0x40, 0xa8, 0x40};
 constexpr uint64_t kCommandTargetVtable = 0x1439e11c8ULL;  // MainComponent's ApplicationCommandTarget vtable
 constexpr uint64_t kCommandTarget = 0x238;                 // that base, inside MainComponent
 constexpr int kShowSplitScreen = 0xB04C;
@@ -328,6 +330,7 @@ bool open_shared() {
     memset(&shared->midi, 0, sizeof shared->midi);
     memset(shared->texts, 0, sizeof shared->texts);
     memset(&shared->search, 0, sizeof shared->search);
+    shared->search.first = -1;
     shared->browser.rows = -1;
     shared->browser.cursor = -1;
     shared->browser.focus = 2;
@@ -446,6 +449,26 @@ void *ui_player(int deck) {
 // but for the view's managers (+0x238/+0x240; macOS +0x268/+0x270) and the list's fields (0x18 lower).
 // shortcut: no tree path on Windows (TreeViewer::getCurrentItemPath is unmapped); Wave's heading
 // then reads REKORDBOX only. Map it when the breadcrumb is wanted on Windows.
+// Rekordbox's browser track list (BrowseListViewer, as its LowerContainer shows it: the collection, a playlist, and
+// Beatport's lists and search results alike), and the track behind one of its rows.
+const void *browser_list() {
+    const void *view = global(kBrowseView);
+    const void *lists = view ? field<const void *>(view, 0x238) : nullptr;
+    const void *container = lists ? field<const void *>(lists, 0x108) : nullptr;
+    return container ? field<const void *>(container, 0x110) : nullptr;
+}
+
+const void *row_track(const void *list, int row) {
+    if (!list || row < 0 || row >= field<int>(list, 0x240)) return nullptr;
+    const int *order = field<const int *>(list, 0x228);
+    const int ordered = field<int>(list, 0x234);
+    const void *tracks = field<const void *>(list, 0x250);
+    const int stored = tracks ? field<int>(tracks, 0xc) : 0;
+    const void *const *data = tracks ? field<const void *const *>(tracks, 0) : nullptr;
+    const int index = row < ordered && order ? order[row] : row;
+    return data && index >= 0 && index < stored ? data[index] : nullptr;
+}
+
 void read_browser() {
     BridgeBrowser &b = shared->browser;
     const void *view = global(kBrowseView);
@@ -455,24 +478,28 @@ void read_browser() {
     const void *list = container ? field<const void *>(container, 0x110) : nullptr;
     const void *tree = trees ? field<const void *>(trees, 0x100) : nullptr;
     b.focus = tree && api.has_focus(tree, true) ? 1 : list && api.has_focus(list, true) ? 0 : 2;
+    // Where the sidebar is (BrowseTreeViewer's path, a StringArray at +0x2e8: Root, Beatport, Search Tracks...).
+    b.tree_path[0] = 0;
+    const JString *path = tree ? field<const JString *>(tree, 0x2e8) : nullptr;
+    const int parts = tree ? field<int>(tree, 0x2f4) : 0;
+    for (int i = 1, used = 0; path && i < parts && i < 16; ++i) {
+        const char *part = path[i].text ? path[i].text : "";
+        const int n = snprintf(b.tree_path + used, sizeof b.tree_path - used, "%s%s", used ? " / " : "", part);
+        if (n < 0 || used + n >= int(sizeof b.tree_path)) break;
+        used += n;
+    }
     if (!list) { b.rows = -1; b.cursor = -1; b.first = 0; b.count = 0; return; }
     const int rows = field<int>(list, 0x240);
     const void *box = field<const void *>(list, 0x220);
     const int *ranges = box ? field<const int *>(box, 0x138) : nullptr;
     const int cursor = box && ranges && field<int>(box, 0x144) > 0 ? ranges[0] : -1;
-    const int *order = field<const int *>(list, 0x228);
-    const int ordered = field<int>(list, 0x234);
-    const void *tracks = field<const void *>(list, 0x250);
-    const int stored = tracks ? field<int>(tracks, 0xc) : 0;
-    const void *const *track_data = tracks ? field<const void *const *>(tracks, 0) : nullptr;
-    int first = cursor < 0 ? 0 : cursor - int(kBrowseRows) / 4;
+    const int wanted = shared->search.first;  // Wave scrolling Rekordbox's list in its own browser
+    int first = wanted >= 0 ? wanted : cursor < 0 ? 0 : cursor - int(kBrowseRows) / 4;
     first = first > rows - int(kBrowseRows) ? rows - int(kBrowseRows) : first;
     first = first < 0 ? 0 : first;
     int count = 0;
     for (int row = first; row < rows && count < int(kBrowseRows); ++row, ++count) {
-        // As Rekordbox maps a list row to its track: through the sort order, when the row is in it.
-        const int index = row < ordered && order ? order[row] : 0;
-        const void *track = track_data && index >= 0 && index < stored ? track_data[index] : nullptr;
+        const void *track = row_track(list, row);
         BrowseRow &out = b.rows_[count];
         out.id = track ? field<uint32_t>(track, 0x8) : 0;
         const char *path = track ? field<const char *>(track, 0x98) : nullptr;  // the full path; +0xa8 is its name
@@ -556,6 +583,69 @@ int load(const void *dj, int players, const BridgeCommand &c, char *message, siz
     return result;
 }
 
+// The row Wave shows of Rekordbox's list, onto a deck: as Rekordbox's own browser loads it, whatever it is (a
+// collection track, a stick's, or a Beatport result, which has no file and no library id of Wave's).
+int load_row(const void *dj, int players, const BridgeCommand &c, char *message, size_t size) {
+    const int deck = static_cast<int>(c.deck);
+    if (deck < 0 || deck >= players) { snprintf(message, size, "Deck %d does not exist", deck + 1); return kReplyBadDeck; }
+    if (api.is_playing(dj, deck)) { snprintf(message, size, "Deck %d is playing", deck + 1); return kReplyDeckPlaying; }
+    if (api.is_loading(dj, deck)) { snprintf(message, size, "Deck %d is still loading", deck + 1); return kReplyDeckBusy; }
+    void *player = ui_player(deck);
+    const void *track = row_track(browser_list(), static_cast<int>(c.device));
+    if (!player) { snprintf(message, size, "Rekordbox is still starting"); return kReplyNotReady; }
+    if (!track || field<uint32_t>(track, 0x8) != c.content_id) {
+        snprintf(message, size, "Rekordbox's list changed: pick the track again");
+        return kReplyNoTrack;
+    }
+    void *item = const_cast<uint8_t *>(static_cast<const uint8_t *>(track)) + kTrackItem;
+    const auto basic_info = reinterpret_cast<BasicInfo>(field<uint64_t>(field<const void *>(item, 0), 0x8));
+    if (reinterpret_cast<uint64_t>(basic_info) != kCode[TRACK_BASIC_INFO].address - kBase + api.slide) {
+        snprintf(message, size, "Rekordbox's track type differs from the verified build");
+        return kReplyUnsupported;
+    }
+    void *info = basic_info(item);
+    if (!info) { snprintf(message, size, "Rekordbox could not prepare that track"); return kReplyNoTrack; }
+    post_load(player, info);
+    snprintf(message, size, "Load requested on deck %d", deck + 1);
+    return kReplyRequested;
+}
+
+// The browser's search box (browse::SearchFilter), as Rekordbox shows it above its track list.
+void *search_filter() {
+    const void *view = global(kBrowseView);
+    const void *a = view ? field<const void *>(view, kSearchPath[0]) : nullptr;
+    const void *b = a ? field<const void *>(a, kSearchPath[1]) : nullptr;
+    const void *editor = b ? field<const void *>(b, kSearchPath[2]) : nullptr;
+    const void *filter = editor ? field<const void *>(editor, kSearchPath[3]) : nullptr;  // the editor's parent component
+    if (!filter || field<uint64_t>(filter, 0) != kSearchFilterVtable - kBase + api.slide ||
+        field<uint64_t>(filter, 0xf0) != kSearchListenerVtable - kBase + api.slide || field<const void *>(filter, kSearchEditor) != editor)
+        return nullptr;
+    return const_cast<void *>(filter);
+}
+
+// Types the query into Rekordbox's search box and presses Return there: Rekordbox searches what its browser shows
+// (Beatport's Search Tracks searches Beatport), and its results fill the list Wave reads.
+int search(const BridgeCommand &c, char *message, size_t size) {
+    char query[sizeof shared->search.query + 1] = {0};
+    memcpy(query, shared->search.query, sizeof shared->search.query);
+    uint32_t check = 0x811c9dc5u;
+    for (const char *p = query; *p; ++p) check = (check ^ static_cast<uint8_t>(*p)) * 0x01000193u;
+    if (check != c.content_id) { snprintf(message, size, "Search text arrived damaged"); return kReplyBadRequest; }
+    void *filter = search_filter();
+    if (!filter) { snprintf(message, size, "Rekordbox's search box isn't there"); return kReplyNotReady; }
+    void *editor = field<void *>(filter, kSearchEditor);
+    using StringCtor = JString *(*)(JString *, const char *);
+    using SetText = void (*)(void *editor, const JString *, bool);
+    using ReturnPressed = void (*)(void *listener, void *editor);
+    JString text = {nullptr};
+    reinterpret_cast<StringCtor>(kCode[STRING_CTOR].address - kBase + api.slide)(&text, query);
+    reinterpret_cast<SetText>(kCode[SET_TEXT].address - kBase + api.slide)(editor, &text, true);
+    api.string_dtor(&text);
+    reinterpret_cast<ReturnPressed>(kCode[SEARCH_RETURN].address - kBase + api.slide)(static_cast<uint8_t *>(filter) + 0xf0, editor);
+    snprintf(message, size, "Searching for %s", query);
+    return kReplyRequested;
+}
+
 // Rekordbox's Show Split Screen, as its View menu and the browser's split-screen button run it: the browser in a
 // window of its own. A toggle: Wave asks only while that window isn't open.
 bool show_split_screen(char *message, size_t size) {
@@ -597,6 +687,10 @@ void run_command(const void *dj, int players) {
     } else if (c.kind == kCommandMasterTempo) {
         snprintf(message, sizeof message, "Deck %u has no track", c.deck + 1);
         result = kReplyBadDeck;
+    } else if (c.kind == kCommandLoadRow) {
+        result = load_row(dj, players, c, message, sizeof message);
+    } else if (c.kind == kCommandSearch) {
+        result = search(c, message, sizeof message);
     } else if (c.kind == kCommandBrowser && c.content_id) {
         result = show_split_screen(message, sizeof message) ? kReplyRequested : kReplyNotReady;
     } else if (c.kind == kCommandBrowser) {

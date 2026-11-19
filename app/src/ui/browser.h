@@ -3,6 +3,7 @@
 // load bar below. Queries run on a worker of their own, so the waveforms never wait for the library.
 #pragma once
 
+#include "core/bridge.h"
 #include "core/library.h"
 
 #include <QFrame>
@@ -50,6 +51,10 @@ public:
     bool highlightItem(const QString &id);   // highlight one item of the list shown now
     void loadHighlighted(int deck) { load(deck); }  // the controller's push or LOAD on a track: onto that deck
     bool showsList() const;                  // playlists or folders are shown (not tracks)
+    void showStreaming(const QString &service);         // Beatport, Spotify: searched in Rekordbox, shown here
+    bool streaming() const { return view_.kind == QLatin1String("streaming"); }
+    QString streamingService() const { return streaming() ? view_.category : QString(); }
+    void streamingList(const bridge::Browser &browser);  // Rekordbox's list as it is now, while streaming
     void focusForKnob();                     // opened from the controller: no keyboard pops up
     void focusSearch();
     bool keyboardShown() const;
@@ -75,6 +80,10 @@ public:
 signals:
     void loadRequested(int deck, const wave::CatalogTrack &track, const QString &source);
     void streamingRequested(const QString &service);  // "Beatport", "Spotify": through Rekordbox's own browser
+    // A streaming service in Wave's own browser: Rekordbox searches it (its Search Tracks) and Wave shows the results.
+    void streamingSearch(const QString &query);
+    void streamingRows(int first);                    // Wave wants the rows of Rekordbox's list from ``first``
+    void loadRowRequested(int deck, int row, uint32_t id, const QString &title, const QString &path);
 
 private:
     struct View { QString kind = "tracks"; QString category, parent; std::optional<std::pair<QString, QString>> scope;
@@ -132,6 +141,10 @@ private:
     QHBoxLayout *deckRow_;
     std::map<int, DeckButton *> deckButtons_;
     QTimer *debounce_;
+    QTimer *streamTimer_;
+    std::map<int, std::pair<uint32_t, CatalogTrack>> streamed_;  // list row -> (Rekordbox's id, the track as shown)
+    int streamedRows_ = -1, askedFirst_ = -1;
+    QString streamedQuery_, streamedPath_;
 };
 
 }  // namespace wave

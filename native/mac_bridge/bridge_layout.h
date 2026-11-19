@@ -102,8 +102,10 @@ struct BrowseText {            // what Rekordbox shows of one row of its track l
     char artist[96];
 };
 
-struct BridgeSearch {          // written by Wave before a kCommandSearch; content_id = FNV-1a 32 of query's bytes
-    char query[256];
+struct BridgeSearch {          // written by Wave
+    char query[256];           // before a kCommandSearch, whose content_id is FNV-1a 32 of its bytes
+    int32_t first;             // the list row Wave wants rows_[0] to be (it scrolls); -1: around Rekordbox's cursor
+    uint32_t reserved;
 };
 
 struct BridgeState {           // seqlock: odd while the bridge writes
@@ -136,4 +138,4 @@ static_assert(sizeof(BridgeBrowser) == 32 + 512 + 64 * 264, "layout");
 static_assert(sizeof(BridgeMidiEvent) == 8, "layout");
 static_assert(sizeof(BridgeMidi) == 8 + 128 * 8 + 16 + 48 * 2, "layout");
 static_assert(sizeof(BrowseText) == 256, "layout");
-static_assert(sizeof(BridgeState) == 176 + 4 * 1080 + 40 + 128 + 4 * 256 + 32 + 512 + 64 * 264 + 1144 + 64 * 256 + 256, "layout");
+static_assert(sizeof(BridgeState) == 176 + 4 * 1080 + 40 + 128 + 4 * 256 + 32 + 512 + 64 * 264 + 1144 + 64 * 256 + 264, "layout");

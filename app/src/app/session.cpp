@@ -477,6 +477,44 @@ void Session::showRekordboxBrowser(bool on, int x, int y, std::function<void(boo
             [answered](bool ok, const QString &message) { if (answered) answered(ok, message); });
 }
 
+void Session::searchRekordbox(const QString &query, std::function<void(bool, QString)> answered) {
+    if (!bridged()) {
+        if (answered) answered(false, QStringLiteral("Rekordbox is not connected"));
+        return;
+    }
+    request([query](bridge::Client &c) { return c.search(query); },
+            [answered](bool ok, const QString &message) { if (answered) answered(ok, message); });
+}
+
+void Session::readRekordboxList(int first) {
+    if (!bridged()) return;
+    request([first](bridge::Client &c) { c.listFrom(first); return std::make_pair(true, QString()); }, [](bool, const QString &) {});
+}
+
+bool Session::loadRow(int idx, int row, uint32_t id, const QString &title, const QString &path) {
+    QString why = loadUnavailable();
+    if (why.isEmpty() && loading_) why = QStringLiteral("Still loading %1").arg(loading_->title);
+    if (why.isEmpty() && playing(idx)) why = QStringLiteral("Deck %1 is playing: stop it before loading over it").arg(idx + 1);
+    if (!why.isEmpty()) {
+        emit loadStatus(why);
+        return false;
+    }
+    loading_ = Loading{idx, title, path, now() + 8};
+    waveLoads_[idx] = {path, now() + 15};
+    emit loadStatus(QStringLiteral("Loading %1 on deck %2…").arg(title).arg(idx + 1));
+    request([idx, row, id](bridge::Client &c) { return c.request(bridge::LoadRow, idx, id, row); },
+            [this](bool ok, const QString &message) {
+                if (!loading_) return;
+                loading_->answered = true;
+                loading_->accepted = ok;
+                if (!ok) {
+                    emit loadStatus(QStringLiteral("Deck %1: %2").arg(loading_->deck + 1).arg(message));
+                    loading_.reset();
+                }
+            });
+    return true;
+}
+
 void Session::connectRekordbox() {
     if (host_) host_->connectNow();
 }

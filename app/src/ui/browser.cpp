@@ -740,6 +740,23 @@ BrowserPage::BrowserPage(QWidget *parent) : QWidget(parent), cache_(std::make_sh
     debounce_->setInterval(180);
     connect(debounce_, &QTimer::timeout, this, &BrowserPage::startQuery);
     connect(search_, &QLineEdit::textChanged, this, &BrowserPage::searchChanged);
+    // A streaming service: Rekordbox searches it once the DJ stops typing (or presses Return).
+    streamTimer_ = new QTimer(this);
+    streamTimer_->setSingleShot(true);
+    streamTimer_->setInterval(700);
+    auto runSearch = [this] {
+        const QString query = search_->text().trimmed();
+        if (!streaming() || query.isEmpty() || query == streamedQuery_) return;
+        streamedQuery_ = query;
+        streamed_.clear();
+        streamedRows_ = -1;
+        askedFirst_ = -1;
+        model_->replace({}, 0);
+        message_->setText(QStringLiteral("Searching %1 for “%2”…").arg(view_.category, query));
+        emit streamingSearch(query);
+    };
+    connect(streamTimer_, &QTimer::timeout, this, runSearch);
+    connect(search_, &QLineEdit::returnPressed, this, [this, runSearch] { if (streaming()) { streamTimer_->stop(); runSearch(); } });
     connect(refresh, &QPushButton::clicked, this, &BrowserPage::showSources);
     openCategory(QStringLiteral("TRACK"));
 }
@@ -793,6 +810,10 @@ void BrowserPage::setHeading() {
 }
 
 void BrowserPage::navigate(const View &view, const QString &title) {
+    if (streaming()) {  // out of a streaming service: Wave's own library again
+        search_->setPlaceholderText(QStringLiteral("Search title or artist"));
+        streamTimer_->stop();
+    }
     view_ = view;
     title_ = title;
     if (view.kind != "tracks") table_->clearSelection();  // nothing stays picked from a list no longer shown
@@ -946,6 +967,10 @@ bool BrowserPage::highlightItem(const QString &id) {
 }
 
 void BrowserPage::searchChanged() {
+    if (streaming()) {
+        streamTimer_->start();
+        return;
+    }
     if (view_.kind != "tracks") {
         kind_ = QStringLiteral("SEARCH");
         trail_.clear();
@@ -975,6 +1000,14 @@ void BrowserPage::request() {
 }
 
 void BrowserPage::fetchMore() {
+    if (streaming()) {  // the next rows of Rekordbox's results
+        const int have = int(model_->tracks.size());
+        if (have < streamedRows_ && askedFirst_ != have) {
+            askedFirst_ = have;
+            emit streamingRows(have);
+        }
+        return;
+    }
     if (querying_ || closed_ || debounce_->isActive()) return;
     appending_ = true;
     startQuery();
@@ -1051,6 +1084,66 @@ bool BrowserPage::enter() {
     return false;
 }
 
+void BrowserPage::showStreaming(const QString &service) {
+    trail_.clear();
+    kind_ = service.toUpper();
+    view_ = View{"streaming", service, {}, std::nullopt};
+    title_ = service.toUpper();
+    streamed_.clear();
+    streamedRows_ = -1;
+    askedFirst_ = -1;
+    streamedQuery_.clear();
+    const bool blocked = search_->blockSignals(true);
+    search_->clear();
+    search_->blockSignals(blocked);
+    search_->setPlaceholderText(QStringLiteral("Search %1").arg(service));
+    stack_->setCurrentWidget(table_);
+    table_->horizontalHeader()->setSortIndicatorShown(false);
+    model_->replace({}, 0);
+    message_->setText(QStringLiteral("Type to search %1. Tap a result, then a deck; or push the knob on it.").arg(service));
+    setHeading();
+    focusSearch();
+}
+
+void BrowserPage::streamingList(const bridge::Browser &b) {
+    if (!streaming()) return;
+    const QString service = view_.category;
+    if (!b.treePath.contains(service, Qt::CaseInsensitive)) {
+        if (streamedPath_ != b.treePath) {
+            streamedPath_ = b.treePath;
+            message_->setText(QStringLiteral("In Rekordbox, open %1 → Search Tracks once (REKORDBOX at the top): Wave searches there.")
+                                  .arg(service));
+        }
+        return;
+    }
+    streamedPath_ = b.treePath;
+    if (streamedQuery_.isEmpty()) return;  // what Rekordbox showed before the DJ searched here
+    if (b.rows != streamedRows_) {  // the results of a new search
+        streamed_.clear();
+        streamedRows_ = b.rows;
+        askedFirst_ = -1;
+    }
+    bool changed = false;
+    for (size_t i = 0; i < b.tracks.size() && i < b.texts.size(); ++i) {
+        const int row = b.first + int(i);
+        const auto &[id, path] = b.tracks[i];
+        const auto &[title, artist] = b.texts[i];
+        auto &slot = streamed_[row];
+        if (slot.first == id && slot.second.title == title) continue;
+        slot = {id, CatalogTrack{QString::number(id), title, artist, 0, {}, 0, path, {}}};
+        changed = true;
+    }
+    if (!changed) return;
+    std::vector<CatalogTrack> rows;
+    for (int row = 0; streamed_.count(row); ++row) rows.push_back(streamed_[row].second);
+    const auto selected = table_->selectionModel() ? table_->selectionModel()->selectedRows() : QModelIndexList{};
+    const int keep = selected.isEmpty() ? -1 : selected.front().row();
+    model_->replace(rows, std::max(0, b.rows));
+    if (keep >= 0 && keep < int(rows.size())) table_->selectRow(keep);
+    message_->setText(b.rows > 0 ? QStringLiteral("%1 results on %2 · tap one, then a deck").arg(QLocale().toString(b.rows), service)
+                                 : QStringLiteral("Nothing on %1 for “%2”").arg(service, streamedQuery_));
+}
+
 bool BrowserPage::showsList() const { return stack_->currentWidget() == list_; }
 
 void BrowserPage::focusForKnob() { (stack_->currentWidget() == list_ ? static_cast<QWidget *>(list_) : table_)->setFocus(); }
@@ -1088,6 +1181,14 @@ void BrowserPage::selectionChanged() {
 
 void BrowserPage::load(int deck) {
     const auto track = selectedTrack();
+    if (track && streaming() && locked_[deck].isEmpty()) {
+        const auto rows = table_->selectionModel()->selectedRows();
+        const int row = rows.isEmpty() ? -1 : rows.front().row();
+        const auto it = streamed_.find(row);
+        if (it == streamed_.end()) message_->setText(QStringLiteral("Tap a track first."));
+        else emit loadRowRequested(deck, row, it->second.first, it->second.second.title, it->second.second.path);
+        return;
+    }
     if (!track) message_->setText(QStringLiteral("Tap a track first."));
     else if (!locked_[deck].isEmpty()) message_->setText(locked_[deck]);
     else emit loadRequested(deck, *track, sourcePath_);
