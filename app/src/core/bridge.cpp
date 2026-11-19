@@ -234,8 +234,10 @@ std::vector<std::array<int, 3>> Tap::take() {
     const uint64_t beat = reinterpret_cast<std::atomic<uint64_t> *>(&state->uptime_ns)->load(std::memory_order_acquire);
     const uint64_t now = uptimeNs();
     const BridgeMidi &m = state->midi;
+    // Rekordbox's heartbeat can be late by a second or more while it is minimised (Windows slows its timers): only a
+    // long silence means the bridge is gone.
     hooked_ = reinterpret_cast<const std::atomic<uint32_t> *>(&m.hooked)->load(std::memory_order_acquire) == 1 &&
-              state->status == kStatusLive && beat && now >= beat && now - beat < 1000000000ULL;
+              state->status == kStatusLive && beat && now >= beat && now - beat < 5000000000ULL;
     if (state->pid != pid_) { pid_ = state->pid; next_ = 0; }  // another Rekordbox: its own count
     if (!hooked_) return out;
     const uint32_t written = reinterpret_cast<const std::atomic<uint32_t> *>(&m.written)->load(std::memory_order_acquire);

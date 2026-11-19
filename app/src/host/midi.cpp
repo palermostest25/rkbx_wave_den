@@ -328,7 +328,7 @@ void Listener::run() {
     };
     bridge::Tap tap(QDir(bridge::defaultFolder()).filePath(QStringLiteral("state.bin")));
     QStringList names;          // Windows' MIDI inputs, by index (port = index + 1)
-    double listAt = 0, settleUntil = 0;
+    double listAt = 0, settleUntil = 0, emptySince = 0, throughSince = 0;
     bool wasThrough = false;
     Table table;
     std::vector<std::pair<int, int>> keep;
@@ -347,6 +347,9 @@ void Listener::run() {
                 MIDIINCAPSW caps{};
                 current << (midiInGetDevCapsW(i, &caps, sizeof caps) == MMSYSERR_NOERROR ? QString::fromWCharArray(caps.szPname) : QString());
             }
+            // Windows can list no MIDI inputs for a moment (a device re-enumerating): believed after 3 s.
+            if (current.isEmpty() && !names.isEmpty() && (emptySince = emptySince > 0 ? emptySince : t) > t - 3) current = names;
+            else if (!current.isEmpty()) emptySince = 0;
             if (current != names) {
                 if (opened) { closeAll(); settleUntil = t + 15; }  // port numbers shift: reopen, after Rekordbox has
                 names = current;
@@ -368,8 +371,11 @@ void Listener::run() {
         tap.keep(!through || keeping == Keep::Nothing ? std::vector<std::pair<int, int>>{}
                  : keeping == Keep::View             ? keys(table, Keep::View)
                                                      : keep);
-        if (through != wasThrough) {
+        if (through == wasThrough) throughSince = 0;
+        else if (throughSince == 0) throughSince = t;
+        if (through != wasThrough && t - throughSince >= 3) {  // logged once it holds, not every flicker
             wasThrough = through;
+            throughSince = 0;
             qCInfo(lcMidi) << (through ? "Wave hears the controller through Rekordbox" : "The bridge doesn't hear the controller");
             std::lock_guard l(lock_);
             status_ = through ? QString() : status_;
