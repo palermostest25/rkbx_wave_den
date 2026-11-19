@@ -995,6 +995,11 @@ void MainWindow::leaveRekordbox() {
     else if (browsing->kind == "window") {
         if (browsing->embedded) host::unembed(*browsing->embedded);  // its own frame back, before it goes away
         host::putBack(browsing->hwnd, !browsing->main || session_->settings.flag("hide_rekordbox"));
+        // A load can bring Rekordbox's main window forward (and Wave down): Wave back in front, Rekordbox behind it.
+        const auto f = session_->lastFrame();
+        const uint32_t pid = f && f->pid ? f->pid : host::rekordboxPid();
+        if (const auto c = host::classify(host::windowsOf(pid)); c.main) host::sendToBack(c.main->hwnd);
+        if (isMinimized()) setWindowState(windowState() & ~Qt::WindowMinimized);
     }
     else {
         host::hide();
