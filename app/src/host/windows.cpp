@@ -77,14 +77,6 @@ QRect windowRect(quintptr hwnd) {
     return QRect(QPoint(r.left, r.top), QPoint(r.right - 1, r.bottom - 1));
 }
 
-QRect monitorRect(quintptr hwnd) {
-    MONITORINFO info{};
-    info.cbSize = sizeof info;
-    if (!GetMonitorInfoW(MonitorFromWindow(h(hwnd), MONITOR_DEFAULTTONEAREST), &info)) return windowRect(hwnd);
-    const RECT &r = info.rcMonitor;
-    return QRect(QPoint(r.left, r.top), QPoint(r.right - 1, r.bottom - 1));
-}
-
 void present(quintptr hwnd, std::optional<QRect> rect, std::optional<QPoint> centre, bool activate, bool topmost) {
     HWND w = h(hwnd);
     const HWND order = topmost ? HWND_TOPMOST : HWND_TOP;
@@ -109,6 +101,38 @@ void putBack(quintptr hwnd, bool minimize) {
     if (!IsWindow(w)) return;
     SetWindowPos(w, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     if (minimize) ShowWindow(w, SW_SHOWMINNOACTIVE);
+}
+
+std::optional<Embedded> embed(quintptr hwnd, quintptr wave, const QRect &rect) {
+    HWND w = h(hwnd);
+    if (!IsWindow(w)) return std::nullopt;
+    Embedded e{hwnd, GetWindowLongPtrW(w, GWL_STYLE), GetWindowLongPtrW(w, GWL_EXSTYLE), GetWindowLongPtrW(w, GWLP_HWNDPARENT)};
+    if (IsIconic(w) || IsZoomed(w)) ShowWindow(w, SW_RESTORE);  // a minimised or maximised window ignores a new rectangle
+    SetWindowPos(w, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    SetWindowLongPtrW(w, GWLP_HWNDPARENT, LONG_PTR(wave));  // owned by Wave: always just above it, and with it
+    SetWindowLongPtrW(w, GWL_STYLE, e.style & ~LONG_PTR(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX));
+    SetWindowLongPtrW(w, GWL_EXSTYLE, e.exStyle & ~LONG_PTR(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE |
+                                                           WS_EX_APPWINDOW | WS_EX_TOPMOST));
+    SetWindowPos(w, HWND_TOP, rect.left(), rect.top(), rect.width(), rect.height(), SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    SetForegroundWindow(w);
+    return e;
+}
+
+void place(quintptr hwnd, const QRect &rect) {
+    HWND w = h(hwnd);
+    RECT r{};
+    if (!IsWindow(w) || !GetWindowRect(w, &r)) return;
+    if (r.left == rect.left() && r.top == rect.top() && r.right - r.left == rect.width() && r.bottom - r.top == rect.height()) return;
+    SetWindowPos(w, nullptr, rect.left(), rect.top(), rect.width(), rect.height(), SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void unembed(const Embedded &e) {
+    HWND w = h(e.hwnd);
+    if (!IsWindow(w)) return;
+    SetWindowLongPtrW(w, GWL_STYLE, LONG_PTR(e.style));
+    SetWindowLongPtrW(w, GWL_EXSTYLE, LONG_PTR(e.exStyle));
+    SetWindowLongPtrW(w, GWLP_HWNDPARENT, LONG_PTR(e.owner));
+    SetWindowPos(w, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 
 void setTopmost(quintptr hwnd, bool on) {
@@ -254,10 +278,12 @@ bool Automation::select(quintptr hwnd, const QString &name) {
 std::vector<Win> windowsOf(uint32_t) { return {}; }
 bool alive(quintptr) { return false; }
 QRect windowRect(quintptr) { return {}; }
-QRect monitorRect(quintptr) { return {}; }
 void present(quintptr, std::optional<QRect>, std::optional<QPoint>, bool, bool) {}
 void putBack(quintptr, bool) {}
 void setTopmost(quintptr, bool) {}
+std::optional<Embedded> embed(quintptr, quintptr, const QRect &) { return std::nullopt; }
+void place(quintptr, const QRect &) {}
+void unembed(const Embedded &) {}
 bool splitScreenFromMenu(quintptr) { return false; }
 Automation::Automation() {}
 Automation::~Automation() {}

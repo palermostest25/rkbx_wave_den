@@ -679,6 +679,8 @@ bool MainWindow::redirectControllerLoad(const std::map<int, QString> &before, co
 // --- Rekordbox behind Wave ---------------------------------------------------------------------------------
 
 void MainWindow::watch() {
+    // Rekordbox's browser inside Wave's page follows the page (a resize, another screen, full screen).
+    if (rekordboxBrowsing_ && rekordboxBrowsing_->embedded) host::place(rekordboxBrowsing_->hwnd, pageRect());
     if (midi_ && !session_->demo()) {
         const auto f = session_->lastFrame();
         const bool live = f && f->state == host::State::Live;
@@ -861,10 +863,13 @@ bool MainWindow::browseInRekordbox(const QString &service) {
     if (!target) target = c.main;
     if (!target) return false;
     if (streaming) setOnTop(false);
-    // The split browser fills Wave's screen; Rekordbox's main window stays below Wave's toolbar, for BACK TO WAVE.
+    // The split browser becomes part of Wave: in Wave's page, under its toolbar, without a frame of its own. Rekordbox's
+    // main window (only when there is no split browser) is laid there as it is.
     const bool split = !c.main || target->hwnd != c.main->hwnd;
-    host::present(target->hwnd, split ? host::monitorRect(quintptr(winId())) : pageRect(), std::nullopt, true, !streaming);
-    rekordboxBrowsing_ = Browsing{"window", deckPaths(), target->hwnd, c.main && target->hwnd == c.main->hwnd, windowState(), service};
+    std::optional<host::Embedded> embedded;
+    if (split) embedded = host::embed(target->hwnd, quintptr(winId()), pageRect());
+    if (!embedded) host::present(target->hwnd, pageRect(), std::nullopt, true, !streaming);
+    rekordboxBrowsing_ = Browsing{"window", deckPaths(), target->hwnd, c.main && target->hwnd == c.main->hwnd, windowState(), service, embedded};
     if (streaming) {
         // Rekordbox's tree has the service by name: select it there, off the UI thread (Rekordbox may be slow to answer).
         const quintptr hwnd = target->hwnd;
@@ -910,7 +915,10 @@ void MainWindow::leaveRekordbox() {
     hideBanner("streaming");
     if (!browsing->service.isEmpty()) setOnTop(session_->settings.flag("always_on_top"));
     if (browsing->kind == "mac") session_->showRekordboxBrowser(false, 0, 0);
-    else if (browsing->kind == "window") host::putBack(browsing->hwnd, !browsing->main || session_->settings.flag("hide_rekordbox"));
+    else if (browsing->kind == "window") {
+        if (browsing->embedded) host::unembed(*browsing->embedded);  // its own frame back, before it goes away
+        host::putBack(browsing->hwnd, !browsing->main || session_->settings.flag("hide_rekordbox"));
+    }
     else {
         host::hide();
         setWindowState(browsing->state & ~Qt::WindowMinimized);
@@ -945,7 +953,9 @@ void MainWindow::changeEvent(QEvent *e) {
         rekordboxBrowsing_->kind == "window") {
         const quintptr hwnd = rekordboxBrowsing_->hwnd;
         QTimer::singleShot(0, this, [this, hwnd] {
-            if (rekordboxBrowsing_ && rekordboxBrowsing_->hwnd == hwnd) host::present(hwnd, pageRect(), std::nullopt, false, false);
+            if (!rekordboxBrowsing_ || rekordboxBrowsing_->hwnd != hwnd) return;
+            if (rekordboxBrowsing_->embedded) host::place(hwnd, pageRect());  // owned by Wave: already above it
+            else host::present(hwnd, pageRect(), std::nullopt, false, false);
         });
     }
 #endif
