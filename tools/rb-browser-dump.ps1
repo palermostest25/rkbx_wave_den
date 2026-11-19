@@ -8,7 +8,9 @@
 #   -Classes "regex": every object reachable from the browser view whose C++ class matches, with its chain, and for
 #   list-like objects the rows / tracks fields the bridge reads for Rekordbox's own track list.
 #   -Target 0x...: every chain of plain fields (accessibility objects skipped) from the browser view to that object.
-param([int]$Rows = 6, [switch]$Tree, [string]$Find = "", [string]$Classes = "", [string]$Target = "", [int]$Depth = 6, [int]$Nodes = 150000)
+#   -Search: each SearchFilter@browse reachable from the view, its text editor (+0x110) and the text in that editor's
+#   value (TextEditor +0x3c0 -> ValueSource -> var), to tell which is the browser's search box.
+param([int]$Rows = 6, [switch]$Tree, [string]$Find = "", [string]$Classes = "", [string]$Target = "", [switch]$Search, [int]$Depth = 6, [int]$Nodes = 150000)
 
 Add-Type -TypeDefinition @"
 using System;
@@ -221,4 +223,22 @@ if ($Target) {
     $t = [Convert]::ToInt64($Target.Replace("0x", ""), 16)
     "=== chains to 0x{0:x} ({1}) from the browser view" -f $t, [Rb]::Class($t, $base)
     [Rb]::FindTarget($view, $t, $Depth, $Nodes, $base) | ForEach-Object { $_ }
+}
+
+if ($Search) {
+    "=== SearchFilter objects and their text"
+    $lines = [Rb]::FindClass($view, "^\.\?AVSearchFilter@browse@@$", $Depth, $Nodes, $base)
+    foreach ($line in $lines) {
+        if ($line -notmatch '^0x([0-9a-f]+) ') { $line; continue }
+        $sf = [Convert]::ToInt64($Matches[1], 16)
+        $editor = [Rb]::Q($sf + 0x110)
+        $source = [Rb]::Q($editor + 0x3c0)
+        $texts = @()
+        foreach ($o in 0..15) {
+            $v = [Rb]::Q($source + 8 * $o)
+            $t = [Rb]::Text($v); if ($t) { $texts += ("vs+0x{0:x}='{1}'" -f (8 * $o), $t) }
+            foreach ($k in 0..3) { $t2 = [Rb]::Text([Rb]::Q($v + 8 * $k)); if ($t2) { $texts += ("vs+0x{0:x}->+0x{1:x}='{2}'" -f (8 * $o), (8 * $k), $t2) } }
+        }
+        "{0}`n    editor 0x{1:x} {2} value-source 0x{3:x} {4} | {5}" -f $line, $editor, [Rb]::Class($editor, $base), $source, [Rb]::Class($source, $base), ($texts -join ' ')
+    }
 }
