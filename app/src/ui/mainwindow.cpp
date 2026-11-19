@@ -831,8 +831,9 @@ void MainWindow::setOnTop(bool on) {
 }
 
 QRect MainWindow::pageRect() const {
-    // The part of Wave below its toolbar, in the physical pixels Win32 uses.
-    QRect r = host::windowRect(quintptr(winId()));
+    // The part of Wave below its toolbar (and its banner), in the physical pixels Win32 uses: from Wave's inside, as
+    // its title bar (when it isn't full screen) is above what Qt lays out.
+    QRect r = host::clientRect(quintptr(winId()));
     r.setTop(r.top() + int(std::lround(pages_->mapTo(this, QPoint(0, 0)).y() * devicePixelRatioF())));
     return r;
 }
