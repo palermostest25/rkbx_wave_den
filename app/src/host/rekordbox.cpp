@@ -175,6 +175,28 @@ QString summary() {
 #endif
 }
 
+int stopUpdater() {
+#ifdef Q_OS_WIN
+    // Rekordbox's update manager, which offers a newer Rekordbox than the one Wave's bridge was checked against.
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof entry;
+    int stopped = 0;
+    for (BOOL more = Process32FirstW(snap, &entry); more; more = Process32NextW(snap, &entry)) {
+        if (_wcsicmp(entry.szExeFile, L"Upmgr rekordbox.exe") != 0) continue;
+        if (HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, entry.th32ProcessID)) {
+            if (TerminateProcess(process, 0)) ++stopped;
+            CloseHandle(process);
+        }
+    }
+    CloseHandle(snap);
+    return stopped;
+#else
+    return 0;
+#endif
+}
+
 uint32_t rekordboxPid() {
 #ifdef Q_OS_WIN
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);

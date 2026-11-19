@@ -1,6 +1,7 @@
 #include "host/popups.h"
 
 #include "core/clock.h"
+#include "host/rekordbox.h"
 #include "host/windows.h"
 
 #include <QLoggingCategory>
@@ -28,6 +29,14 @@ const std::set<QString> kSoftClose = {"close", "cancel", "x", "×"};
 // Questions the DJ has answered for good: the button Wave always presses on them, which changes nothing.
 // "My Tag in this device is synced with another computer. Do you want to delete My Tag stored in the device...?"
 const std::set<QString> kAlwaysAnswer = {"do not sync with my tag", "don't sync with my tag"};
+// Rekordbox offering a newer version of itself: Wave stays on the version its bridge supports, so always declined.
+const std::set<QString> kDeclineUpdate = {"later", "not now", "remind me later", "skip", "skip this version", "cancel", "close", "no",
+                                          "no thanks", "don't update", "do not update", "x", "×"};
+const QRegularExpression &updateOffer() {
+    static const QRegularExpression re("\\b(new version|newer version|latest version|update available|software update|update rekordbox|"
+                                       "rekordbox \\d+\\.\\d+|\\d+\\.\\d+\\.\\d+)\\b", QRegularExpression::CaseInsensitiveOption);
+    return re;
+}
 
 const QRegularExpression &notice() {
     // Words of a notice or an offer: then closing or cancelling it is also fine.
@@ -69,6 +78,9 @@ std::optional<QString> dismissWith(const Popup &popup) {
     const QString words = (QStringList{popup.title} + popup.texts).join(' ');
     for (const QString &name : names)
         if (kAlwaysAnswer.count(name)) return popup.buttons[names.indexOf(name)];
+    if (updateOffer().match(words).hasMatch())
+        for (const QString &name : names)
+            if (kDeclineUpdate.count(name)) return popup.buttons[names.indexOf(name)];
     if (names.isEmpty() || keep().match(words).hasMatch()) return std::nullopt;
     if (names.size() == 1 && kAcknowledge.count(names[0])) return popup.buttons[0];
     for (const QString &name : names)
@@ -236,6 +248,7 @@ void PopupWatcher::run() {
         std::set<quintptr> exclude;
         { QMutexLocker l(&lock_); exclude = exclude_; }
         const uint32_t target = pid;
+        if (autoUpdateOff && stopUpdater()) qCInfo(lcPopups) << "Closed Rekordbox's update manager: Wave keeps Rekordbox at" << supportedText();
 #ifdef Q_OS_MACOS
         std::map<QString, std::map<QString, AXUIElementRef>> buttons;
         std::vector<CFTypeRef> held;

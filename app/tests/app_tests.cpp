@@ -202,6 +202,10 @@ private slots:
                                            "in the device and sync with My Tag in this computer?"},
                                           {"Sync with My Tag", "Do not sync with My Tag"})),
                  QStringLiteral("Do not sync with My Tag"));
+        QCOMPARE(*host::dismissWith(popup("rekordbox", {"rekordbox 7.2.20 is available. Do you want to quit rekordbox and update now?"},
+                                          {"Update", "Cancel"})),
+                 QStringLiteral("Cancel"));
+        QVERIFY(!host::dismissWith(popup("", {"The library needs an update. Update the database now?"}, {"Update", "Cancel"})));
         for (const auto &p : {popup("", {"Sync your library now?"}, {"Sync", "Cancel"}), popup("", {"Learn more about plans"}, {"Learn more"}),
                               popup("Sign in", {"Log in to your account"}, {"Later"}),
                               popup("", {"The database is damaged: restore the backup?"}, {"OK"}), popup("", {"Something"}, {}),

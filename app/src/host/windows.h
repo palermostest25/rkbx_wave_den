@@ -36,6 +36,7 @@ QRect windowRect(quintptr hwnd);
 // ``centre``, or where it is.
 void present(quintptr hwnd, std::optional<QRect> rect = {}, std::optional<QPoint> centre = {}, bool activate = true,
              bool topmost = true);
+void sendToBack(quintptr hwnd);  // behind every other window, without activating it
 void putBack(quintptr hwnd, bool minimize = true);         // undo present
 // A Rekordbox window shown as part of Wave: owned by Wave (it moves and stacks with it), without its own frame or
 // title bar, filling ``rect`` (physical pixels). unembed gives it back its frame and owner as they were.

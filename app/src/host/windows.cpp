@@ -96,6 +96,11 @@ void present(quintptr hwnd, std::optional<QRect> rect, std::optional<QPoint> cen
     }
 }
 
+void sendToBack(quintptr hwnd) {
+    HWND w = h(hwnd);
+    if (IsWindow(w)) SetWindowPos(w, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
 void putBack(quintptr hwnd, bool minimize) {
     HWND w = h(hwnd);
     if (!IsWindow(w)) return;
@@ -280,6 +285,7 @@ bool alive(quintptr) { return false; }
 QRect windowRect(quintptr) { return {}; }
 void present(quintptr, std::optional<QRect>, std::optional<QPoint>, bool, bool) {}
 void putBack(quintptr, bool) {}
+void sendToBack(quintptr) {}
 void setTopmost(quintptr, bool) {}
 std::optional<Embedded> embed(quintptr, quintptr, const QRect &) { return std::nullopt; }
 void place(quintptr, const QRect &) {}

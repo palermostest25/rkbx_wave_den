@@ -38,6 +38,7 @@ public:
     // Set from the UI thread.
     std::atomic<uint32_t> pid{0};
     std::atomic<bool> autoClose{true};
+    std::atomic<bool> autoUpdateOff{true};  // close Rekordbox's update manager whenever it runs
     void setExclude(const std::set<quintptr> &windows);
 
     // Read from the UI thread.
