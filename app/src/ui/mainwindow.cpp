@@ -831,34 +831,51 @@ bool MainWindow::browseInRekordbox(const QString &service) {
 #elif defined(Q_OS_WIN)
     const uint32_t pid = f && f->pid ? f->pid : host::rekordboxPid();
     if (!pid) return false;
-    const auto c = host::classify(host::windowsOf(pid));
+    const auto windows = host::windowsOf(pid);
+    const auto c = host::classify(windows);
     std::optional<host::Win> target;
-    for (const host::Win &w : c.panels) if (w.resizable) { target = w; break; }
-    if (!target && c.main && !splitAsked_) {
+    // The split screen browser, by the window it opened as (it can be small: it isn't told apart by its size).
+    if (splitWindow_ && host::alive(splitWindow_))
+        for (const host::Win &w : windows) if (w.hwnd == splitWindow_) target = w;
+    // Already open (Wave puts it away minimised): any resizable window of Rekordbox's besides its main one, as asking
+    // again would close it (the command is a toggle).
+    if (!target)
+        for (const host::Win &w : windows)
+            if (w.resizable && !w.tool && (w.visible || w.minimized) && (!c.main || w.hwnd != c.main->hwnd) && w.area() > 0) {
+                target = w;
+                splitWindow_ = w.hwnd;
+                break;
+            }
+    if (!target && c.main && !splitAsked_ && session_->bridged()) {
         // Only the browser, in the window of its own that Rekordbox's split screen button (bottom right of its browser)
-        // opens: through the bridge, as that button runs it; or Rekordbox's View menu where Windows can reach it.
+        // opens, through the bridge as that button runs it. The window it adds is the browser.
         splitAsked_ = true;
-        if (session_->bridged()) session_->showRekordboxBrowser(true, 0, 0);
-        else if (!host::splitScreenFromMenu(c.main->hwnd)) splitAsked_ = false;
-        if (splitAsked_) {
-            // The window takes a moment to appear: look for it a few times, then fall back to the main window.
-            auto look = std::make_shared<std::function<void(int)>>();
-            *look = [this, service, look](int left) {
-                const auto f = session_->lastFrame();
-                const uint32_t pid = f && f->pid ? f->pid : host::rekordboxPid();
-                bool open = false;
-                for (const host::Win &w : host::classify(host::windowsOf(pid)).panels) open = open || w.resizable;
-                if (open || left <= 0) {
-                    const bool shown = browseInRekordbox(service);
-                    splitAsked_ = false;
-                    if (!shown) toggleBrowser();
-                } else {
-                    QTimer::singleShot(300, this, [look, left] { (*look)(left - 1); });
-                }
-            };
-            QTimer::singleShot(300, this, [look] { (*look)(10); });
-            return true;
-        }
+        std::set<quintptr> before;
+        for (const host::Win &w : windows) before.insert(w.hwnd);
+        auto look = std::make_shared<std::function<void(int)>>();
+        *look = [this, service, look, before](int left) {
+            const auto f = session_->lastFrame();
+            const uint32_t pid = f && f->pid ? f->pid : host::rekordboxPid();
+            for (const host::Win &w : host::windowsOf(pid))
+                if (!before.count(w.hwnd) && w.visible && !w.tool && w.area() > 0) { splitWindow_ = w.hwnd; break; }
+            if (!splitWindow_ && left > 0) {
+                QTimer::singleShot(250, this, [look, left] { (*look)(left - 1); });
+                return;
+            }
+            if (!splitWindow_) qCWarning(lcWindow) << "Rekordbox's split screen browser didn't open: showing its main window";
+            const bool shown = browseInRekordbox(service);
+            splitAsked_ = false;
+            if (!shown && pages_->currentWidget() == browser_) toggleBrowser();
+        };
+        session_->showRekordboxBrowser(true, 0, 0, [this, look](bool ok, const QString &message) {
+            if (ok) { QTimer::singleShot(250, this, [look] { (*look)(16); }); return; }
+            // An older bridge (Rekordbox not restarted since Wave updated) doesn't know the command.
+            qCWarning(lcWindow) << "Split screen browser:" << message;
+            showBanner(QStringLiteral("Rekordbox runs an older Wave bridge: press CONNECT to restart it, then the browser opens inside Wave"),
+                       "warn", QStringLiteral("CONNECT"), [this] { session_->connectRekordbox(); }, 12000, "split");
+            (*look)(0);
+        });
+        return true;
     }
     if (!target) target = c.main;
     if (!target) return false;
@@ -866,6 +883,7 @@ bool MainWindow::browseInRekordbox(const QString &service) {
     // The split browser becomes part of Wave: in Wave's page, under its toolbar, without a frame of its own. Rekordbox's
     // main window (only when there is no split browser) is laid there as it is.
     const bool split = !c.main || target->hwnd != c.main->hwnd;
+    if (pages_->currentWidget() == browser_) toggleBrowser();  // the waveforms behind it, for when it goes
     std::optional<host::Embedded> embedded;
     if (split) embedded = host::embed(target->hwnd, quintptr(winId()), pageRect());
     if (!embedded) host::present(target->hwnd, pageRect(), std::nullopt, true, !streaming);
@@ -897,8 +915,8 @@ void MainWindow::openStreaming(const QString &service) {
         showBanner(QStringLiteral("%1 streams through Rekordbox: start Wave without --demo").arg(service), "info", {}, {}, 5000);
         return;
     }
+    if (browseInRekordbox(service)) return;  // Wave's browser stays until Rekordbox's is up in its place
     if (pages_->currentWidget() == browser_) toggleBrowser();
-    if (browseInRekordbox(service)) return;
     pendingStreaming_ = service;
     pendingSince_ = now();
     if (!host::rekordboxPid()) session_->connectRekordbox();
