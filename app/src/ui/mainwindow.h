@@ -123,7 +123,7 @@ private:
     QWidget *root_;
     QFrame *toolbar_;
     Segmented *count_;
-    QPushButton *browseButton_, *rekordboxButton_, *installButton_, *connectButton_, *updateButton_, *settingsButton_;
+    QPushButton *browseButton_, *rekordboxButton_, *installButton_, *connectButton_, *updateButton_, *settingsButton_, *minimiseButton_, *closeButton_;
     QLabel *status_, *master_, *battery_, *clock_;
     QFrame *banner_;
     QLabel *bannerText_;

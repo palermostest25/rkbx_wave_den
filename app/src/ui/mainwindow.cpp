@@ -163,6 +163,19 @@ MainWindow::MainWindow(Session *session, QWidget *parent)
     top->addWidget(clock_);
     settingsButton_ = toolbarButton(QStringLiteral("SETTINGS"), [this] { toggleSettings(); });
     top->addWidget(settingsButton_);
+    // Full screen has no title bar: its minimise and close are here instead.
+    minimiseButton_ = toolbarButton(QStringLiteral("\u2013"), [this] { showMinimized(); });
+    minimiseButton_->setAccessibleName(QStringLiteral("Minimise Wave"));
+    minimiseButton_->setToolTip(QStringLiteral("Minimise Wave"));
+    top->addWidget(minimiseButton_);
+    closeButton_ = toolbarButton(QStringLiteral("\u2715"), [this] { close(); });
+    closeButton_->setAccessibleName(QStringLiteral("Close Wave"));
+    closeButton_->setToolTip(QStringLiteral("Close Wave"));
+    top->addWidget(closeButton_);
+    for (QPushButton *b : {minimiseButton_, closeButton_}) {
+        b->setMinimumWidth(b->sizeHint().height());
+        b->hide();  // shown while full screen (changeEvent)
+    }
     layout->addWidget(toolbar_);
 
     // One line for what the DJ should know now: Rekordbox wants an answer, a notice Wave closed, a step
@@ -1062,7 +1075,12 @@ void MainWindow::changeEvent(QEvent *e) {
         });
     }
 #endif
-    if (e->type() == QEvent::WindowStateChange) paceFrames();
+    if (e->type() == QEvent::WindowStateChange) {
+        paceFrames();
+        const bool full = isFullScreen();
+        minimiseButton_->setVisible(full);
+        closeButton_->setVisible(full);
+    }
     QMainWindow::changeEvent(e);
 }
 
@@ -1282,7 +1300,7 @@ void MainWindow::selectScreen(const QString &key) {
 
 void MainWindow::ensureDisplay() {
     // Fill the remembered monitor whenever it is connected; otherwise stay a window.
-    if (!session_->settings.fillDisplay()) return;
+    if (!session_->settings.fillDisplay() || isMinimized()) return;  // minimised by the DJ: stays so until shown
     if (session_->settings.displayKey().isEmpty()) {  // full screen and no monitor chosen yet: the one Wave is on
         QScreen *s = screen() ? screen() : QGuiApplication::primaryScreen();
         if (!s) return;
