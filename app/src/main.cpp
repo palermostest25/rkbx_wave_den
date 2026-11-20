@@ -3,6 +3,8 @@
 #include "app/install.h"
 #include "app/session.h"
 #include "app/updater.h"
+#include "core/clock.h"
+#include "host/rekordbox.h"
 #include "core/settings.h"
 #include "ui/mainwindow.h"
 
@@ -11,6 +13,9 @@
 #include <QDir>
 #include <QIcon>
 #include <QImageReader>
+#include <QPainter>
+#include <QPointer>
+#include <QScreen>
 #include <QSslSocket>
 #include <QLoggingCategory>
 #include <QStyleFactory>
@@ -19,6 +24,46 @@
 #include <QTimer>
 
 Q_LOGGING_CATEGORY(lcMain, "wave")
+
+namespace {
+// While Wave starts (and starts Rekordbox): one calm screen over everything, instead of windows coming and going.
+class Splash : public QWidget {
+public:
+    Splash() : QWidget(nullptr, Qt::SplashScreen | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint) {
+        setAttribute(Qt::WA_DeleteOnClose);
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        if (QScreen *s = QGuiApplication::primaryScreen()) setGeometry(s->geometry());
+    }
+    void setText(const QString &text) {
+        if (text != text_) { text_ = text; update(); }
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        p.fillRect(rect(), QColor("#0d0f12"));
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const QImage icon(QStringLiteral(":/ui/icon.png"));
+        const double h = height(), side = h * .12;
+        const QRectF art(width() / 2.0 - side / 2, h * .32, side, side);
+        if (!icon.isNull()) p.drawImage(art, icon);
+        QFont f(QStringLiteral("Arial"));
+        f.setBold(true);
+        f.setPixelSize(int(h * .045));
+        p.setFont(f);
+        p.setPen(Qt::white);
+        p.drawText(QRectF(0, art.bottom() + h * .03, width(), h * .07), Qt::AlignCenter, QStringLiteral("REKORDBOX WAVE"));
+        f.setBold(false);
+        f.setPixelSize(int(h * .022));
+        p.setFont(f);
+        p.setPen(QColor("#8d96a0"));
+        p.drawText(QRectF(0, art.bottom() + h * .11, width(), h * .05), Qt::AlignCenter, text_);
+    }
+
+private:
+    QString text_ = QStringLiteral("Starting…");
+};
+}  // namespace
 
 int main(int argc, char **argv) {
     QApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
@@ -80,6 +125,39 @@ int main(int argc, char **argv) {
     wave::Updater::cleanUp();
     wave::Session session(args.isSet(config) ? args.value(config) : wave::settingsFile(), demoMode);
     wave::MainWindow window(&session);
+#ifdef Q_OS_WIN
+    // The startup screen, until Wave fills its monitor and Rekordbox answers (or plainly won't): then it fades.
+    QPointer<Splash> splash;
+    if (!args.isSet(smoke)) {
+        splash = new Splash;
+        splash->show();
+        const double began = wave::now();
+        auto *poll = new QTimer(&window);
+        QObject::connect(poll, &QTimer::timeout, &window, [&session, &window, splash, poll, began] {
+            if (!splash) { poll->deleteLater(); return; }
+            const double t = wave::now() - began;
+            const auto f = session.lastFrame();
+            const bool live = f && f->state == wave::host::State::Live;
+            const bool noRekordbox = !wave::host::rekordboxPid() && t > 3;
+            splash->setText(live ? QStringLiteral("Ready") : session.status().isEmpty() ? QStringLiteral("Starting…") : session.status());
+            splash->raise();  // above Wave and anything Rekordbox opens while it starts
+            if (t < 1.2 || (!live && !noRekordbox && t < 15)) return;
+            poll->stop();
+            poll->deleteLater();
+            window.raise();
+            window.activateWindow();
+            const double from = wave::now();
+            auto *fade = new QTimer(splash);
+            QObject::connect(fade, &QTimer::timeout, splash, [splash, from] {
+                const double a = 1 - (wave::now() - from) / .35;
+                if (a <= 0) splash->close();
+                else splash->setWindowOpacity(a);
+            });
+            fade->start(16);
+        });
+        poll->start(100);
+    }
+#endif
     window.show();
     if (args.isSet(page)) window.showPage(args.value(page));
     if (instance)
