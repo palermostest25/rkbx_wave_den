@@ -166,11 +166,11 @@ MainWindow::MainWindow(Session *session, QWidget *parent)
     settingsButton_ = toolbarButton(QStringLiteral("SETTINGS"), [this] { toggleSettings(); });
     top->addWidget(settingsButton_);
     // Full screen has no title bar: its minimise and close are here instead.
-    minimiseButton_ = toolbarButton(QStringLiteral("\u2013"), [this] { showMinimized(); });
+    minimiseButton_ = toolbarButton(QString(QChar(0x2013)), [this] { showMinimized(); });
     minimiseButton_->setAccessibleName(QStringLiteral("Minimise Wave"));
     minimiseButton_->setToolTip(QStringLiteral("Minimise Wave"));
     top->addWidget(minimiseButton_);
-    closeButton_ = toolbarButton(QStringLiteral("\u2715"), [this] { close(); });
+    closeButton_ = toolbarButton(QString(QChar(0x2715)), [this] { close(); });
     closeButton_->setAccessibleName(QStringLiteral("Close Wave"));
     closeButton_->setToolTip(QStringLiteral("Close Wave"));
     top->addWidget(closeButton_);
