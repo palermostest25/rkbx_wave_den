@@ -31,6 +31,8 @@ struct DeckView {
     PlaybackTimeline timeline{false};
     std::optional<bridge::Deck> status;  // master, sync, key lock... while bridged
     uint64_t generation = 0;       // a new number per track, for caches
+    std::optional<double> loopInPressed;  // the playhead when LOOP IN was pressed, until OUT, EXIT or a loop
+    bool loopInFromRekordbox = false;     // the marker stands where Rekordbox put its in point
 };
 
 // The handle Rekordbox gives the stick mounted at ``root``, 0 when Rekordbox hasn't mounted it.
@@ -54,6 +56,9 @@ public:
     std::vector<int> order() const { return settings.order(); }
     std::optional<double> position(int idx) const;
     std::optional<double> previewPosition(int idx) const;
+    // The loop being made on a deck (LOOP IN pressed, OUT not yet): where it starts, until OUT, EXIT or a loop.
+    void markLoopIn(int idx);
+    void clearLoopIn(int idx);
     bool playing(int idx) const;
     bool animating() const;        // something moves on screen: frames needed
     QString status() const { return status_; }
@@ -96,6 +101,7 @@ private:
     void receive(std::shared_ptr<const ReaderFrame> f);
     void openTrack(int idx, const QString &folder);
     void clearDeck(int idx);
+    void adoptLoopIn(int idx);  // Rekordbox's own in point for a LOOP IN press, once the bridge reports it
     void pollCues();
     void pollHost();
     void pollLoading();

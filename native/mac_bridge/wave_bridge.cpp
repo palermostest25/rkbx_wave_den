@@ -665,14 +665,11 @@ void tick() {
             deck.bpm = api.bpm(dj, c, true);
             deck.original_bpm = api.bpm(dj, c, false);
             deck.tempo = api.tempo(dj, c);
-            if (api.is_looping(dj, c, false)) {
-                RunningLoop loop = api.running_loop(dj, c);
-                deck.loop_in = loop.in;
-                deck.loop_out = loop.out;
-                if (loop.out != -1 && loop.out > loop.in) flags |= kDeckLooping;
-            } else {
-                deck.loop_in = deck.loop_out = -1;
-            }
+            // As on Windows: Rekordbox's loop as it stands, running or not (after LOOP IN, its in point already).
+            const RunningLoop loop = api.running_loop(dj, c);
+            deck.loop_in = loop.in;
+            deck.loop_out = loop.out;
+            if (api.is_looping(dj, c, false) && loop.out != -1 && loop.out > loop.in) flags |= kDeckLooping;
         } else {
             deck.position_ms = 0; deck.total_ms = 0; deck.bpm = deck.original_bpm = deck.tempo = 0;
             deck.loop_in = deck.loop_out = -1;

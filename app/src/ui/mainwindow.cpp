@@ -550,6 +550,13 @@ void MainWindow::onController(midi::Kind kind, int value, int deck) {
         }
         return;
     }
+    // The loop being made: from LOOP IN until OUT, RELOOP/EXIT or 4 BEAT (Rekordbox acts on these keys itself).
+    if (kind == midi::Kind::LoopIn || kind == midi::Kind::LoopOut || kind == midi::Kind::LoopExit) {
+        if (kind == midi::Kind::LoopIn) session_->markLoopIn(deck);
+        else session_->clearLoopIn(deck);
+        canvas_->update();
+        return;
+    }
     if (kind == midi::Kind::Zoom) {  // Rekordbox's own waveform zoom (SHIFT + BROWSE)
         zoomBy(std::pow(2.0, -value / 4.0));
         return;
@@ -719,10 +726,11 @@ bool MainWindow::redirectControllerLoad(const std::map<int, QString> &before, co
 void MainWindow::watch() {
     // Rekordbox's browser inside Wave's page follows the page (a resize, another screen, full screen).
     if (rekordboxBrowsing_ && rekordboxBrowsing_->embedded) host::place(rekordboxBrowsing_->hwnd, pageRect());
-    // Between visits it stays out of sight: Rekordbox can show it again by itself (a load, a sync), over Wave's page.
-    // Not while the DJ has Rekordbox itself up (REKORDBOX) or Wave stepped aside for it.
-    else if (!rekordboxBrowsing_ && splitWindow_ && !rekordboxShown_ && aside_.isEmpty() && !isMinimized() && host::alive(splitWindow_))
-        host::stash(splitWindow_);
+    // The split browser stays out of sight unless Wave shows it: between visits (Rekordbox can show it again by itself,
+    // after a load or a sync), while Rekordbox's whole window is up (it belongs to that window, so Windows shows it with
+    // it, on top) and while Wave is minimised (it would be left on the desktop). Not while Wave stepped aside.
+    const bool splitShown = rekordboxBrowsing_ && !rekordboxBrowsing_->whole && rekordboxBrowsing_->hwnd == splitWindow_;
+    if (splitWindow_ && !splitShown && !rekordboxShown_ && aside_.isEmpty() && host::alive(splitWindow_)) host::stash(splitWindow_);
     if (midi_ && !session_->demo()) {
         const auto f = session_->lastFrame();
         const bool live = f && f->state == host::State::Live;
@@ -1014,7 +1022,7 @@ void MainWindow::openStreaming(const QString &service) {
                "info", QStringLiteral("CANCEL"), [this] { pendingStreaming_.reset(); hideBanner("streaming"); }, 0, "streaming");
 }
 
-void MainWindow::leaveRekordbox() {
+void MainWindow::leaveRekordbox(bool minimising) {
     // Put Rekordbox's browser away and come back to the waveforms.
     const auto browsing = rekordboxBrowsing_;
     rekordboxBrowsing_.reset();
@@ -1033,6 +1041,7 @@ void MainWindow::leaveRekordbox() {
         const auto f = session_->lastFrame();
         const uint32_t pid = f && f->pid ? f->pid : host::rekordboxPid();
         if (const auto c = host::classify(host::windowsOf(pid)); c.main) host::sendToBack(c.main->hwnd);
+        if (minimising) return;
         if (isMinimized()) setWindowState(windowState() & ~Qt::WindowMinimized);
     }
     else {
@@ -1060,6 +1069,12 @@ void MainWindow::showRekordbox() {
         return;
     }
     if (pages_->currentWidget() != canvas_) pages_->setCurrentWidget(canvas_);
+    // Its split browser belongs to it and would come up on top of it: put away (watch keeps it so meanwhile).
+    for (const host::Win &w : c.panels)
+        if (w.visible && !w.tool) {
+            if (!splitWindow_ && w.title.isEmpty()) splitWindow_ = w.hwnd;
+            host::stash(w.hwnd);
+        }
     const auto embedded = host::embed(c.main->hwnd, quintptr(winId()), pageRect(), 0);
     if (embedded) {
         rekordboxBrowsing_ = Browsing{"window", deckPaths(), c.main->hwnd, true, windowState(), QString(), embedded, true};
@@ -1101,6 +1116,8 @@ void MainWindow::changeEvent(QEvent *e) {
     }
 #endif
     if (e->type() == QEvent::WindowStateChange) {
+        // Minimised: Rekordbox's window or browser goes away with Wave rather than staying on the desktop.
+        if (isMinimized() && rekordboxBrowsing_) QTimer::singleShot(0, this, [this] { if (rekordboxBrowsing_) leaveRekordbox(true); });
         paceFrames();
         const bool full = isFullScreen();
         minimiseButton_->setVisible(full);

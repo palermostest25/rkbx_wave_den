@@ -231,7 +231,13 @@ private slots:
         QCOMPARE(kind(0xB6, 0x02), int(midi::Kind::SamplerZoom));
         QCOMPARE(kind(0x92, 0x46), int(midi::Kind::Load));
         QCOMPARE(table.at({0x92, 0x46}).deck, 2);  // each deck's LOAD, by its channel offset
-        QCOMPARE(kind(0x90, 0x10), -1);  // loop buttons are Rekordbox's alone
+        QCOMPARE(kind(0x90, 0x10), int(midi::Kind::LoopIn));  // watched, for the loop being made...
+        QCOMPARE(table.at({0x91, 0x10}).deck, 1);
+        for (const auto &key : midi::Listener::keys(table, midi::Keep::Browser)) QVERIFY(key != std::make_pair(0x90, 0x10));  // ...never kept
+        QCOMPARE(int(midi::browseAction("LoopOut", 0x90, "LoopOut")->kind), int(midi::Kind::LoopOut));
+        QCOMPARE(int(midi::browseAction("ReloopExit", 0x90, "LoopOut+Shift")->kind), int(midi::Kind::LoopExit));
+        QCOMPARE(int(midi::browseAction("4BeatLoop", 0x90, "4BeatLoop")->kind), int(midi::Kind::LoopExit));
+        QVERIFY(!midi::browseAction("LoopHalf", 0x90, "LoopIn"));  // loop size, not the loop being made
         QCOMPARE(int(midi::browseAction("LoadDeck3", 0x96)->deck), 2);
         QVERIFY(!midi::browseAction("SamplerVolume", 0x96));  // a button is not the knob
         QVERIFY(!midi::browseAction("Browse+Shift", 0xB6));

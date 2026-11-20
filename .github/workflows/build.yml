@@ -234,10 +234,14 @@ jobs:
           echo "VCPKG_BINARY_SOURCES=clear;files,$RUNNER_TEMP/vcpkg-cache,readwrite" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/vcpkg-cache"
       - uses: actions/cache/restore@v4
+        # The newest cache for these ports. A cache key is never overwritten, so each run that had to build something
+        # (a new runner image changes the compiler, and with it every package's ABI) saves under its own key, and this
+        # prefix finds the latest. A key that never changed kept an outdated cache "hit": Qt rebuilt (18 min) every run.
         if: runner.os == 'Windows'
         with:
           path: ${{ runner.temp }}/vcpkg-cache
-          key: vcpkg-${{ matrix.triplet }}-${{ env.VCPKG_TAG }}-${{ hashFiles('app/vcpkg.json', 'app/triplets/*') }}
+          key: vcpkg-${{ matrix.triplet }}-${{ env.VCPKG_TAG }}-${{ hashFiles('app/vcpkg.json', 'app/triplets/*') }}-${{ github.run_id }}
+          restore-keys: vcpkg-${{ matrix.triplet }}-${{ env.VCPKG_TAG }}-${{ hashFiles('app/vcpkg.json', 'app/triplets/*') }}-
       - name: Build the Windows Rekordbox bridge
         if: runner.os == 'Windows'
         shell: cmd
@@ -268,14 +272,17 @@ jobs:
           if [ -n "${{ matrix.arch }}" ]; then
             args+=("-DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }}" -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0)
           fi
-          cmake -S app -B app-build -G Ninja "${args[@]}"
+          cmake -S app -B app-build -G Ninja "${args[@]}" 2>&1 | tee configure.log
+          # vcpkg builds a port only when the cache has no match for it: then the cache is worth saving.
+          if grep -q "^Building " configure.log; then echo "rebuilt=true" >> "$GITHUB_OUTPUT"; fi
           cmake --build app-build 2>&1 | tee build.log
+        id: build
       - uses: actions/cache/save@v4
         # Saved even when Wave's own build fails: Qt takes long to build, and is the same either way.
-        if: always() && runner.os == 'Windows'
+        if: always() && runner.os == 'Windows' && steps.build.outputs.rebuilt == 'true'
         with:
           path: ${{ runner.temp }}/vcpkg-cache
-          key: vcpkg-${{ matrix.triplet }}-${{ env.VCPKG_TAG }}-${{ hashFiles('app/vcpkg.json', 'app/triplets/*') }}
+          key: vcpkg-${{ matrix.triplet }}-${{ env.VCPKG_TAG }}-${{ hashFiles('app/vcpkg.json', 'app/triplets/*') }}-${{ github.run_id }}
       - name: Test
         shell: bash
         # Off screen on Linux and macOS; Windows' static Qt draws on the runner's own desktop.

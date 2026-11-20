@@ -295,6 +295,9 @@ void SettingsPage::build() {
     p->row(QStringLiteral("Artwork"), sw("artwork"), QStringLiteral("The sleeve beside each deck."));
     time_ = seg("time_mode", {{QStringLiteral("Remaining"), "remain"}, {QStringLiteral("Elapsed"), "elapsed"}});
     p->row(QStringLiteral("Time"), time_, QStringLiteral("Tap the time on a deck to flip it, too."));
+    p->row(QStringLiteral("Loop in"), seg("loop_in_style", {{QStringLiteral("Highlighter"), "highlight"}, {QStringLiteral("Marker"), "marker"}}),
+           QStringLiteral("After LOOP IN: the loop so far, growing with the playhead until OUT; or Rekordbox's IN marker only. "
+                          "RELOOP/EXIT clears it."));
     p->row(QStringLiteral("Key notation"), seg("key_notation", {{QStringLiteral("As Rekordbox"), "rekordbox"}, {QStringLiteral("Alphanumeric 8A"), "alphanumeric"},
                                                         {QStringLiteral("Classic Am"), "classic"}}),
            QStringLiteral("On the decks and in the browser. Alphanumeric is Rekordbox's Camelot-style wheel."));

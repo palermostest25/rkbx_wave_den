@@ -104,7 +104,7 @@ private:
     void comeBack();
     bool browseInRekordbox(const QString &service = {});
     void openStreaming(const QString &service);  // Beatport, Spotify: Rekordbox's own browser, only for this
-    void leaveRekordbox();
+    void leaveRekordbox(bool minimising = false);  // minimising: Wave stays minimised
     void connectRekordbox();
     void offerUpdate();
     void ensureDisplay();

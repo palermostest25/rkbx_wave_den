@@ -328,9 +328,15 @@ void Canvas::drawDeck(QPainter &p, int idx, const QRectF &bounds) {
             p.drawLine(QPointF(right, r.top()), QPointF(right, r.bottom()));
             pill(left + 4, beatLabel((loop->second - loop->first) * bpm / 60));
         } else if (timeline.pendingIn && *timeline.pendingIn <= end) {
+            // LOOP IN pressed: Rekordbox's marker, or (Settings) a highlight that grows with the playhead until OUT.
             const double left = xAt(*timeline.pendingIn);
-            if (*position > *timeline.pendingIn)
-                p.fillRect(QRectF(left, signal.top() + 1, xAt(*position) - left, signal.height() - 2), QColor(255, 143, 0, 34));
+            if (s.text("loop_in_style") != QLatin1String("marker") && *position > *timeline.pendingIn) {
+                const QRectF grow(left, signal.top() + 1, xAt(*position) - left, signal.height() - 2);
+                p.fillRect(grow, QColor(255, 143, 0, 62));
+                p.setPen(QPen(kLoopOrange, 1.5));
+                p.drawLine(grow.topLeft(), grow.topRight());
+                p.drawLine(grow.bottomLeft(), grow.bottomRight());
+            }
             p.setPen(QPen(kLoopOrange, 3));
             p.drawLine(QPointF(left, signal.top()), QPointF(left, signal.bottom()));
             pill(left + 4, QStringLiteral("IN"));
