@@ -81,6 +81,7 @@ signals:
 protected:
     void closeEvent(QCloseEvent *) override;
     void changeEvent(QEvent *) override;
+    bool nativeEvent(const QByteArray &type, void *message, qintptr *result) override;
     bool eventFilter(QObject *, QEvent *) override;
 
 private:
@@ -122,7 +123,7 @@ private:
     QWidget *root_;
     QFrame *toolbar_;
     Segmented *count_;
-    QPushButton *browseButton_, *rekordboxButton_, *installButton_, *connectButton_, *updateButton_, *settingsButton_;
+    QPushButton *browseButton_, *rekordboxButton_, *installButton_, *connectButton_, *updateButton_, *settingsButton_, *minimiseButton_, *closeButton_;
     QLabel *status_, *master_, *battery_, *clock_;
     QFrame *banner_;
     QLabel *bannerText_;
@@ -146,12 +147,14 @@ private:
     double closedSeen_ = 0;
     bool toldAccessibility_ = false;
     struct Browsing { QString kind; std::map<int, QString> tracks; quintptr hwnd = 0; bool main = false; Qt::WindowStates state; QString service;
-                      std::optional<host::Embedded> embedded; };  // the split browser, shown inside Wave's page
+                      std::optional<host::Embedded> embedded;
+                      bool whole = false; };  // the split browser (or, for REKORDBOX, Rekordbox's main window) inside Wave's page
     std::optional<Browsing> rekordboxBrowsing_;
     bool splitAsked_ = false;
     quintptr splitWindow_ = 0;
+    bool rekordboxShown_ = false;  // REKORDBOX pressed: Rekordbox and its browser up until Wave is used again
     int listFirst_ = -1;                          // the rows of Rekordbox's list Wave reads: -1 around its cursor                    // Rekordbox's split screen browser, once Wave has seen it open
-    QString pendingStreaming_;                    // a streaming service asked for while Rekordbox was starting
+    std::optional<QString> pendingStreaming_;     // Rekordbox's browser (on a service, or "") asked for while it was starting
     double pendingSince_ = 0;
     // The controller.
     std::optional<std::tuple<int, QString, int, int, int, std::vector<uint32_t>>> mirrored_;

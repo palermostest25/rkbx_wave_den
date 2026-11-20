@@ -2,6 +2,7 @@
 
 #include "app/gig.h"
 #include "core/clock.h"
+#include "core/keys.h"
 #include "ui/widgets.h"
 
 #include <QDebug>
@@ -123,7 +124,7 @@ public:
             switch (i.column()) {
             case 1: return t.title.isEmpty() ? QStringLiteral("Untitled") : t.title;
             case 2: return t.bpm > 0 ? QString::number(t.bpm, 'f', 2) : QStringLiteral("—");
-            case 3: return t.key.isEmpty() ? QStringLiteral("—") : t.key;
+            case 3: return t.key.isEmpty() ? QStringLiteral("—") : keyText(t.key);
             case 4: return minutes(t.duration);
             default: return QString();
             }
@@ -197,14 +198,15 @@ public:
         }
         case 3:
             if (!t.key.isEmpty()) {
+                const QString key = keyText(t.key);
                 p->setFont(arial(r.height() * .3, true));
-                const double w = p->fontMetrics().horizontalAdvance(t.key) + 18;
+                const double w = p->fontMetrics().horizontalAdvance(key) + 18;
                 const QRectF box(r.center().x() - w / 2, r.center().y() - r.height() * .22, w, r.height() * .44);
                 p->setPen(Qt::NoPen);
                 p->setBrush(QColor(selected ? "#103a68" : "#1f3a2a"));
                 p->drawRoundedRect(box, 4, 4);
                 p->setPen(selected ? Qt::white : QColor("#7ee2a8"));
-                p->drawText(box, Qt::AlignCenter, t.key);
+                p->drawText(box, Qt::AlignCenter, key);
                 break;
             }
             [[fallthrough]];
@@ -508,7 +510,7 @@ protected:
         p.setFont(arial(15, true));
         QStringList detail;
         if (track_->bpm > 0) detail << QStringLiteral("%1 BPM").arg(track_->bpm, 0, 'f', 2);
-        if (!track_->key.isEmpty()) detail << track_->key;
+        if (!track_->key.isEmpty()) detail << keyText(track_->key);
         detail << minutes(track_->duration);
         p.drawText(QRectF(x, 68, width, 22), Qt::AlignLeft | Qt::AlignVCenter, detail.join(QStringLiteral("   ")));
     }

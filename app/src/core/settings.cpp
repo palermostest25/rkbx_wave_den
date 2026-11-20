@@ -19,7 +19,7 @@ namespace {
 // The Python app's view defaults (rb_waveform_core/qt_app.py), and the ones added since.
 const std::map<QString, QVariant> &viewDefaults() {
     static const std::map<QString, QVariant> defaults = {
-        {"zoom_beats", 32}, {"playhead", .32}, {"deck_info", true}, {"time_mode", "remain"}, {"info_size", 1.0},
+        {"zoom_beats", 32}, {"playhead", .32}, {"deck_info", true}, {"time_mode", "remain"}, {"key_notation", "rekordbox"}, {"info_size", 1.0},
         {"artwork", true}, {"end_warning", 30}, {"start_rekordbox", true}, {"hide_rekordbox", true},
         {"check_updates", true}, {"grid", true}, {"cues", true}, {"loops", true}, {"bar_numbers", true},
         {"source", "Native"}, {"settings_scale", 1.0}, {"always_on_top", true}, {"refresh_hz", 60},
@@ -94,7 +94,7 @@ Settings::Settings() {
     render["deck_count"] = 4;
     render["deck_order"] = "3,1,2,4";
     render["display_key"] = "";
-    render["fill_display"] = false;
+    render["fill_display"] = true;  // full screen on the monitor Wave opens on, until the DJ turns it off
     render["ui_scale"] = 1.0;
     render["low_gain"] = 1.0;
     render["mid_gain"] = 1.0;
@@ -141,6 +141,12 @@ bool Settings::load(const QString &path, QString *error) {
     }
     QJsonObject v = view;
     if (v.value("settings_version").toInt(1) < 2) v["browser"] = "rekordbox";  // as 2.5 moved everyone
+    if (v.value("settings_version").toInt(1) < 3) {  // as 3.0.15 moved everyone: full screen, on top
+        QJsonObject r = data.value("render").toObject();
+        r["fill_display"] = true;
+        data["render"] = r;
+        v["always_on_top"] = true;
+    }
     v["settings_version"] = kVersion;
     data["view"] = v;
     // Untouched older palettes move to the current Rekordbox look, as the Python app does.

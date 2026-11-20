@@ -3,6 +3,7 @@
 // timeline's own tests, ported case by case.
 #include "core/anlz.h"
 #include "core/bridge.h"
+#include "core/keys.h"
 #include "core/library.h"
 #include "core/streamed.h"
 #include "core/settings.h"
@@ -45,6 +46,19 @@ class CoreTests : public QObject {
     }
 
 private slots:
+    void keysReadInEitherNotation() {
+        const char *const pairs[][2] = {{"Am", "8A"}, {"C", "8B"}, {"Em", "9A"}, {"Dm", "7A"}, {"F#m", "11A"}, {"Abm", "1A"},
+                                        {"B", "1B"}, {"Db", "3B"}, {"E", "12B"}, {"Bbm", "3A"}, {"Gm", "6A"}, {"F", "7B"}};
+        for (const auto &[classic, alpha] : pairs) {
+            QCOMPARE(keyText(QString::fromLatin1(classic), "alphanumeric"), QString::fromLatin1(alpha));
+            QCOMPARE(keyText(QString::fromLatin1(alpha), "classic"), QString::fromLatin1(classic));
+        }
+        QCOMPARE(keyText("G#m", "alphanumeric"), QStringLiteral("1A"));  // enharmonics
+        QCOMPARE(keyText("C#", "classic"), QStringLiteral("Db"));
+        QCOMPARE(keyText("8A", "alphanumeric"), QStringLiteral("8A"));
+        QCOMPARE(keyText("Am", "rekordbox"), QStringLiteral("Am"));      // as stored
+        QCOMPARE(keyText("odd", "alphanumeric"), QStringLiteral("odd"));  // not a key: as it is
+    }
     // --- Rekordbox's files --------------------------------------------------------------------
     void streamedTitlesAreReadAsRekordboxWritesThem() {
         // Rekordbox's own format, made with its key by its encrypt function's recipe (AES-128-CBC, PKCS#7, Base64).

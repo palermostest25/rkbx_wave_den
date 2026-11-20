@@ -7,6 +7,7 @@
 #include <QDateTime>
 #include <QFileInfo>
 #include <QLoggingCategory>
+#include <set>
 #include <QtConcurrent>
 
 #include <cmath>
@@ -187,6 +188,7 @@ void Session::previewRelease(int idx) {
 
 void Session::receive(std::shared_ptr<const ReaderFrame> f) {
     frame_ = f;
+    std::set<int> reopened;  // a deck whose timeline starts over: told where Rekordbox's playhead is now, paused or not
     for (const auto &[idx, info] : f->tracks) {
         if (idx < 0 || idx >= 4) continue;
         DeckView &d = decks_[size_t(idx)];
@@ -196,6 +198,7 @@ void Session::receive(std::shared_ptr<const ReaderFrame> f) {
         if (!info.analysisFolder.isEmpty() && info.analysisFolder != d.requested) {
             openTrack(idx, info.analysisFolder);
             d.timeline.reset();
+            reopened.insert(idx);
         } else if (info.analysisFolder.isEmpty()) {
             d.analysis.reset();
             d.requested.clear();
@@ -213,7 +216,9 @@ void Session::receive(std::shared_ptr<const ReaderFrame> f) {
             const double original = d.originalBpm > 0 ? d.originalBpm : live.originalBpm;
             d.timeline.rateHint = original > 0 && d.currentBpm > 0 ? std::optional<double>(d.currentBpm / original) : std::nullopt;
             d.timeline.beatSeconds = original > 0 ? std::optional<double>(60 / original) : std::nullopt;
-            if (f->decksChanged) {
+            // Also when the track's analysis came later than the track (Rekordbox analysing it after loading it): a
+            // paused deck doesn't change, and without this it read "No track loaded" until something moved it.
+            if (f->decksChanged || reopened.count(idx)) {
                 d.timeline.timing({.08, .25, 0.0, .3});
                 Observation o;
                 o.position = live.position;

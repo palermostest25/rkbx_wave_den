@@ -3,6 +3,7 @@
 #include "app/install.h"
 #include "app/session.h"
 #include "core/clock.h"
+#include "core/keys.h"
 #include "host/rekordbox.h"
 #include "host/windows.h"
 #include "ui/browser.h"
@@ -99,6 +100,7 @@ QString screenKey(const QScreen *screen) {
 MainWindow::MainWindow(Session *session, QWidget *parent)
     : QMainWindow(parent), session_(session), touch_(session->settings, [session] { session->save(); }) {
     setWindowTitle(QStringLiteral("Rekordbox Wave %1").arg(version()));
+    setKeyNotation(session_->settings.text("key_notation"));
     setMinimumSize(640, 400);
     resize(1280, 800);
     setWindowFlag(Qt::WindowStaysOnTopHint, session_->settings.flag("always_on_top"));
@@ -122,7 +124,7 @@ MainWindow::MainWindow(Session *session, QWidget *parent)
     top->addWidget(browseButton_);
     // Rekordbox itself, for anything only it can do: Wave steps aside; tap Wave to come back.
     rekordboxButton_ = toolbarButton(QStringLiteral("REKORDBOX"), [this] { showRekordbox(); });
-    rekordboxButton_->setToolTip(QStringLiteral("Show Rekordbox in front of Wave. Tap Wave to come back."));
+    rekordboxButton_->setToolTip(QStringLiteral("Rekordbox itself, inside Wave (its settings and so on). Tap again to come back."));
 #if !defined(Q_OS_WIN) && !defined(Q_OS_MACOS)
     rekordboxButton_->hide();
 #endif
@@ -133,8 +135,8 @@ MainWindow::MainWindow(Session *session, QWidget *parent)
     installButton_ = toolbarButton(QStringLiteral("INSTALL"), [this] { installWave(); });
     installButton_->setObjectName("install");
     installButton_->setToolTip(QStringLiteral("Install Rekordbox Wave in Program Files, with Start menu and desktop shortcuts"));
-    installButton_->setVisible(install::offered());
     top->addWidget(installButton_);
+    installButton_->setVisible(install::offered());  // after it's in the toolbar: never a window of its own
     connectButton_ = toolbarButton(QStringLiteral("CONNECT"), [this] { connectRekordbox(); });
     connectButton_->setObjectName("connect");
     connectButton_->setAccessibleName(QStringLiteral("Start Rekordbox connected to Wave"));
@@ -163,6 +165,19 @@ MainWindow::MainWindow(Session *session, QWidget *parent)
     top->addWidget(clock_);
     settingsButton_ = toolbarButton(QStringLiteral("SETTINGS"), [this] { toggleSettings(); });
     top->addWidget(settingsButton_);
+    // Full screen has no title bar: its minimise and close are here instead.
+    minimiseButton_ = toolbarButton(QString(QChar(0x2013)), [this] { showMinimized(); });
+    minimiseButton_->setAccessibleName(QStringLiteral("Minimise Wave"));
+    minimiseButton_->setToolTip(QStringLiteral("Minimise Wave"));
+    top->addWidget(minimiseButton_);
+    closeButton_ = toolbarButton(QString(QChar(0x2715)), [this] { close(); });
+    closeButton_->setAccessibleName(QStringLiteral("Close Wave"));
+    closeButton_->setToolTip(QStringLiteral("Close Wave"));
+    top->addWidget(closeButton_);
+    for (QPushButton *b : {minimiseButton_, closeButton_}) {
+        b->setMinimumWidth(b->sizeHint().height());
+        b->hide();  // shown while full screen (changeEvent)
+    }
     layout->addWidget(toolbar_);
 
     // One line for what the DJ should know now: Rekordbox wants an answer, a notice Wave closed, a step
@@ -467,7 +482,9 @@ void MainWindow::hideBanner(const QString &key) {
 
 void MainWindow::syncNav() {
     // One visual language for the toolbar: the active view glows, like the deck buttons.
-    mark(browseButton_, "selected", pages_->currentWidget() == browser_ || rekordboxBrowsing_.has_value());
+    const bool whole = rekordboxBrowsing_ && rekordboxBrowsing_->whole;
+    mark(browseButton_, "selected", pages_->currentWidget() == browser_ || (rekordboxBrowsing_.has_value() && !whole));
+    mark(rekordboxButton_, "selected", whole);
     mark(settingsButton_, "selected", pages_->currentWidget() == settings_);
 }
 
@@ -487,12 +504,11 @@ void MainWindow::showPage(const QString &name) {
 
 void MainWindow::browse(bool byKnob) {
     // BROWSE on screen, or VIEW on the controller: the browser chosen in Settings opens, or closes.
-    if (rekordboxBrowsing_) leaveRekordbox();
-    else if (session_->settings.text("browser") == QLatin1String("rekordbox") && pages_->currentWidget() != browser_) {
-        if (!browseInRekordbox()) {
-            showBanner(QStringLiteral("Rekordbox's browser needs Rekordbox running with Wave: here is Wave's browser meanwhile"), "info", {}, {}, 5000, "browser");
-            toggleBrowser(byKnob);
-        }
+    if (rekordboxBrowsing_ || pendingStreaming_) {
+        if (pendingStreaming_) { pendingStreaming_.reset(); hideBanner("streaming"); }
+        leaveRekordbox();
+    } else if (session_->settings.text("browser") == QLatin1String("rekordbox") && pages_->currentWidget() != browser_) {
+        openStreaming({});  // as BEATPORT does, on whatever Rekordbox's browser shows (started with Rekordbox if need be)
     } else {
         toggleBrowser(byKnob);
     }
@@ -630,7 +646,7 @@ void MainWindow::syncLoadTargets() {
     const auto before = deckPaths_;
     deckPaths_ = paths;
     if (rekordboxBrowsing_) {
-        if (trackLoaded(rekordboxBrowsing_->tracks, paths)) leaveRekordbox();
+        if (!rekordboxBrowsing_->whole && trackLoaded(rekordboxBrowsing_->tracks, paths)) leaveRekordbox();
         else if (rekordboxBrowsing_->kind == "window" && !host::alive(rekordboxBrowsing_->hwnd)) leaveRekordbox();  // closed in Rekordbox
         else if (rekordboxBrowsing_->kind == "whole" && !isMinimized()) rekordboxBrowsing_.reset();  // back in Wave by hand
     }
@@ -703,6 +719,10 @@ bool MainWindow::redirectControllerLoad(const std::map<int, QString> &before, co
 void MainWindow::watch() {
     // Rekordbox's browser inside Wave's page follows the page (a resize, another screen, full screen).
     if (rekordboxBrowsing_ && rekordboxBrowsing_->embedded) host::place(rekordboxBrowsing_->hwnd, pageRect());
+    // Between visits it stays out of sight: Rekordbox can show it again by itself (a load, a sync), over Wave's page.
+    // Not while the DJ has Rekordbox itself up (REKORDBOX) or Wave stepped aside for it.
+    else if (!rekordboxBrowsing_ && splitWindow_ && !rekordboxShown_ && aside_.isEmpty() && !isMinimized() && host::alive(splitWindow_))
+        host::stash(splitWindow_);
     if (midi_ && !session_->demo()) {
         const auto f = session_->lastFrame();
         const bool live = f && f->state == host::State::Live;
@@ -719,12 +739,12 @@ void MainWindow::watch() {
                                                      : midi::Keep::Nothing);
     }
     paceFrames();  // frames start as soon as something moves (a deck starts, a preview begins)
-    if (!pendingStreaming_.isEmpty()) {
+    if (pendingStreaming_) {
         const auto f = session_->lastFrame();
-        if (f && f->state == host::State::Live && browseInRekordbox(pendingStreaming_)) pendingStreaming_.clear();
+        if (f && f->state == host::State::Live && browseInRekordbox(*pendingStreaming_)) pendingStreaming_.reset();
         else if (now() - pendingSince_ > 90) {
-            showBanner(QStringLiteral("Rekordbox didn't come up for %1: press REKORDBOX to open it yourself").arg(pendingStreaming_), "warn", {}, {}, 10000, "streaming");
-            pendingStreaming_.clear();
+            showBanner(QStringLiteral("Rekordbox didn't come up for its browser: press REKORDBOX to open it yourself"), "warn", {}, {}, 10000, "streaming");
+            pendingStreaming_.reset();
         }
     }
     syncLoadTargets();
@@ -932,7 +952,10 @@ bool MainWindow::browseInRekordbox(const QString &service) {
     const bool split = !c.main || target->hwnd != c.main->hwnd;
     if (pages_->currentWidget() == browser_) toggleBrowser();  // the waveforms behind it, for when it goes
     std::optional<host::Embedded> embedded;
-    if (split) embedded = host::embed(target->hwnd, quintptr(winId()), pageRect());
+    if (rekordboxBrowsing_ && rekordboxBrowsing_->embedded && rekordboxBrowsing_->hwnd == target->hwnd)
+        embedded = rekordboxBrowsing_->embedded;  // already inside Wave (a second tap): kept as first taken
+    if (split && !embedded) embedded = host::embed(target->hwnd, quintptr(winId()), pageRect(), c.main ? c.main->hwnd : 0);
+    else if (embedded) host::place(target->hwnd, pageRect());
     if (embedded && c.main) host::sendToBack(c.main->hwnd);  // opening the split browser can bring Rekordbox forward
     if (!embedded) host::present(target->hwnd, pageRect(), std::nullopt, true, !streaming);
     rekordboxBrowsing_ = Browsing{"window", deckPaths(), target->hwnd, c.main && target->hwnd == c.main->hwnd, windowState(), service, embedded};
@@ -941,17 +964,21 @@ bool MainWindow::browseInRekordbox(const QString &service) {
         const quintptr hwnd = target->hwnd;
         QThreadPool::globalInstance()->start([hwnd, service] {
             host::Automation automation;
-            for (int attempt = 0; attempt < 6 && !automation.select(hwnd, service); ++attempt) QThread::msleep(300);
+            // Its source icon ("Display Beatport"), as a tap on it: the browser shows that service.
+            bool shown = false;
+            for (int attempt = 0; attempt < 6 && !shown; ++attempt) {
+                shown = automation.press(hwnd, QStringLiteral("Display %1").arg(service));
+                if (!shown) QThread::msleep(300);
+            }
+            qCInfo(lcWindow) << "Rekordbox's browser switched to" << service << shown;
         });
     }
 #else
     Q_UNUSED(f);
     return false;
 #endif
-    syncNav();
-    if (streaming)
-        showBanner(QStringLiteral("%1 in Rekordbox: pick a track and load it (sign in there if it asks). Wave comes back by itself.").arg(service),
-                   "info", QStringLiteral("BACK TO WAVE"), [this] { leaveRekordbox(); }, 0, "streaming");
+    syncNav();  // BROWSE lit: tapping it again (or loading a track) brings Wave back; no banner over the browser
+    hideBanner("streaming");
     qCInfo(lcWindow) << "Rekordbox's browser is up over Wave" << service;
     return true;
 }
@@ -959,7 +986,7 @@ bool MainWindow::browseInRekordbox(const QString &service) {
 void MainWindow::openStreaming(const QString &service) {
     // Rekordbox is opened only for this: started (hidden) if it isn't running, shown when it is ready.
     if (rekordboxBrowsing_) leaveRekordbox();
-    if (session_->demo()) {
+    if (session_->demo() && !service.isEmpty()) {
         showBanner(QStringLiteral("%1 streams through Rekordbox: start Wave without --demo").arg(service), "info", {}, {}, 5000);
         return;
     }
@@ -975,12 +1002,16 @@ void MainWindow::openStreaming(const QString &service) {
     }
 #endif
     if (browseInRekordbox(service)) return;  // Wave's browser stays until Rekordbox's is up in its place
+    if (session_->demo()) {  // no Rekordbox to wait for: Wave's own browser
+        if (pages_->currentWidget() != browser_) toggleBrowser();
+        return;
+    }
     if (pages_->currentWidget() == browser_) toggleBrowser();
     pendingStreaming_ = service;
     pendingSince_ = now();
     if (!host::rekordboxPid()) session_->connectRekordbox();
-    showBanner(QStringLiteral("Opening %1 in Rekordbox…").arg(service), "info", QStringLiteral("CANCEL"),
-               [this] { pendingStreaming_.clear(); hideBanner("streaming"); }, 0, "streaming");
+    showBanner(service.isEmpty() ? QStringLiteral("Opening Rekordbox's browser…") : QStringLiteral("Opening %1 in Rekordbox…").arg(service),
+               "info", QStringLiteral("CANCEL"), [this] { pendingStreaming_.reset(); hideBanner("streaming"); }, 0, "streaming");
 }
 
 void MainWindow::leaveRekordbox() {
@@ -1015,7 +1046,28 @@ void MainWindow::leaveRekordbox() {
 }
 
 void MainWindow::showRekordbox() {
-    // Rekordbox itself, for its preferences and so on: Wave steps out of the way until it is used again.
+    // Rekordbox itself, for its preferences and so on. Windows: its whole window inside Wave's page, as its browser is;
+    // REKORDBOX again puts it back out of sight.
+#ifdef Q_OS_WIN
+    const bool wasWhole = rekordboxBrowsing_ && rekordboxBrowsing_->whole;
+    if (rekordboxBrowsing_) leaveRekordbox();
+    if (wasWhole) return;
+    const auto f = session_->lastFrame();
+    const uint32_t pid = f && f->pid ? f->pid : host::rekordboxPid();
+    const auto c = pid ? host::classify(host::windowsOf(pid)) : host::Classified{};
+    if (!c.main) {
+        showBanner(QStringLiteral("Rekordbox isn't running: press CONNECT to start it with Wave"), "warn", {}, {}, 6000, "rekordbox");
+        return;
+    }
+    if (pages_->currentWidget() != canvas_) pages_->setCurrentWidget(canvas_);
+    const auto embedded = host::embed(c.main->hwnd, quintptr(winId()), pageRect(), 0);
+    if (embedded) {
+        rekordboxBrowsing_ = Browsing{"window", deckPaths(), c.main->hwnd, true, windowState(), QString(), embedded, true};
+        syncNav();
+        qCInfo(lcWindow) << "Rekordbox's window is up inside Wave";
+        return;
+    }
+#endif
     setOnTop(false);
     const QString why = host::show();
     if (!why.isEmpty()) {
@@ -1023,6 +1075,7 @@ void MainWindow::showRekordbox() {
         QMessageBox::information(this, QStringLiteral("Rekordbox"), why);
         return;
     }
+    rekordboxShown_ = true;  // until Wave is used again
     if (splitWindow_) host::reveal(splitWindow_);  // its browser, hidden between Wave's visits, with it
 #ifdef Q_OS_WIN
     showMinimized();
@@ -1031,8 +1084,10 @@ void MainWindow::showRekordbox() {
 
 void MainWindow::changeEvent(QEvent *e) {
     // Back in Wave after Rekordbox was shown: on top again, unless Wave is stepping aside for a question.
-    if (e->type() == QEvent::ActivationChange && isActiveWindow() && aside_.isEmpty() && !rekordboxBrowsing_)
+    if (e->type() == QEvent::ActivationChange && isActiveWindow() && aside_.isEmpty() && !rekordboxBrowsing_) {
         setOnTop(session_->settings.flag("always_on_top"));
+        rekordboxShown_ = false;
+    }
 #ifdef Q_OS_WIN
     // A tap on Wave while a streaming service is up in Rekordbox: Rekordbox's browser stays in front of Wave.
     if (e->type() == QEvent::ActivationChange && isActiveWindow() && rekordboxBrowsing_ && !rekordboxBrowsing_->service.isEmpty() &&
@@ -1045,8 +1100,26 @@ void MainWindow::changeEvent(QEvent *e) {
         });
     }
 #endif
-    if (e->type() == QEvent::WindowStateChange) paceFrames();
+    if (e->type() == QEvent::WindowStateChange) {
+        paceFrames();
+        const bool full = isFullScreen();
+        minimiseButton_->setVisible(full);
+        closeButton_->setVisible(full);
+    }
     QMainWindow::changeEvent(e);
+}
+
+bool MainWindow::nativeEvent(const QByteArray &type, void *message, qintptr *result) {
+#ifdef Q_OS_WIN
+    // Back from sleep: Windows may have dropped Wave's full screen and on-top, and the music stick may be reconnecting.
+    const MSG *msg = static_cast<const MSG *>(message);
+    if (type == "windows_generic_MSG" && msg && msg->message == WM_POWERBROADCAST && msg->wParam == PBT_APMRESUMEAUTOMATIC) {
+        qCInfo(lcWindow) << "Woke from sleep";
+        connectedScreen_ = nullptr;  // bind the monitor afresh
+        for (int ms : {1500, 5000}) QTimer::singleShot(ms, this, &MainWindow::ensureDisplay);
+    }
+#endif
+    return QMainWindow::nativeEvent(type, message, result);
 }
 
 bool MainWindow::eventFilter(QObject *o, QEvent *e) {
@@ -1083,6 +1156,10 @@ void MainWindow::setView(const QString &key, const QVariant &value) {
     if ((key == "keyboard" || key == "touch_keyboard_off") && settings_) settings_->refresh();
     if (key == "dim") static_cast<Dimmer *>(dimmer_)->refresh();
     if (key == "always_on_top") setOnTop(value.toBool());
+    if (key == "key_notation") {
+        setKeyNotation(value.toString());
+        for (QWidget *w : browser_->findChildren<QWidget *>()) w->update();
+    }
     canvas_->update();
     persist();
 }
@@ -1252,8 +1329,18 @@ void MainWindow::selectScreen(const QString &key) {
 
 void MainWindow::ensureDisplay() {
     // Fill the remembered monitor whenever it is connected; otherwise stay a window.
+    if (!session_->settings.fillDisplay() || isMinimized()) return;  // minimised by the DJ: stays so until shown
+    if (session_->settings.displayKey().isEmpty()) {  // full screen and no monitor chosen yet: the one Wave is on
+        QScreen *s = screen() ? screen() : QGuiApplication::primaryScreen();
+        if (!s) return;
+        session_->settings.setDisplayKey(screenKey(s));
+        saveTimer_.start();
+    }
     const QString key = session_->settings.displayKey();
-    if (key.isEmpty() || !session_->settings.fillDisplay()) return;
+    // On top as set, unless Wave stepped aside for Rekordbox (a question, a sign-in, its own window): Windows can
+    // drop it (waking from sleep, another full-screen app), so it's put back each time the monitor is checked.
+    if (aside_.isEmpty() && !rekordboxBrowsing_ && !isMinimized())
+        setOnTop(session_->settings.flag("always_on_top"));
     QScreen *found = nullptr;
     for (QScreen *s : QGuiApplication::screens()) if (screenKey(s) == key) found = s;
     if (!found) {
