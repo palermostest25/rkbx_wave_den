@@ -63,6 +63,7 @@ public:
     void toggleSettings();
     void showPage(const QString &name);   // "settings", "browser" or a settings page by name
     void showRekordbox();
+    void showRekordboxPreferences();  // Rekordbox's own Preferences, inside Wave; again: closed
     void installRekordbox(const QString &archive = {});
     void checkForUpdate(bool asked);
     void installWave();
@@ -113,6 +114,7 @@ private:
     void toggleFullscreen();
     std::map<int, QString> deckPaths() const;
     QRect pageRect() const;
+    QRect browsingRect() const;
 
     Session *session_;
     touch::Guard touch_;
@@ -123,7 +125,7 @@ private:
     QWidget *root_;
     QFrame *toolbar_;
     Segmented *count_;
-    QPushButton *browseButton_, *rekordboxButton_, *installButton_, *connectButton_, *updateButton_, *settingsButton_, *minimiseButton_, *closeButton_;
+    QPushButton *browseButton_, *rekordboxButton_, *installButton_, *connectButton_, *updateButton_, *settingsButton_, *minimiseButton_, *closeButton_, *prefsButton_;
     QLabel *status_, *master_, *battery_, *clock_;
     QFrame *banner_;
     QLabel *bannerText_;
@@ -148,10 +150,14 @@ private:
     bool toldAccessibility_ = false;
     struct Browsing { QString kind; std::map<int, QString> tracks; quintptr hwnd = 0; bool main = false; Qt::WindowStates state; QString service;
                       std::optional<host::Embedded> embedded;
-                      bool whole = false; };  // the split browser (or, for REKORDBOX, Rekordbox's main window) inside Wave's page
+                      bool whole = false;
+                      QSize prefs; };  // Rekordbox's Preferences (its own size, centred on black), when not empty  // the split browser (or, for REKORDBOX, Rekordbox's main window) inside Wave's page
     std::optional<Browsing> rekordboxBrowsing_;
     bool splitAsked_ = false;
     quintptr splitWindow_ = 0;
+    QWidget *blank_ = nullptr;   // black behind Rekordbox's Preferences
+    QWidget *pageBeforePrefs_ = nullptr;
+    double prefsOpeningUntil_ = 0;  // Rekordbox's Preferences are opening: no popup handling for them meanwhile
     bool rekordboxShown_ = false;  // REKORDBOX pressed: Rekordbox and its browser up until Wave is used again
     int listFirst_ = -1;                          // the rows of Rekordbox's list Wave reads: -1 around its cursor                    // Rekordbox's split screen browser, once Wave has seen it open
     std::optional<QString> pendingStreaming_;     // Rekordbox's browser (on a service, or "") asked for while it was starting

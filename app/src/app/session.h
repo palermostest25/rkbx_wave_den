@@ -82,6 +82,7 @@ public:
     bool loading() const { return loading_.has_value(); }
     void toggleMasterTempo(int idx);
     // Rekordbox's own browser window (macOS: shown at x, y; Windows: its split screen toggled). ``answered``: Rekordbox's reply.
+    void openRekordboxPreferences(std::function<void(bool, QString)> answered = {});  // Rekordbox's File > Preferences
     void showRekordboxBrowser(bool on, int x, int y, std::function<void(bool, QString)> answered = {});
     // Rekordbox's own browser list, driven from Wave's: a search in its search box (Beatport's, on its Search Tracks),
     // the rows Wave reads of it, and loading one of its rows (a streamed one too) onto a deck.

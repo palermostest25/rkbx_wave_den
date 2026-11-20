@@ -22,7 +22,8 @@ enum : uint32_t { kDeckLoaded = 1, kDeckPlaying = 2, kDeckLooping = 4, kDeckMast
 enum : uint32_t { kCommandLoad = 1, kCommandMasterTempo = 2, kCommandLoadDevice = 3,
                   kCommandBrowser = 4,     // see below
                   kCommandLoadRow = 5,     // the row of Rekordbox's browser list at `device`, whose id is content_id, onto deck
-                  kCommandSearch = 6 };    // Rekordbox's browser search box: BridgeSearch.query, as if typed and Return pressed  // content_id 1: show Rekordbox's own browser window (device: Wave's
+                  kCommandSearch = 6,
+                  kCommandRekordbox = 7 }; // one of Rekordbox's own menu commands, content_id (Windows: Preferences only)    // Rekordbox's browser search box: BridgeSearch.query, as if typed and Return pressed  // content_id 1: show Rekordbox's own browser window (device: Wave's
                                                 // window centre, x low 32 bits, y high), 0: put it away
 enum : int32_t { kReplyRequested = 1, kReplyBadRequest = -1, kReplyExpired = -2, kReplyBadDeck = -3,
                  kReplyDeckPlaying = -4, kReplyDeckBusy = -5, kReplyNoTrack = -6, kReplyNotReady = -7,

@@ -350,6 +350,9 @@ protected:
                 p.drawArc(QRectF(icon.left() + 2 - rr, c.y() - rr, 2 * rr, 2 * rr), -50 * 16, 100 * 16);
             }
             p.drawPoint(QPointF(icon.left() + 2, c.y()));
+        } else if (kind_ == "USB") {  // a USB stick: its plug and its body
+            p.drawRect(QRectF(c.x() - 4, icon.top() + 1, 8, 7));
+            p.drawRoundedRect(QRectF(c.x() - 7, icon.top() + 8, 14, 17), 3, 3);
         } else if (kind_ == "SEARCH") {
             p.drawEllipse(QPointF(icon.left() + 9, icon.top() + 9), 8, 8);
             p.drawLine(QPointF(icon.left() + 15, icon.top() + 15), QPointF(icon.right() - 1, icon.bottom() - 1));
@@ -610,10 +613,12 @@ BrowserPage::BrowserPage(QWidget *parent) : QWidget(parent), cache_(std::make_sh
     rule->setFixedHeight(1);
     rule->setStyleSheet(QStringLiteral("background:#24272b; margin:0 12px;"));
     column->addWidget(rule);
-    for (const char *service : {"Beatport", "Spotify"}) {
-        auto *tile = new NavTile(QString::fromLatin1(service).toUpper());
-        tile->setAccessibleName(QStringLiteral("%1 in Rekordbox").arg(QString::fromLatin1(service)));
-        tile->setToolTip(QStringLiteral("Browse %1 in Rekordbox's own browser, over Wave").arg(QString::fromLatin1(service)));
+    // Rekordbox's source as its own browser names it ("Display Devices" is its USB view), and the tile's label.
+    for (const auto &[service, label] : {std::pair{"Beatport", "BEATPORT"}, std::pair{"Spotify", "SPOTIFY"}, std::pair{"Devices", "USB"}}) {
+        auto *tile = new NavTile(QString::fromLatin1(label));
+        const QString what = QString::fromLatin1(service) == QLatin1String("Devices") ? QStringLiteral("your USB stick") : QString::fromLatin1(service);
+        tile->setAccessibleName(QStringLiteral("%1 in Rekordbox").arg(what));
+        tile->setToolTip(QStringLiteral("Browse %1 in Rekordbox's own browser, inside Wave").arg(what));
         connect(tile, &QAbstractButton::clicked, this, [this, service] { emit streamingRequested(QString::fromLatin1(service)); });
         column->addWidget(tile);
     }

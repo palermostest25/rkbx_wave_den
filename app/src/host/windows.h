@@ -32,7 +32,8 @@ Classified classify(const std::vector<Win> &windows, const std::set<quintptr> &p
 std::vector<Win> windowsOf(uint32_t pid);
 bool alive(quintptr hwnd);
 bool exists(quintptr hwnd);   // there at all, shown or not
-void stash(quintptr hwnd);    // hidden, kept as it is (Rekordbox's split browser between visits)
+void stash(quintptr hwnd);
+void closeWindow(quintptr hwnd);  // as its own close button    // hidden, kept as it is (Rekordbox's split browser between visits)
 void reveal(quintptr hwnd);   // shown again where it was, without the focus
 QRect windowRect(quintptr hwnd);
 QRect clientRect(quintptr hwnd);  // its inside (no title bar or frame), in screen pixels
