@@ -15,6 +15,7 @@
 #include "ui/mainwindow.h"
 #include "ui/widgets.h"
 
+#include <QMainWindow>
 #include <QApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -406,6 +407,26 @@ private slots:
     }
 
     // --- The window --------------------------------------------------------------------------------
+    void buildingTheWindowOpensNoOtherWindows() {
+        // A widget made visible before it has a parent opens as a window of its own: on Windows, Wave's startup flashed
+        // one per Settings row.
+        struct Watch : QObject {
+            QStringList seen;
+            bool eventFilter(QObject *o, QEvent *e) override {
+                if (e->type() == QEvent::Show)
+                    if (auto *w = qobject_cast<QWidget *>(o); w && w->isWindow() && !qobject_cast<QMainWindow *>(w))
+                        seen << QString::fromLatin1(w->metaObject()->className()) + ' ' + w->objectName();
+                return false;
+            }
+        } watch;
+        qApp->installEventFilter(&watch);
+        QTemporaryDir dir;
+        Session session(dir.filePath("settings.json"), true);
+        MainWindow window(&session);
+        qApp->removeEventFilter(&watch);
+        QVERIFY2(watch.seen.isEmpty(), qPrintable(watch.seen.join(", ")));
+    }
+
     void theDeckScreenDrawsOnlyWhileSomethingMoves() {
         QTemporaryDir dir;
         Session session(dir.filePath("settings.json"), true);

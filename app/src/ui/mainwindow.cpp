@@ -135,8 +135,8 @@ MainWindow::MainWindow(Session *session, QWidget *parent)
     installButton_ = toolbarButton(QStringLiteral("INSTALL"), [this] { installWave(); });
     installButton_->setObjectName("install");
     installButton_->setToolTip(QStringLiteral("Install Rekordbox Wave in Program Files, with Start menu and desktop shortcuts"));
-    installButton_->setVisible(install::offered());
     top->addWidget(installButton_);
+    installButton_->setVisible(install::offered());  // after it's in the toolbar: never a window of its own
     connectButton_ = toolbarButton(QStringLiteral("CONNECT"), [this] { connectRekordbox(); });
     connectButton_->setObjectName("connect");
     connectButton_->setAccessibleName(QStringLiteral("Start Rekordbox connected to Wave"));

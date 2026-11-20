@@ -83,8 +83,10 @@ public:
         auto *text = new QLabel(help);
         text->setObjectName("rowHelp");
         text->setWordWrap(true);
-        text->setVisible(!help.isEmpty());
         words->addWidget(text);
+        // Only now, inside its row: a label made visible without a parent opens as a window of its own (Wave's startup
+        // flashed one per row on Windows).
+        if (help.isEmpty()) text->hide();
         line->addLayout(words, 1);
         if (control) {
             line->addWidget(control, 0, Qt::AlignVCenter | Qt::AlignRight);
