@@ -206,6 +206,9 @@ private slots:
                                           {"Update", "Cancel"})),
                  QStringLiteral("Cancel"));
         QVERIFY(!host::dismissWith(popup("", {"The library needs an update. Update the database now?"}, {"Update", "Cancel"})));
+        QCOMPARE(*host::dismissWith(popup("rekordbox", {"The device was removed while rekordbox was accessing to it. The database in the "
+                                                         "device might be damaged."}, {"OK"})),
+                 QStringLiteral("OK"));
         for (const auto &p : {popup("", {"Sync your library now?"}, {"Sync", "Cancel"}), popup("", {"Learn more about plans"}, {"Learn more"}),
                               popup("Sign in", {"Log in to your account"}, {"Later"}),
                               popup("", {"The database is damaged: restore the backup?"}, {"OK"}), popup("", {"Something"}, {}),

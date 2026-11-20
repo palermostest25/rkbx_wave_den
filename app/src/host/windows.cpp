@@ -70,6 +70,9 @@ std::vector<Win> windowsOf(uint32_t pid) {
 }
 
 bool alive(quintptr hwnd) { return hwnd && IsWindow(h(hwnd)) && IsWindowVisible(h(hwnd)); }
+bool exists(quintptr hwnd) { return hwnd && IsWindow(h(hwnd)); }
+void stash(quintptr hwnd) { if (IsWindow(h(hwnd))) ShowWindow(h(hwnd), SW_HIDE); }
+void reveal(quintptr hwnd) { if (IsWindow(h(hwnd)) && !IsWindowVisible(h(hwnd))) ShowWindow(h(hwnd), SW_SHOWNA); }
 
 QRect windowRect(quintptr hwnd) {
     RECT r{};
@@ -119,7 +122,10 @@ std::optional<Embedded> embed(quintptr hwnd, quintptr wave, const QRect &rect) {
     HWND w = h(hwnd);
     if (!IsWindow(w)) return std::nullopt;
     Embedded e{hwnd, GetWindowLongPtrW(w, GWL_STYLE), GetWindowLongPtrW(w, GWL_EXSTYLE), GetWindowLongPtrW(w, GWLP_HWNDPARENT)};
-    if (IsIconic(w) || IsZoomed(w)) ShowWindow(w, SW_RESTORE);  // a minimised or maximised window ignores a new rectangle
+    // A minimised, maximised or hidden window ignores a new rectangle: shown first, as it was, without taking the focus
+    // (Rekordbox's own restore of its split browser can leave it minimised).
+    if (IsIconic(w) || !IsWindowVisible(w)) ShowWindow(w, SW_SHOWNOACTIVATE);
+    if (IsZoomed(w)) ShowWindow(w, SW_RESTORE);
     SetWindowPos(w, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     SetWindowLongPtrW(w, GWLP_HWNDPARENT, LONG_PTR(wave));  // owned by Wave: always just above it, and with it
     SetWindowLongPtrW(w, GWL_STYLE, e.style & ~LONG_PTR(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX));
@@ -133,7 +139,9 @@ std::optional<Embedded> embed(quintptr hwnd, quintptr wave, const QRect &rect) {
 void place(quintptr hwnd, const QRect &rect) {
     HWND w = h(hwnd);
     RECT r{};
-    if (!IsWindow(w) || !GetWindowRect(w, &r)) return;
+    if (!IsWindow(w)) return;
+    if (IsIconic(w)) ShowWindow(w, SW_SHOWNOACTIVATE);  // minimised behind Wave's back: up again in Wave's page
+    if (!GetWindowRect(w, &r)) return;
     if (r.left == rect.left() && r.top == rect.top() && r.right - r.left == rect.width() && r.bottom - r.top == rect.height()) return;
     SetWindowPos(w, nullptr, rect.left(), rect.top(), rect.width(), rect.height(), SWP_NOZORDER | SWP_NOACTIVATE);
 }
@@ -289,6 +297,9 @@ bool Automation::select(quintptr hwnd, const QString &name) {
 
 std::vector<Win> windowsOf(uint32_t) { return {}; }
 bool alive(quintptr) { return false; }
+bool exists(quintptr) { return false; }
+void stash(quintptr) {}
+void reveal(quintptr) {}
 QRect windowRect(quintptr) { return {}; }
 QRect clientRect(quintptr) { return {}; }
 void present(quintptr, std::optional<QRect>, std::optional<QPoint>, bool, bool) {}
