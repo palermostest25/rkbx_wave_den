@@ -21,6 +21,7 @@ struct Deck {
     double position = 0, duration = 0;   // seconds
     double bpm = 0, originalBpm = 0;
     std::optional<std::pair<double, double>> loop;  // seconds, while a loop runs
+    std::optional<double> loopIn, loopOut;          // seconds: Rekordbox's loop points as they stand, running or not
     QString path;
     int keyShift = 0;
     int tempoRange = -1;                 // Rekordbox's percentage: 6, 10, 16, 100 (WIDE)

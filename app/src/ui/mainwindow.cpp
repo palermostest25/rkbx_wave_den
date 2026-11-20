@@ -550,6 +550,13 @@ void MainWindow::onController(midi::Kind kind, int value, int deck) {
         }
         return;
     }
+    // The loop being made: from LOOP IN until OUT, RELOOP/EXIT or 4 BEAT (Rekordbox acts on these keys itself).
+    if (kind == midi::Kind::LoopIn || kind == midi::Kind::LoopOut || kind == midi::Kind::LoopExit) {
+        if (kind == midi::Kind::LoopIn) session_->markLoopIn(deck);
+        else session_->clearLoopIn(deck);
+        canvas_->update();
+        return;
+    }
     if (kind == midi::Kind::Zoom) {  // Rekordbox's own waveform zoom (SHIFT + BROWSE)
         zoomBy(std::pow(2.0, -value / 4.0));
         return;

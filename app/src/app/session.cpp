@@ -142,6 +142,46 @@ std::optional<double> Session::position(int idx) const {
     return d.timeline.stale(t) ? d.timeline.samplePosition : d.timeline.position(t);
 }
 
+void Session::markLoopIn(int idx) {
+    if (idx < 0 || idx >= 4) return;
+    DeckView &d = decks_[size_t(idx)];
+    if (!d.analysis || d.timeline.activeLoop()) return;  // LOOP IN on a running loop adjusts it: Rekordbox draws that
+    const auto at = position(idx);
+    if (!at) return;
+    // Where the playhead is now; Rekordbox's own in point (quantized or not, as it placed it) replaces it as soon as the
+    // bridge reports it (receive).
+    d.loopInPressed = at;
+    d.loopInFromRekordbox = false;
+    d.timeline.pendingIn = at;
+    qCInfo(lcSession) << "LOOP IN on deck" << idx + 1 << "at" << *at << "s; Rekordbox's loop points now"
+                      << (d.status && d.status->loopIn ? *d.status->loopIn : -1.0) << (d.status && d.status->loopOut ? *d.status->loopOut : -1.0);
+    adoptLoopIn(idx);
+    emit changed();
+}
+
+void Session::adoptLoopIn(int idx) {
+    DeckView &d = decks_[size_t(idx)];
+    if (!d.loopInPressed || !d.status || d.status->loop) return;
+    const auto in = d.status->loopIn, out = d.status->loopOut;
+    // Rekordbox's in point for this press: near where it was pressed (quantize moves it a beat at most), and no
+    // finished loop behind it (an old loop's points stand until a new one replaces them).
+    if (!in || std::abs(*in - *d.loopInPressed) > 2.0 || (out && *out > *in)) return;
+    if (!d.loopInFromRekordbox || d.timeline.pendingIn != in)
+        qCInfo(lcSession) << "Loop in on deck" << idx + 1 << "at" << *in << "s from Rekordbox (pressed at" << *d.loopInPressed << "s)";
+    d.timeline.pendingIn = in;
+    d.loopInFromRekordbox = true;
+}
+
+void Session::clearLoopIn(int idx) {
+    if (idx < 0 || idx >= 4) return;
+    DeckView &d = decks_[size_t(idx)];
+    d.loopInPressed.reset();
+    d.loopInFromRekordbox = false;
+    if (!d.timeline.pendingIn) return;
+    d.timeline.pendingIn.reset();
+    emit changed();
+}
+
 std::optional<double> Session::previewPosition(int idx) const {
     const auto it = previews_.find(idx);
     if (it == previews_.end()) return std::nullopt;
@@ -227,6 +267,12 @@ void Session::receive(std::shared_ptr<const ReaderFrame> f) {
                 o.loopActive = live.loop.has_value();
                 if (live.loop) { o.loopStart = live.loop->first; o.loopEnd = live.loop->second; }
                 d.timeline.observe(o, now());
+            }
+            if (live.loop) {  // the loop is made: Rekordbox's own loop is drawn
+                d.timeline.pendingIn.reset();
+                d.loopInPressed.reset();
+            } else {
+                adoptLoopIn(idx);
             }
         }
     } else {

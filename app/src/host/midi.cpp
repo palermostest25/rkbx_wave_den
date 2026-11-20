@@ -73,6 +73,13 @@ std::optional<Action> browseAction(const QString &function, int status, const QS
     const QString key = squash(function), button = squash(control);
     const bool note = (status & 0xF0) == 0x90, cc = (status & 0xF0) == 0xB0;
     if (key == QLatin1String("zoom") && cc) return Action{Kind::Zoom};  // SHIFT + BROWSE: the waveforms' zoom
+    // The loop keys, for the loop being made (Wave only watches them; they always reach Rekordbox). RELOOP/EXIT is a
+    // shifted key on the FLX10, so before the shifted layers are left out.
+    if (note && key == QLatin1String("loopin")) return Action{Kind::LoopIn};
+    if (note && key == QLatin1String("loopout")) return Action{Kind::LoopOut};
+    if (note && (key == QLatin1String("reloopexit") || key == QLatin1String("loopexit") || key == QLatin1String("exitloop") ||
+                 key == QLatin1String("4beatloop") || key == QLatin1String("autoloop")))
+        return Action{Kind::LoopExit};
     // Shifted or long-press layers do something else (tag a track, related tracks, area...).
     if (button.contains(QLatin1String("+shift")) || button.contains(QLatin1String("+longpress")) || key.contains("shift") ||
         key.contains("zoom") || key.contains("preview"))
@@ -117,7 +124,9 @@ std::pair<QString, Table> loadMap(const QString &text, const QString &fileName) 
                 if (!numeric || offset >= 16) continue;
                 any = true;
                 Action a = *action;
-                if (a.kind == Kind::Load || a.kind == Kind::Press) a.deck = deck;
+                if (a.kind == Kind::Load || a.kind == Kind::Press || a.kind == Kind::LoopIn || a.kind == Kind::LoopOut ||
+                    a.kind == Kind::LoopExit)
+                    a.deck = deck;
                 table.try_emplace({status + offset, data1}, a);
             }
             if (!any) table.try_emplace({status, data1}, *action);  // a control for all decks; LoadDeck3 names its deck

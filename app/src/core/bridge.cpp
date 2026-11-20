@@ -85,6 +85,8 @@ std::optional<Snapshot> parse(const uchar *data, qint64 size) {
             deck.bpm = d.bpm / 100.0;
             deck.originalBpm = d.original_bpm / 100.0;
             if (d.flags & kDeckLooping) deck.loop = std::make_pair(d.loop_in / 1000.0, d.loop_out / 1000.0);
+            if (d.loop_in >= 0) deck.loopIn = d.loop_in / 1000.0;
+            if (d.loop_out >= 0) deck.loopOut = d.loop_out / 1000.0;
             if (deck.loaded) {
                 deck.path = text(d.path, sizeof d.path);
                 deck.keyShift = d.key_shift;

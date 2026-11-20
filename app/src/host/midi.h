@@ -23,7 +23,7 @@
 
 namespace wave::midi {
 
-enum class Kind { Browse, Press, Back, View, Load, Zoom, SamplerZoom };
+enum class Kind { Browse, Press, Back, View, Load, Zoom, SamplerZoom, LoopIn, LoopOut, LoopExit };  // loop keys: Wave only watches
 enum class Keep { Nothing, View, Browser };  // what the bridge keeps from Rekordbox for Wave
 struct Action { Kind kind; int deck = -1; };  // deck: for LOAD, -1 when the map doesn't say
 using Table = std::map<std::pair<int, int>, Action>;  // (status, data1) -> action
