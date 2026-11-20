@@ -955,10 +955,8 @@ bool MainWindow::browseInRekordbox(const QString &service) {
     Q_UNUSED(f);
     return false;
 #endif
-    syncNav();
-    if (streaming)
-        showBanner(QStringLiteral("%1 in Rekordbox: pick a track and load it (sign in there if it asks). Wave comes back by itself.").arg(service),
-                   "info", QStringLiteral("BACK TO WAVE"), [this] { leaveRekordbox(); }, 0, "streaming");
+    syncNav();  // BROWSE lit: tapping it again (or loading a track) brings Wave back; no banner over the browser
+    hideBanner("streaming");
     qCInfo(lcWindow) << "Rekordbox's browser is up over Wave" << service;
     return true;
 }
