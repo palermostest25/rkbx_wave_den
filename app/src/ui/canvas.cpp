@@ -1,4 +1,5 @@
 #include "ui/canvas.h"
+#include "core/keys.h"
 
 #include "app/session.h"
 #include "core/clock.h"
@@ -557,7 +558,7 @@ void Canvas::drawPanel(QPainter &p, int idx, const QRectF &r) {
         const double chipH = info * .82, y = details + (info - chipH) / 2;
         const int shift = deck.status ? deck.status->keyShift : 0;
         if (!deck.meta.key.isEmpty())
-            x = chip(p, x, y, chipH, deck.meta.key + (shift ? QStringLiteral(" %1%2").arg(shift > 0 ? "+" : "").arg(shift) : QString()),
+            x = chip(p, x, y, chipH, keyText(deck.meta.key) + (shift ? QStringLiteral(" %1%2").arg(shift > 0 ? "+" : "").arg(shift) : QString()),
                      QColor("#1f3a2a"), QColor("#7ee2a8")).right() + gap;
         // The track's own BPM, as a CDJ shows it in the track info; the big number above stays the playing BPM.
         if (original > 0) {

@@ -28,6 +28,7 @@ add_library(wavecore STATIC
   src/core/settings.cpp
   src/core/library.cpp
   src/core/streamed.cpp
+  src/core/keys.cpp
 )
 target_include_directories(wavecore PUBLIC src)
 target_link_libraries(wavecore PUBLIC Qt6::Core Qt6::Gui)

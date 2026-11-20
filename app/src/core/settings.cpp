@@ -19,7 +19,7 @@ namespace {
 // The Python app's view defaults (rb_waveform_core/qt_app.py), and the ones added since.
 const std::map<QString, QVariant> &viewDefaults() {
     static const std::map<QString, QVariant> defaults = {
-        {"zoom_beats", 32}, {"playhead", .32}, {"deck_info", true}, {"time_mode", "remain"}, {"info_size", 1.0},
+        {"zoom_beats", 32}, {"playhead", .32}, {"deck_info", true}, {"time_mode", "remain"}, {"key_notation", "rekordbox"}, {"info_size", 1.0},
         {"artwork", true}, {"end_warning", 30}, {"start_rekordbox", true}, {"hide_rekordbox", true},
         {"check_updates", true}, {"grid", true}, {"cues", true}, {"loops", true}, {"bar_numbers", true},
         {"source", "Native"}, {"settings_scale", 1.0}, {"always_on_top", true}, {"refresh_hz", 60},

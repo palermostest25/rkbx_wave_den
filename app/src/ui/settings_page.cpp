@@ -293,6 +293,9 @@ void SettingsPage::build() {
     p->row(QStringLiteral("Artwork"), sw("artwork"), QStringLiteral("The sleeve beside each deck."));
     time_ = seg("time_mode", {{QStringLiteral("Remaining"), "remain"}, {QStringLiteral("Elapsed"), "elapsed"}});
     p->row(QStringLiteral("Time"), time_, QStringLiteral("Tap the time on a deck to flip it, too."));
+    p->row(QStringLiteral("Key notation"), seg("key_notation", {{QStringLiteral("As Rekordbox"), "rekordbox"}, {QStringLiteral("Alphanumeric 8A"), "alphanumeric"},
+                                                        {QStringLiteral("Classic Am"), "classic"}}),
+           QStringLiteral("On the decks and in the browser. Alphanumeric is Rekordbox's Camelot-style wheel."));
     p->row(QStringLiteral("Bar size"), seg("info_size", {{QStringLiteral("Compact"), .8}, {QStringLiteral("Standard"), 1.0}, {QStringLiteral("Large"), 1.25}}));
     p->row(QStringLiteral("End-of-track warning"), seg("end_warning", {{QStringLiteral("Off"), 0}, {QStringLiteral("15 s"), 15}, {QStringLiteral("30 s"), 30}, {QStringLiteral("60 s"), 60}}),
            QStringLiteral("The time turns red and the overview flashes."));

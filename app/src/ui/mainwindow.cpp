@@ -3,6 +3,7 @@
 #include "app/install.h"
 #include "app/session.h"
 #include "core/clock.h"
+#include "core/keys.h"
 #include "host/rekordbox.h"
 #include "host/windows.h"
 #include "ui/browser.h"
@@ -99,6 +100,7 @@ QString screenKey(const QScreen *screen) {
 MainWindow::MainWindow(Session *session, QWidget *parent)
     : QMainWindow(parent), session_(session), touch_(session->settings, [session] { session->save(); }) {
     setWindowTitle(QStringLiteral("Rekordbox Wave %1").arg(version()));
+    setKeyNotation(session_->settings.text("key_notation"));
     setMinimumSize(640, 400);
     resize(1280, 800);
     setWindowFlag(Qt::WindowStaysOnTopHint, session_->settings.flag("always_on_top"));
@@ -1131,6 +1133,10 @@ void MainWindow::setView(const QString &key, const QVariant &value) {
     if ((key == "keyboard" || key == "touch_keyboard_off") && settings_) settings_->refresh();
     if (key == "dim") static_cast<Dimmer *>(dimmer_)->refresh();
     if (key == "always_on_top") setOnTop(value.toBool());
+    if (key == "key_notation") {
+        setKeyNotation(value.toString());
+        for (QWidget *w : browser_->findChildren<QWidget *>()) w->update();
+    }
     canvas_->update();
     persist();
 }
