@@ -209,8 +209,16 @@ QString nameOf(IUIAutomationElement *e) {
     return s;
 }
 
-// Calls ``each`` for the window's descendants (up to 200), returning false to stop.
-template <typename F> bool walk(IUIAutomation *a, quintptr hwnd, F each, QString *windowName = nullptr) {
+QString helpOf(IUIAutomationElement *e) {
+    BSTR help = nullptr;
+    if (FAILED(e->get_CurrentHelpText(&help)) || !help) return {};
+    const QString s = QString::fromWCharArray(help);
+    SysFreeString(help);
+    return s;
+}
+
+// Calls ``each`` for the window's descendants (up to ``limit``), returning false to stop.
+template <typename F> bool walk(IUIAutomation *a, quintptr hwnd, F each, QString *windowName = nullptr, int limit = 200) {
     IUIAutomationElement *window = nullptr;
     if (FAILED(a->ElementFromHandle(reinterpret_cast<UIA_HWND>(hwnd), &window)) || !window) return false;
     if (windowName) *windowName = nameOf(window);
@@ -220,7 +228,7 @@ template <typename F> bool walk(IUIAutomation *a, quintptr hwnd, F each, QString
     if (ok) {
         int count = 0;
         found->get_Length(&count);
-        for (int i = 0; i < std::min(count, 200); ++i) {
+        for (int i = 0; i < std::min(count, limit); ++i) {
             IUIAutomationElement *e = nullptr;
             if (FAILED(found->GetElement(i, &e)) || !e) continue;
             CONTROLTYPEID type = 0;
@@ -253,14 +261,16 @@ bool Automation::press(quintptr hwnd, const QString &button) {
     if (!automation_) return false;
     bool pressed = false;
     walk(static_cast<IUIAutomation *>(automation_), hwnd, [&](IUIAutomationElement *e, CONTROLTYPEID type) {
-        if (type != UIA_ButtonControlTypeId || nameOf(e) != button) return true;
+        // By its name, or by its tooltip (JUCE gives a button's tooltip as its help text: Rekordbox's source icons have
+        // no name, only "Display Beatport" and the like).
+        if (type != UIA_ButtonControlTypeId || (nameOf(e) != button && helpOf(e).compare(button, Qt::CaseInsensitive) != 0)) return true;
         IUIAutomationInvokePattern *invoke = nullptr;
         if (SUCCEEDED(e->GetCurrentPatternAs(UIA_InvokePatternId, __uuidof(IUIAutomationInvokePattern), reinterpret_cast<void **>(&invoke))) && invoke) {
             pressed = SUCCEEDED(invoke->Invoke());
             invoke->Release();
         }
         return false;
-    });
+    }, nullptr, 5000);  // Rekordbox's windows have hundreds of elements
     return pressed;
 }
 

@@ -153,7 +153,7 @@ private:
     quintptr splitWindow_ = 0;
     bool rekordboxShown_ = false;  // REKORDBOX pressed: Rekordbox and its browser up until Wave is used again
     int listFirst_ = -1;                          // the rows of Rekordbox's list Wave reads: -1 around its cursor                    // Rekordbox's split screen browser, once Wave has seen it open
-    QString pendingStreaming_;                    // a streaming service asked for while Rekordbox was starting
+    std::optional<QString> pendingStreaming_;     // Rekordbox's browser (on a service, or "") asked for while it was starting
     double pendingSince_ = 0;
     // The controller.
     std::optional<std::tuple<int, QString, int, int, int, std::vector<uint32_t>>> mirrored_;

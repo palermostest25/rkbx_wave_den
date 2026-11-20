@@ -487,12 +487,11 @@ void MainWindow::showPage(const QString &name) {
 
 void MainWindow::browse(bool byKnob) {
     // BROWSE on screen, or VIEW on the controller: the browser chosen in Settings opens, or closes.
-    if (rekordboxBrowsing_) leaveRekordbox();
-    else if (session_->settings.text("browser") == QLatin1String("rekordbox") && pages_->currentWidget() != browser_) {
-        if (!browseInRekordbox()) {
-            showBanner(QStringLiteral("Rekordbox's browser needs Rekordbox running with Wave: here is Wave's browser meanwhile"), "info", {}, {}, 5000, "browser");
-            toggleBrowser(byKnob);
-        }
+    if (rekordboxBrowsing_ || pendingStreaming_) {
+        if (pendingStreaming_) { pendingStreaming_.reset(); hideBanner("streaming"); }
+        leaveRekordbox();
+    } else if (session_->settings.text("browser") == QLatin1String("rekordbox") && pages_->currentWidget() != browser_) {
+        openStreaming({});  // as BEATPORT does, on whatever Rekordbox's browser shows (started with Rekordbox if need be)
     } else {
         toggleBrowser(byKnob);
     }
@@ -723,12 +722,12 @@ void MainWindow::watch() {
                                                      : midi::Keep::Nothing);
     }
     paceFrames();  // frames start as soon as something moves (a deck starts, a preview begins)
-    if (!pendingStreaming_.isEmpty()) {
+    if (pendingStreaming_) {
         const auto f = session_->lastFrame();
-        if (f && f->state == host::State::Live && browseInRekordbox(pendingStreaming_)) pendingStreaming_.clear();
+        if (f && f->state == host::State::Live && browseInRekordbox(*pendingStreaming_)) pendingStreaming_.reset();
         else if (now() - pendingSince_ > 90) {
-            showBanner(QStringLiteral("Rekordbox didn't come up for %1: press REKORDBOX to open it yourself").arg(pendingStreaming_), "warn", {}, {}, 10000, "streaming");
-            pendingStreaming_.clear();
+            showBanner(QStringLiteral("Rekordbox didn't come up for its browser: press REKORDBOX to open it yourself"), "warn", {}, {}, 10000, "streaming");
+            pendingStreaming_.reset();
         }
     }
     syncLoadTargets();
@@ -948,7 +947,13 @@ bool MainWindow::browseInRekordbox(const QString &service) {
         const quintptr hwnd = target->hwnd;
         QThreadPool::globalInstance()->start([hwnd, service] {
             host::Automation automation;
-            for (int attempt = 0; attempt < 6 && !automation.select(hwnd, service); ++attempt) QThread::msleep(300);
+            // Its source icon ("Display Beatport"), as a tap on it: the browser shows that service.
+            bool shown = false;
+            for (int attempt = 0; attempt < 6 && !shown; ++attempt) {
+                shown = automation.press(hwnd, QStringLiteral("Display %1").arg(service));
+                if (!shown) QThread::msleep(300);
+            }
+            qCInfo(lcWindow) << "Rekordbox's browser switched to" << service << shown;
         });
     }
 #else
@@ -964,7 +969,7 @@ bool MainWindow::browseInRekordbox(const QString &service) {
 void MainWindow::openStreaming(const QString &service) {
     // Rekordbox is opened only for this: started (hidden) if it isn't running, shown when it is ready.
     if (rekordboxBrowsing_) leaveRekordbox();
-    if (session_->demo()) {
+    if (session_->demo() && !service.isEmpty()) {
         showBanner(QStringLiteral("%1 streams through Rekordbox: start Wave without --demo").arg(service), "info", {}, {}, 5000);
         return;
     }
@@ -980,12 +985,16 @@ void MainWindow::openStreaming(const QString &service) {
     }
 #endif
     if (browseInRekordbox(service)) return;  // Wave's browser stays until Rekordbox's is up in its place
+    if (session_->demo()) {  // no Rekordbox to wait for: Wave's own browser
+        if (pages_->currentWidget() != browser_) toggleBrowser();
+        return;
+    }
     if (pages_->currentWidget() == browser_) toggleBrowser();
     pendingStreaming_ = service;
     pendingSince_ = now();
     if (!host::rekordboxPid()) session_->connectRekordbox();
-    showBanner(QStringLiteral("Opening %1 in Rekordbox…").arg(service), "info", QStringLiteral("CANCEL"),
-               [this] { pendingStreaming_.clear(); hideBanner("streaming"); }, 0, "streaming");
+    showBanner(service.isEmpty() ? QStringLiteral("Opening Rekordbox's browser…") : QStringLiteral("Opening %1 in Rekordbox…").arg(service),
+               "info", QStringLiteral("CANCEL"), [this] { pendingStreaming_.reset(); hideBanner("streaming"); }, 0, "streaming");
 }
 
 void MainWindow::leaveRekordbox() {
