@@ -858,7 +858,7 @@ bool MainWindow::browseInRekordbox(const QString &service) {
     const auto c = host::classify(windows);
     std::optional<host::Win> target;
     // The split screen browser, by the window it opened as (it can be small: it isn't told apart by its size).
-    if (splitWindow_ && host::alive(splitWindow_))
+    if (splitWindow_ && host::exists(splitWindow_))  // hidden between visits (never toggled: that would close it)
         for (const host::Win &w : windows) if (w.hwnd == splitWindow_) target = w;
     // Already open (Wave puts it away minimised; asking again would close it, as the command is a toggle): the window
     // with the split browser's title, as Wave saw it the first time it opened. Never another of Rekordbox's windows
@@ -994,7 +994,10 @@ void MainWindow::leaveRekordbox() {
     if (browsing->kind == "mac") session_->showRekordboxBrowser(false, 0, 0);
     else if (browsing->kind == "window") {
         if (browsing->embedded) host::unembed(*browsing->embedded);  // its own frame back, before it goes away
-        host::putBack(browsing->hwnd, !browsing->main || session_->settings.flag("hide_rekordbox"));
+        // The split browser is hidden, not minimised: Rekordbox keeps it open (its split screen stays on), and the next
+        // visit shows it again rather than toggling split screen, which would close it.
+        if (!browsing->main) host::stash(browsing->hwnd);
+        else host::putBack(browsing->hwnd, session_->settings.flag("hide_rekordbox"));
         // A load can bring Rekordbox's main window forward (and Wave down): Wave back in front, Rekordbox behind it.
         const auto f = session_->lastFrame();
         const uint32_t pid = f && f->pid ? f->pid : host::rekordboxPid();
@@ -1020,6 +1023,7 @@ void MainWindow::showRekordbox() {
         QMessageBox::information(this, QStringLiteral("Rekordbox"), why);
         return;
     }
+    if (splitWindow_) host::reveal(splitWindow_);  // its browser, hidden between Wave's visits, with it
 #ifdef Q_OS_WIN
     showMinimized();
 #endif

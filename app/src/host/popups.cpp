@@ -81,6 +81,10 @@ std::optional<QString> dismissWith(const Popup &popup) {
     if (updateOffer().match(words).hasMatch())
         for (const QString &name : names)
             if (kDeclineUpdate.count(name)) return popup.buttons[names.indexOf(name)];
+    // Rekordbox telling that a USB stick went away (a laptop waking, or its charger unplugged): it can only be
+    // acknowledged, and Wave reconnects the stick itself when it's back.
+    static const QRegularExpression removed("\\bdevice was removed\\b", QRegularExpression::CaseInsensitiveOption);
+    if (names.size() == 1 && kAcknowledge.count(names[0]) && removed.match(words).hasMatch()) return popup.buttons[0];
     if (names.isEmpty() || keep().match(words).hasMatch()) return std::nullopt;
     if (names.size() == 1 && kAcknowledge.count(names[0])) return popup.buttons[0];
     for (const QString &name : names)
