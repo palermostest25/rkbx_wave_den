@@ -197,8 +197,9 @@ void SettingsPage::build() {
     p->row(QStringLiteral("Monitor"), screens_, QStringLiteral("Wave fills this screen whenever it is connected."));
     fullscreen_ = new Switch(s.fillDisplay());
     connect(fullscreen_, &Switch::toggled, this, [this](bool on) { window_->changeFullscreen(on); });
-    p->row(QStringLiteral("Full screen"), fullscreen_, QStringLiteral("Cover the whole monitor, taskbar included."));
-    p->row(QStringLiteral("Keep Wave on top"), sw("always_on_top"), QStringLiteral("Other windows never cover the decks."));
+    p->row(QStringLiteral("Full screen"), fullscreen_, QStringLiteral("Wave opens filling the whole monitor, taskbar included, and stays so."));
+    p->row(QStringLiteral("Keep Wave on top"), sw("always_on_top"), QStringLiteral("Other windows never cover the decks: Wave steps aside only while Rekordbox has to show something "
+                          "(a question, a sign-in, its browser), then comes back."));
     p->row(QStringLiteral("Booth dimmer"), seg("dim", {{"100%", 1.0}, {"80%", .8}, {"60%", .6}, {"40%", .4}}),
            QStringLiteral("Darken the whole screen in a dark booth."));
     p->card(QStringLiteral("Keyboard"));

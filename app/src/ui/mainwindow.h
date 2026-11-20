@@ -81,6 +81,7 @@ signals:
 protected:
     void closeEvent(QCloseEvent *) override;
     void changeEvent(QEvent *) override;
+    bool nativeEvent(const QByteArray &type, void *message, qintptr *result) override;
     bool eventFilter(QObject *, QEvent *) override;
 
 private:

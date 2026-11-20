@@ -21,7 +21,7 @@ std::optional<std::vector<int>> deckOrder(const QString &text, int count);
 
 class Settings {
 public:
-    static constexpr int kVersion = 2;
+    static constexpr int kVersion = 3;
 
     Settings();
     // Reads ``path``; on a damaged file keeps the defaults and returns false, with ``error`` saying why.

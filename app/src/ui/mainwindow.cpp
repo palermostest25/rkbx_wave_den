@@ -1049,6 +1049,19 @@ void MainWindow::changeEvent(QEvent *e) {
     QMainWindow::changeEvent(e);
 }
 
+bool MainWindow::nativeEvent(const QByteArray &type, void *message, qintptr *result) {
+#ifdef Q_OS_WIN
+    // Back from sleep: Windows may have dropped Wave's full screen and on-top, and the music stick may be reconnecting.
+    const MSG *msg = static_cast<const MSG *>(message);
+    if (type == "windows_generic_MSG" && msg && msg->message == WM_POWERBROADCAST && msg->wParam == PBT_APMRESUMEAUTOMATIC) {
+        qCInfo(lcWindow) << "Woke from sleep";
+        connectedScreen_ = nullptr;  // bind the monitor afresh
+        for (int ms : {1500, 5000}) QTimer::singleShot(ms, this, &MainWindow::ensureDisplay);
+    }
+#endif
+    return QMainWindow::nativeEvent(type, message, result);
+}
+
 bool MainWindow::eventFilter(QObject *o, QEvent *e) {
     // A tap on the search box with Windows' keyboard chosen: Windows' own keyboard comes up.
     if (e->type() == QEvent::MouseButtonPress && session_->settings.text("keyboard") == QLatin1String("windows") &&
@@ -1252,8 +1265,18 @@ void MainWindow::selectScreen(const QString &key) {
 
 void MainWindow::ensureDisplay() {
     // Fill the remembered monitor whenever it is connected; otherwise stay a window.
+    if (!session_->settings.fillDisplay()) return;
+    if (session_->settings.displayKey().isEmpty()) {  // full screen and no monitor chosen yet: the one Wave is on
+        QScreen *s = screen() ? screen() : QGuiApplication::primaryScreen();
+        if (!s) return;
+        session_->settings.setDisplayKey(screenKey(s));
+        saveTimer_.start();
+    }
     const QString key = session_->settings.displayKey();
-    if (key.isEmpty() || !session_->settings.fillDisplay()) return;
+    // On top as set, unless Wave stepped aside for Rekordbox (a question, a sign-in, its own window): Windows can
+    // drop it (waking from sleep, another full-screen app), so it's put back each time the monitor is checked.
+    if (aside_.isEmpty() && !rekordboxBrowsing_ && !isMinimized())
+        setOnTop(session_->settings.flag("always_on_top"));
     QScreen *found = nullptr;
     for (QScreen *s : QGuiApplication::screens()) if (screenKey(s) == key) found = s;
     if (!found) {
