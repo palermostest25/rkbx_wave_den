@@ -45,7 +45,7 @@ void putBack(quintptr hwnd, bool minimize = true);         // undo present
 // A Rekordbox window shown as part of Wave: owned by Wave (it moves and stacks with it), without its own frame or
 // title bar, filling ``rect`` (physical pixels). unembed gives it back its frame and owner as they were.
 struct Embedded { quintptr hwnd = 0; qint64 style = 0, exStyle = 0, owner = 0; };
-std::optional<Embedded> embed(quintptr hwnd, quintptr wave, const QRect &rect);
+std::optional<Embedded> embed(quintptr hwnd, quintptr wave, const QRect &rect, quintptr owner = 0);  // owner: its own, if Wave has it already
 void place(quintptr hwnd, const QRect &rect);              // an embedded window, kept where Wave's page is
 void unembed(const Embedded &embedded);
 bool splitScreenFromMenu(quintptr hwnd);                   // View › Show Split Screen, when there is a native menu

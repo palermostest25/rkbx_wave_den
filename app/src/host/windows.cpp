@@ -118,10 +118,16 @@ void putBack(quintptr hwnd, bool minimize) {
     if (minimize) ShowWindow(w, SW_SHOWMINNOACTIVE);
 }
 
-std::optional<Embedded> embed(quintptr hwnd, quintptr wave, const QRect &rect) {
+std::optional<Embedded> embed(quintptr hwnd, quintptr wave, const QRect &rect, quintptr owner) {
     HWND w = h(hwnd);
     if (!IsWindow(w)) return std::nullopt;
     Embedded e{hwnd, GetWindowLongPtrW(w, GWL_STYLE), GetWindowLongPtrW(w, GWL_EXSTYLE), GetWindowLongPtrW(w, GWLP_HWNDPARENT)};
+    // Already Wave's (embedded twice, or not given back): what it's given back to is Rekordbox, never Wave, or it would
+    // stay above Wave, on top or not.
+    if (e.owner == LONG_PTR(wave)) {
+        e.owner = LONG_PTR(owner);
+        e.style |= WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+    }
     // A minimised, maximised or hidden window ignores a new rectangle: shown first, as it was, without taking the focus
     // (Rekordbox's own restore of its split browser can leave it minimised).
     if (IsIconic(w) || !IsWindowVisible(w)) ShowWindow(w, SW_SHOWNOACTIVATE);
@@ -306,7 +312,7 @@ void present(quintptr, std::optional<QRect>, std::optional<QPoint>, bool, bool) 
 void putBack(quintptr, bool) {}
 void sendToBack(quintptr) {}
 void setTopmost(quintptr, bool) {}
-std::optional<Embedded> embed(quintptr, quintptr, const QRect &) { return std::nullopt; }
+std::optional<Embedded> embed(quintptr, quintptr, const QRect &, quintptr) { return std::nullopt; }
 void place(quintptr, const QRect &) {}
 void unembed(const Embedded &) {}
 bool splitScreenFromMenu(quintptr) { return false; }

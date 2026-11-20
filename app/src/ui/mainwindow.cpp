@@ -703,6 +703,10 @@ bool MainWindow::redirectControllerLoad(const std::map<int, QString> &before, co
 void MainWindow::watch() {
     // Rekordbox's browser inside Wave's page follows the page (a resize, another screen, full screen).
     if (rekordboxBrowsing_ && rekordboxBrowsing_->embedded) host::place(rekordboxBrowsing_->hwnd, pageRect());
+    // Between visits it stays out of sight: Rekordbox can show it again by itself (a load, a sync), over Wave's page.
+    // Not while the DJ has Rekordbox itself up (REKORDBOX) or Wave stepped aside for it.
+    else if (!rekordboxBrowsing_ && splitWindow_ && !rekordboxShown_ && aside_.isEmpty() && !isMinimized() && host::alive(splitWindow_))
+        host::stash(splitWindow_);
     if (midi_ && !session_->demo()) {
         const auto f = session_->lastFrame();
         const bool live = f && f->state == host::State::Live;
@@ -932,7 +936,10 @@ bool MainWindow::browseInRekordbox(const QString &service) {
     const bool split = !c.main || target->hwnd != c.main->hwnd;
     if (pages_->currentWidget() == browser_) toggleBrowser();  // the waveforms behind it, for when it goes
     std::optional<host::Embedded> embedded;
-    if (split) embedded = host::embed(target->hwnd, quintptr(winId()), pageRect());
+    if (rekordboxBrowsing_ && rekordboxBrowsing_->embedded && rekordboxBrowsing_->hwnd == target->hwnd)
+        embedded = rekordboxBrowsing_->embedded;  // already inside Wave (a second tap): kept as first taken
+    if (split && !embedded) embedded = host::embed(target->hwnd, quintptr(winId()), pageRect(), c.main ? c.main->hwnd : 0);
+    else if (embedded) host::place(target->hwnd, pageRect());
     if (embedded && c.main) host::sendToBack(c.main->hwnd);  // opening the split browser can bring Rekordbox forward
     if (!embedded) host::present(target->hwnd, pageRect(), std::nullopt, true, !streaming);
     rekordboxBrowsing_ = Browsing{"window", deckPaths(), target->hwnd, c.main && target->hwnd == c.main->hwnd, windowState(), service, embedded};
@@ -1023,6 +1030,7 @@ void MainWindow::showRekordbox() {
         QMessageBox::information(this, QStringLiteral("Rekordbox"), why);
         return;
     }
+    rekordboxShown_ = true;  // until Wave is used again
     if (splitWindow_) host::reveal(splitWindow_);  // its browser, hidden between Wave's visits, with it
 #ifdef Q_OS_WIN
     showMinimized();
@@ -1031,8 +1039,10 @@ void MainWindow::showRekordbox() {
 
 void MainWindow::changeEvent(QEvent *e) {
     // Back in Wave after Rekordbox was shown: on top again, unless Wave is stepping aside for a question.
-    if (e->type() == QEvent::ActivationChange && isActiveWindow() && aside_.isEmpty() && !rekordboxBrowsing_)
+    if (e->type() == QEvent::ActivationChange && isActiveWindow() && aside_.isEmpty() && !rekordboxBrowsing_) {
         setOnTop(session_->settings.flag("always_on_top"));
+        rekordboxShown_ = false;
+    }
 #ifdef Q_OS_WIN
     // A tap on Wave while a streaming service is up in Rekordbox: Rekordbox's browser stays in front of Wave.
     if (e->type() == QEvent::ActivationChange && isActiveWindow() && rekordboxBrowsing_ && !rekordboxBrowsing_->service.isEmpty() &&
