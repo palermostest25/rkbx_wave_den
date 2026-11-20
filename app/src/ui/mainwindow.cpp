@@ -124,7 +124,7 @@ MainWindow::MainWindow(Session *session, QWidget *parent)
     top->addWidget(browseButton_);
     // Rekordbox itself, for anything only it can do: Wave steps aside; tap Wave to come back.
     rekordboxButton_ = toolbarButton(QStringLiteral("REKORDBOX"), [this] { showRekordbox(); });
-    rekordboxButton_->setToolTip(QStringLiteral("Show Rekordbox in front of Wave. Tap Wave to come back."));
+    rekordboxButton_->setToolTip(QStringLiteral("Rekordbox itself, inside Wave (its settings and so on). Tap again to come back."));
 #if !defined(Q_OS_WIN) && !defined(Q_OS_MACOS)
     rekordboxButton_->hide();
 #endif
@@ -482,7 +482,9 @@ void MainWindow::hideBanner(const QString &key) {
 
 void MainWindow::syncNav() {
     // One visual language for the toolbar: the active view glows, like the deck buttons.
-    mark(browseButton_, "selected", pages_->currentWidget() == browser_ || rekordboxBrowsing_.has_value());
+    const bool whole = rekordboxBrowsing_ && rekordboxBrowsing_->whole;
+    mark(browseButton_, "selected", pages_->currentWidget() == browser_ || (rekordboxBrowsing_.has_value() && !whole));
+    mark(rekordboxButton_, "selected", whole);
     mark(settingsButton_, "selected", pages_->currentWidget() == settings_);
 }
 
@@ -644,7 +646,7 @@ void MainWindow::syncLoadTargets() {
     const auto before = deckPaths_;
     deckPaths_ = paths;
     if (rekordboxBrowsing_) {
-        if (trackLoaded(rekordboxBrowsing_->tracks, paths)) leaveRekordbox();
+        if (!rekordboxBrowsing_->whole && trackLoaded(rekordboxBrowsing_->tracks, paths)) leaveRekordbox();
         else if (rekordboxBrowsing_->kind == "window" && !host::alive(rekordboxBrowsing_->hwnd)) leaveRekordbox();  // closed in Rekordbox
         else if (rekordboxBrowsing_->kind == "whole" && !isMinimized()) rekordboxBrowsing_.reset();  // back in Wave by hand
     }
@@ -1044,7 +1046,28 @@ void MainWindow::leaveRekordbox() {
 }
 
 void MainWindow::showRekordbox() {
-    // Rekordbox itself, for its preferences and so on: Wave steps out of the way until it is used again.
+    // Rekordbox itself, for its preferences and so on. Windows: its whole window inside Wave's page, as its browser is;
+    // REKORDBOX again puts it back out of sight.
+#ifdef Q_OS_WIN
+    const bool wasWhole = rekordboxBrowsing_ && rekordboxBrowsing_->whole;
+    if (rekordboxBrowsing_) leaveRekordbox();
+    if (wasWhole) return;
+    const auto f = session_->lastFrame();
+    const uint32_t pid = f && f->pid ? f->pid : host::rekordboxPid();
+    const auto c = pid ? host::classify(host::windowsOf(pid)) : host::Classified{};
+    if (!c.main) {
+        showBanner(QStringLiteral("Rekordbox isn't running: press CONNECT to start it with Wave"), "warn", {}, {}, 6000, "rekordbox");
+        return;
+    }
+    if (pages_->currentWidget() != canvas_) pages_->setCurrentWidget(canvas_);
+    const auto embedded = host::embed(c.main->hwnd, quintptr(winId()), pageRect(), 0);
+    if (embedded) {
+        rekordboxBrowsing_ = Browsing{"window", deckPaths(), c.main->hwnd, true, windowState(), QString(), embedded, true};
+        syncNav();
+        qCInfo(lcWindow) << "Rekordbox's window is up inside Wave";
+        return;
+    }
+#endif
     setOnTop(false);
     const QString why = host::show();
     if (!why.isEmpty()) {

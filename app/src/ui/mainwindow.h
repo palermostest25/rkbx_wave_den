@@ -147,7 +147,8 @@ private:
     double closedSeen_ = 0;
     bool toldAccessibility_ = false;
     struct Browsing { QString kind; std::map<int, QString> tracks; quintptr hwnd = 0; bool main = false; Qt::WindowStates state; QString service;
-                      std::optional<host::Embedded> embedded; };  // the split browser, shown inside Wave's page
+                      std::optional<host::Embedded> embedded;
+                      bool whole = false; };  // the split browser (or, for REKORDBOX, Rekordbox's main window) inside Wave's page
     std::optional<Browsing> rekordboxBrowsing_;
     bool splitAsked_ = false;
     quintptr splitWindow_ = 0;
