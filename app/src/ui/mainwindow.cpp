@@ -128,7 +128,7 @@ MainWindow::MainWindow(Session *session, QWidget *parent)
     toolbar_->setObjectName("toolbar");
     auto *top = new QHBoxLayout(toolbar_);
     top->setContentsMargins(12, 7, 12, 7);
-    top->setSpacing(10);
+    top->setSpacing(8);
     count_ = new Segmented({{QStringLiteral("2 DECKS"), 2}, {QStringLiteral("4 DECKS"), 4}}, session_->settings.deckCount());
     connect(count_, &Segmented::changed, this, [this](const QVariant &v) { setCount(v.toInt()); });
     top->addWidget(count_);
@@ -195,6 +195,14 @@ MainWindow::MainWindow(Session *session, QWidget *parent)
     closeButton_->setAccessibleName(QStringLiteral("Close Wave"));
     closeButton_->setToolTip(QStringLiteral("Close Wave"));
     top->addWidget(closeButton_);
+    // Short of room (a small screen, CONNECT and UPDATE up): the words beside the clock give way, never the buttons.
+    for (QLabel *l : {status_, master_, battery_}) {
+        l->setMinimumWidth(1);
+        l->setSizePolicy(QSizePolicy::Preferred, l->sizePolicy().verticalPolicy());
+    }
+    for (QWidget *w : std::initializer_list<QWidget *>{count_, browseButton_, rekordboxButton_, installButton_, connectButton_,
+                                                       updateButton_, clock_, prefsButton_, settingsButton_})
+        w->setSizePolicy(QSizePolicy::Fixed, w->sizePolicy().verticalPolicy());
     for (QPushButton *b : {minimiseButton_, closeButton_}) {
         b->setMinimumWidth(b->sizeHint().height());
         b->hide();  // shown while full screen (changeEvent)
@@ -759,6 +767,22 @@ void MainWindow::watch() {
     // it, on top) and while Wave is minimised (it would be left on the desktop). Not while Wave stepped aside.
     // Every browser window Rekordbox has given (it can open a new one), not only the latest: one left out stays up.
     if (splitWindow_) splitWindows_.insert(splitWindow_);
+#ifdef Q_OS_WIN
+    // And one Wave didn't open this time (left from an earlier run, or shown again by Rekordbox itself): known by what
+    // it is, a large untitled panel of Rekordbox's beside its main window (its Preferences and dialogs have titles).
+    if (!rekordboxShown_ && aside_.isEmpty()) {
+        const auto f = session_->lastFrame();
+        if (const uint32_t pid = f && f->pid ? f->pid : 0) {
+            const QString splitTitle = session_->settings.text("split_window_title");
+            for (const host::Win &w : host::classify(host::windowsOf(pid)).panels)
+                if (w.visible && !w.tool && (w.title.isEmpty() || w.title == splitTitle) && !splitWindows_.count(w.hwnd) &&
+                    !(rekordboxBrowsing_ && rekordboxBrowsing_->hwnd == w.hwnd)) {
+                    splitWindows_.insert(w.hwnd);
+                    qCInfo(lcWindow) << "A Rekordbox browser window Wave didn't open is up:" << QString::number(w.hwnd, 16) << w.rect;
+                }
+        }
+    }
+#endif
     for (auto it = splitWindows_.begin(); it != splitWindows_.end();) {
         const quintptr hwnd = *it;
         if (!host::exists(hwnd)) { it = splitWindows_.erase(it); continue; }
@@ -767,6 +791,10 @@ void MainWindow::watch() {
         if (!shown && !rekordboxShown_ && aside_.isEmpty() && host::alive(hwnd)) {
             host::stash(hwnd);
             if (hwnd != splitWindow_) qCInfo(lcWindow) << "An earlier Rekordbox browser window was still up: put away" << QString::number(hwnd, 16);
+            else if (now() - splitReshownLogged_ > 10) {
+                splitReshownLogged_ = now();
+                qCInfo(lcWindow) << "Rekordbox showed its browser again while Wave didn't: put away" << QString::number(hwnd, 16);
+            }
         }
     }
     putAwayStrays();
@@ -1185,6 +1213,8 @@ void MainWindow::leaveRekordbox(bool minimising) {
     if (browsing->kind == "mac") session_->showRekordboxBrowser(false, 0, 0);
     else if (browsing->kind == "window") {
         if (browsing->embedded) giveBack(*browsing->embedded);  // its own frame back, before it goes away
+        qCInfo(lcWindow) << "Rekordbox's" << (browsing->whole ? "window" : !browsing->prefs.isEmpty() ? "Preferences" : "browser")
+                         << "put away" << QString::number(browsing->hwnd, 16) << (minimising ? "(minimising)" : "");
         if (!browsing->prefs.isEmpty()) {  // Rekordbox's Preferences: closed (it keeps what was changed), Wave's page back
             host::closeWindow(browsing->hwnd);
             if (pages_->currentWidget() == blank_) pages_->setCurrentWidget(pageBeforePrefs_ ? pageBeforePrefs_ : canvas_);
