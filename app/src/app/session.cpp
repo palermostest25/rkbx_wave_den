@@ -223,7 +223,24 @@ void Session::previewHold(int idx, double seconds) {
 
 void Session::previewRelease(int idx) {
     auto it = previews_.find(idx);
-    if (it != previews_.end()) it->second.second = now() + kPreviewHold;
+    if (it == previews_.end()) return;
+    // A paused deck (not in a loop) goes there for real, as Rekordbox's Needle Search does: CUE then sets the cue there
+    // and plays from it. A playing deck is only looked at, and the view glides back to it.
+    const double target = it->second.first;
+    const DeckView &d = decks_[size_t(idx)];
+    if (!demo_ && bridged() && d.status && d.status->loaded && !d.status->playing && !d.status->loop && d.analysis) {
+        it->second.second = now() + 1.5;  // held there while Rekordbox moves its playhead to it
+        const auto ms = uint32_t(std::lround(std::clamp(target, 0.0, d.analysis->duration) * 1000));
+        request([idx, ms](bridge::Client &c) { return c.request(bridge::Seek, uint32_t(idx), ms, 0); },
+                [this, idx, target](bool ok, const QString &message) {
+                    qCInfo(lcSession) << "Deck" << idx + 1 << "to" << target << "s:" << message;
+                    if (ok) return;
+                    const auto p = previews_.find(idx);
+                    if (p != previews_.end() && p->second.second) p->second.second = now();  // didn't take: back to the deck
+                });
+        return;
+    }
+    it->second.second = now() + kPreviewHold;
 }
 
 void Session::receive(std::shared_ptr<const ReaderFrame> f) {

@@ -53,7 +53,7 @@ uint64_t fnv(const uchar *data, size_t n);
 bool live(const std::optional<Snapshot> &snapshot, uint32_t pid, uint64_t now = uptimeNs());
 QString defaultFolder();                 // where the bridge keeps state.bin
 
-enum Command : uint32_t { Load = 1, MasterTempo = 2, LoadDevice = 3, ShowBrowser = 4, LoadRow = 5, Search = 6, Rekordbox = 7 };
+enum Command : uint32_t { Load = 1, MasterTempo = 2, LoadDevice = 3, ShowBrowser = 4, LoadRow = 5, Search = 6, Rekordbox = 7, Seek = 8 };
 
 class Client {
 public:

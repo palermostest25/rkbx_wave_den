@@ -757,8 +757,18 @@ void MainWindow::watch() {
     // The split browser stays out of sight unless Wave shows it: between visits (Rekordbox can show it again by itself,
     // after a load or a sync), while Rekordbox's whole window is up (it belongs to that window, so Windows shows it with
     // it, on top) and while Wave is minimised (it would be left on the desktop). Not while Wave stepped aside.
-    const bool splitShown = rekordboxBrowsing_ && !rekordboxBrowsing_->whole && rekordboxBrowsing_->hwnd == splitWindow_;
-    if (splitWindow_ && !splitShown && !rekordboxShown_ && aside_.isEmpty() && host::alive(splitWindow_)) host::stash(splitWindow_);
+    // Every browser window Rekordbox has given (it can open a new one), not only the latest: one left out stays up.
+    if (splitWindow_) splitWindows_.insert(splitWindow_);
+    for (auto it = splitWindows_.begin(); it != splitWindows_.end();) {
+        const quintptr hwnd = *it;
+        if (!host::exists(hwnd)) { it = splitWindows_.erase(it); continue; }
+        ++it;
+        const bool shown = rekordboxBrowsing_ && !rekordboxBrowsing_->whole && rekordboxBrowsing_->hwnd == hwnd;
+        if (!shown && !rekordboxShown_ && aside_.isEmpty() && host::alive(hwnd)) {
+            host::stash(hwnd);
+            if (hwnd != splitWindow_) qCInfo(lcWindow) << "An earlier Rekordbox browser window was still up: put away" << QString::number(hwnd, 16);
+        }
+    }
     putAwayStrays();
     if (midi_ && !session_->demo()) {
         const auto f = session_->lastFrame();
