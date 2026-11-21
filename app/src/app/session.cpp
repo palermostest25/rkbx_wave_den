@@ -305,6 +305,16 @@ void Session::receive(std::shared_ptr<const ReaderFrame> f) {
             const bridge::Deck &live = f->decks[size_t(idx)];
             d.status = live;
             if (!live.loaded) continue;
+            // Master tempo on, once per deck each time Rekordbox starts (it can come back with it off): the first track
+            // there gets it, and after that it stays as the DJ sets it.
+            if (f->pid != mtPid_) { mtPid_ = f->pid; mtDone_.clear(); }
+            if (!demo_ && settings.flag("master_tempo_on") && !mtDone_.count(idx)) {
+                mtDone_.insert(idx);
+                if (!live.masterTempo) {
+                    qCInfo(lcSession) << "Master tempo on for deck" << idx + 1 << "(Rekordbox started with it off)";
+                    request([idx](bridge::Client &c) { return c.request(bridge::MasterTempo, uint32_t(idx), 1); }, [](bool, const QString &) {});
+                }
+            }
             if (live.bpm > 0) d.currentBpm = live.bpm;
             const double original = d.originalBpm > 0 ? d.originalBpm : live.originalBpm;
             d.timeline.rateHint = original > 0 && d.currentBpm > 0 ? std::optional<double>(d.currentBpm / original) : std::nullopt;
