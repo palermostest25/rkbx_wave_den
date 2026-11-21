@@ -61,6 +61,11 @@ void marquee(QPainter &p, const QRectF &rect, const QString &s, double size, con
     p.restore();
 }
 
+double chipWidth(QPainter &p, double h, const QString &s) {
+    p.setFont(arial(h * .62, true));
+    return p.fontMetrics().horizontalAdvance(s) + h * .7;
+}
+
 QRectF chip(QPainter &p, double x, double y, double h, const QString &s, const QColor &fill, const QColor &ink, bool alignRight = false) {
     p.setFont(arial(h * .62, true));
     const double w = p.fontMetrics().horizontalAdvance(s) + h * .7;
@@ -557,40 +562,48 @@ void Canvas::drawPanel(QPainter &p, int idx, const QRectF &r) {
         text(p, QRectF(inner.right() - bpmW, row, bpmW, label), QStringLiteral("BPM"), label * .8, QColor("#7d858e"), Qt::AlignRight);
         text(p, QRectF(inner.right() - bpmW, row + label, bpmW, big - label), current > 0 ? QString::number(current, 'f', 1) : QStringLiteral("--"),
              std::min((big - label) * .9, bpmW / 3.2), Qt::white, Qt::AlignRight, true);
-        // Elapsed, key and tempo at the left; loop and countdown to the next cue at the right.
-        double x = inner.left();
-        text(p, QRectF(x, details, info * 4.6, info), elapsed ? '-' + clockText(remaining) : clockText(position), info * .62, QColor("#9aa3ad"));
-        x += info * 4.6;
+        // Elapsed, key and tempo at the left; loop and countdown to the next cue at the right. The loop first, so the
+        // left side stops short of it: what doesn't fit (the tempo range, then the change) is left out, never overlapped.
         const double chipH = info * .82, y = details + (info - chipH) / 2;
-        const int shift = deck.status ? deck.status->keyShift : 0;
-        if (!deck.meta.key.isEmpty())
-            x = chip(p, x, y, chipH, keyText(deck.meta.key) + (shift ? QStringLiteral(" %1%2").arg(shift > 0 ? "+" : "").arg(shift) : QString()),
-                     QColor("#1f3a2a"), QColor("#7ee2a8")).right() + gap;
-        // The track's own BPM, as a CDJ shows it in the track info; the big number above stays the playing BPM.
-        if (original > 0) {
-            const bool tenths = std::abs(original * 10 - std::round(original * 10)) < 1e-6;
-            const QString number = QString::number(original, 'f', tenths ? 1 : 2);
-            p.setFont(arial(info * .62));
-            // "BPM" after it when the deck is wide enough to keep the tempo change beside it; the number alone if not.
-            const QString own = inner.right() - x > p.fontMetrics().horizontalAdvance(number + QStringLiteral(" BPM  +0.00%  ±10")) + info * 6
-                                    ? number + QStringLiteral(" BPM") : number;
-            const double w = p.fontMetrics().horizontalAdvance(own);
-            text(p, QRectF(x, details, w + 2, info), own, info * .62, QColor("#c9ced4"));
-            x += w + gap;
-        }
-        if (original > 0 && current > 0) {
-            const double pct = (current / original - 1) * 100;
-            const QString pctText = QStringLiteral("%1%2%").arg(pct >= 0 ? "+" : "").arg(pct, 0, 'f', 2);
-            text(p, QRectF(x, details, info * 4, info), pctText, info * .62, std::abs(pct) >= .005 ? QColor("#f1f3f5") : QColor("#7d858e"));
-            p.setFont(arial(info * .62));
-            x += p.fontMetrics().horizontalAdvance(pctText) + gap;
-        }
-        if (deck.status) if (const char *range = tempoRange(deck.status->tempoRange))
-            x = chip(p, x, y, chipH, QString::fromUtf8(range), QColor("#22262c"), QColor("#c9ced4")).right() + gap;
         double right = inner.right();
         const auto loop = deck.timeline.activeLoop();
         if (loop && original > 0)
             right = chip(p, right, y, chipH, "LOOP " + beatLabel((loop->second - loop->first) * original / 60), kLoopOrange, Qt::black, true).left() - gap;
+        auto width = [&](const QString &t) { p.setFont(arial(info * .62)); return double(p.fontMetrics().horizontalAdvance(t)); };
+        double x = inner.left();
+        text(p, QRectF(x, details, std::min(info * 4.6, right - x), info), elapsed ? '-' + clockText(remaining) : clockText(position), info * .62,
+             QColor("#9aa3ad"));
+        x += info * 4.6;
+        const int shift = deck.status ? deck.status->keyShift : 0;
+        if (!deck.meta.key.isEmpty()) {
+            const QString key = keyText(deck.meta.key) + (shift ? QStringLiteral(" %1%2").arg(shift > 0 ? "+" : "").arg(shift) : QString());
+            if (x + chipWidth(p, chipH, key) <= right) x = chip(p, x, y, chipH, key, QColor("#1f3a2a"), QColor("#7ee2a8")).right() + gap;
+        }
+        // The track's own BPM, as a CDJ shows it in the track info; the big number above stays the playing BPM.
+        if (original > 0) {
+            const bool tenths = std::abs(original * 10 - std::round(original * 10)) < 1e-6;
+            const QString number = QString::number(original, 'f', tenths ? 1 : 2);
+            // "BPM" after it when there's room to keep the tempo change beside it; the number alone if not.
+            const QString own = right - x > width(number + QStringLiteral(" BPM  +0.00%  \u00B110")) + info * 6 ? number + QStringLiteral(" BPM") : number;
+            const double w = width(own);
+            if (x + w <= right) {
+                text(p, QRectF(x, details, w + 2, info), own, info * .62, QColor("#c9ced4"));
+                x += w + gap;
+            }
+        }
+        if (original > 0 && current > 0) {
+            const double pct = (current / original - 1) * 100;
+            const QString pctText = QStringLiteral("%1%2%").arg(pct >= 0 ? "+" : "").arg(pct, 0, 'f', 2);
+            const double w = width(pctText);
+            if (x + w <= right) {
+                text(p, QRectF(x, details, w + 2, info), pctText, info * .62, std::abs(pct) >= .005 ? QColor("#f1f3f5") : QColor("#7d858e"));
+                x += w + gap;
+            }
+        }
+        if (deck.status) if (const char *range = tempoRange(deck.status->tempoRange)) {
+            const QString r = QString::fromUtf8(range);
+            if (x + chipWidth(p, chipH, r) <= right) x = chip(p, x, y, chipH, r, QColor("#22262c"), QColor("#c9ced4")).right() + gap;
+        }
         if (const auto bars = countdown(position, deck.cues, original)) {
             // Only where it fits beside the key and tempo: a narrow panel drops it rather than overlap.
             const QString label = *bars + QStringLiteral(" Bars");
