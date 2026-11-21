@@ -159,7 +159,8 @@ private:
     void giveBack(const host::Embedded &e);
     void putAwayStrays();
     double minimisedAt_ = 0;
-    quintptr mainTaken_ = 0, prefsTaken_ = 0;  // Rekordbox's main window and Preferences, as Wave last took them
+    quintptr mainTaken_ = 0, prefsTaken_ = 0;
+    bool onTop_ = false;  // as last set, for the log  // Rekordbox's main window and Preferences, as Wave last took them
     bool splitAsked_ = false;
     quintptr splitWindow_ = 0;
     double splitReshownLogged_ = 0, splitScanAt_ = 0;
