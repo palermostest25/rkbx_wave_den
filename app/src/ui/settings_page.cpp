@@ -407,7 +407,10 @@ void SettingsPage::build() {
     });
     p->row(QStringLiteral("Settings profiles"), buttons({importButton, exportButton}), QStringLiteral("Take your setup to another computer."));
     p->card(QStringLiteral("Problems"));
-    p->row(QStringLiteral("Log"), buttons({action(QStringLiteral("OPEN LOG"), [this] { window_->openLog(); })}), QStringLiteral("What Wave did, for a bug report."));
+    p->row(QStringLiteral("Log"),
+           buttons({action(QStringLiteral("SEND TO GITHUB"), [this] { window_->sendDiagnostics(); }),
+                    action(QStringLiteral("OPEN LOG"), [this] { window_->openLog(); })}),
+           QStringLiteral("SEND TO GITHUB opens an issue filled in with what Wave did (your user and computer names left out): press Submit."));
     p->row(QStringLiteral("Report a problem"), buttons({action(QStringLiteral("OPEN GITHUB"), [] {
                QDesktopServices::openUrl(QUrl(QString::fromLatin1(kRepo) + "/issues/new/choose"));
            })}));

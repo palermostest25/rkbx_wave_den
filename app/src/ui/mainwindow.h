@@ -69,6 +69,7 @@ public:
     void checkForUpdate(bool asked);
     void installWave();
     void openLog();
+    void sendDiagnostics();  // the log as a GitHub issue, filled in for the DJ to submit
     void persist();
     void firstRun(bool install, bool setup);
     void showBanner(const QString &text, const QString &tone = "info", const QString &action = {},
