@@ -1,5 +1,6 @@
 #include "ui/mainwindow.h"
 
+#include "app/diagnostics.h"
 #include "app/install.h"
 #include "app/session.h"
 #include "core/clock.h"
@@ -12,6 +13,10 @@
 #include "ui/widgets.h"
 
 #include <QApplication>
+#include <QClipboard>
+#include <QDateTime>
+#include <QJsonDocument>
+#include <QSysInfo>
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QDir>
@@ -1545,6 +1550,32 @@ void MainWindow::installRekordbox(const QString &archive) {
                 return;
             }
     setup_.run(archive);
+}
+
+void MainWindow::sendDiagnostics() {
+    // Wave's log as a GitHub issue, for whoever fixes Wave: the page opens filled in, the DJ presses Submit.
+    QString log;
+    for (const QString name : {QStringLiteral("crash.log"), QStringLiteral("wave.log")}) {
+        QFile f(QDir(logFolder()).filePath(name));
+        if (!f.open(QIODevice::ReadOnly)) continue;
+        if (f.size() > 400000) f.seek(f.size() - 400000);
+        const QString text = QString::fromUtf8(f.readAll());
+        if (!text.trimmed().isEmpty()) log += (name == QLatin1String("crash.log") ? QStringLiteral("--- crash.log ---\n") + text + QStringLiteral("--- wave.log ---\n") : text);
+    }
+    const QStringList secrets{qEnvironmentVariable("USERNAME"), qEnvironmentVariable("USER"), qEnvironmentVariable("COMPUTERNAME"),
+                              QSysInfo::machineHostName()};
+    auto clean = [&](const QString &text) { return diagnostics::redact(text, secrets, QDir::homePath()); };
+    const QString header = clean(QStringLiteral("**Wave diagnostics** · Rekordbox Wave %1 · %2 · %3\nRekordbox: %4")
+                                     .arg(version(), QSysInfo::prettyProductName(), QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm")),
+                                          host::summary()));
+    const auto report = diagnostics::build(clean(log), header,
+                                           clean(QString::fromUtf8(QJsonDocument(session_->settings.json()).toJson(QJsonDocument::Indented))));
+    QGuiApplication::clipboard()->setText(report.full);
+    QDesktopServices::openUrl(diagnostics::issueUrl(QStringLiteral("https://github.com/palermostest25/rkbx_wave_den"), report));
+    qCInfo(lcWindow) << "Diagnostics opened on GitHub:" << report.body.size() << "characters on the page," << report.full.size() << "on the clipboard";
+    showBanner(QStringLiteral("GitHub is open with Wave's diagnostics: press Submit new issue there (a longer log is on the clipboard)"), "info", {}, {},
+               15000, "diagnostics");
+    showMinimized();  // the browser opens behind a full-screen Wave
 }
 
 void MainWindow::openLog() {

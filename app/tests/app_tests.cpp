@@ -1,5 +1,6 @@
 // Wave around the core: Rekordbox's host policy (the Python app's tests, ported case by case), its popups,
 // the controller's maps, the updater's choices, and the window itself, driven as a DJ would.
+#include "app/diagnostics.h"
 #include "app/session.h"
 #include "app/updater.h"
 #include "core/bridge.h"
@@ -76,6 +77,23 @@ class AppTests : public QObject {
     Q_OBJECT
 
 private slots:
+    void diagnosticsFitAndHideNames() {
+        // Names blanked, the newest lines kept, the page's address short enough for GitHub, the clipboard copy longer.
+        QString log;
+        for (int i = 0; i < 3000; ++i)
+            log += QStringLiteral("2026-11-21 10:00:%1 INFO wave.window: line %2 C:\\Users\\DJ Name\\Music on LAPTOP-7\n").arg(i % 60).arg(i);
+        const QString clean = diagnostics::redact(log, {QStringLiteral("LAPTOP-7"), QStringLiteral("DJ Name")}, QStringLiteral("C:/Users/DJ Name"));
+        QVERIFY(!clean.contains(QLatin1String("DJ Name")) && !clean.contains(QLatin1String("LAPTOP-7")));
+        const auto r = diagnostics::build(clean, QStringLiteral("**Wave diagnostics** · Rekordbox Wave 9.9.9\nRekordbox: 7.2.19"), QStringLiteral("{}"));
+        QCOMPARE(r.title, QStringLiteral("Wave diagnostics · Rekordbox Wave 9.9.9"));
+        QVERIFY(r.body.contains(QLatin1String("line 2999")));  // the newest line
+        QVERIFY(!r.body.contains(QLatin1String("line 10 ")));   // the oldest don't fit
+        QVERIFY(r.full.size() <= 60000 && r.full.size() > r.body.size() && r.full.contains(QLatin1String("Settings")));
+        const QUrl url = diagnostics::issueUrl(QStringLiteral("https://github.com/o/r"), r);
+        QVERIFY(url.isValid());
+        QVERIFY2(url.toEncoded().size() < 7500, qPrintable(QString::number(url.toEncoded().size())));
+        QVERIFY(QUrl::fromPercentEncoding(url.toEncoded()).contains(QLatin1String("line 2999")));
+    }
     void initTestCase() { qputenv("RKBX_WAVE_CONFIG_DIR", QDir::tempPath().toUtf8() + "/wave-app-tests"); }
 
     // --- Rekordbox behind Wave ----------------------------------------------------------------
