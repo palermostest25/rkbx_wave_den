@@ -171,7 +171,8 @@ void unembed(const Embedded &e) {
     SetWindowLongPtrW(w, GWL_STYLE, LONG_PTR(e.style));
     SetWindowLongPtrW(w, GWL_EXSTYLE, LONG_PTR(e.exStyle));
     SetWindowLongPtrW(w, GWLP_HWNDPARENT, LONG_PTR(e.owner));
-    SetWindowPos(w, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    // Out of the on-top band too, whatever Wave was meanwhile (Windows takes a window's own windows on top with it).
+    SetWindowPos(w, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 
 void setTopmost(quintptr hwnd, bool on) {

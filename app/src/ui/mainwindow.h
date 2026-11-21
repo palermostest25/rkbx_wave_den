@@ -57,6 +57,7 @@ public:
     void setColoursChanged();
     void setScale(double scale);
     void setOnTop(bool on);
+    void redrawAll();  // Wave repainted at once, window and screen (after a window over it went away)
     void selectScreen(const QString &key);
     void changeFullscreen(bool on);
     void zoomBy(double factor);
@@ -151,7 +152,8 @@ private:
     struct Browsing { QString kind; std::map<int, QString> tracks; quintptr hwnd = 0; bool main = false; Qt::WindowStates state; QString service;
                       std::optional<host::Embedded> embedded;
                       bool whole = false;
-                      QSize prefs; };  // Rekordbox's Preferences (its own size, centred on black), when not empty  // the split browser (or, for REKORDBOX, Rekordbox's main window) inside Wave's page
+                      QSize prefs;
+                      QRect was; };  // where Rekordbox had its Preferences, given back as they were  // Rekordbox's Preferences (its own size, centred on black), when not empty  // the split browser (or, for REKORDBOX, Rekordbox's main window) inside Wave's page
     std::optional<Browsing> rekordboxBrowsing_;
     // Every Rekordbox window Wave has taken in (as it was), until given back: one left behind is put away by watch().
     std::map<quintptr, host::Embedded> taken_;
