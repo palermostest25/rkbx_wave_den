@@ -266,6 +266,7 @@ MainWindow::MainWindow(Session *session, QWidget *parent)
         session_->loadTrack(deck, t, source);
     });
     connect(session_, &Session::loadStatus, browser_, &BrowserPage::showLoadStatus);
+    connect(session_, &Session::notice, this, [this](const QString &message) { showBanner(message, "warn", {}, {}, 8000, "notice"); });
     pages_->addWidget(browser_);
     settings_ = new SettingsPage(this);
     pages_->addWidget(settings_);
@@ -828,6 +829,13 @@ void MainWindow::watch() {
 }
 
 void MainWindow::watchRekordbox() {
+    // Starting or restarting Rekordbox didn't work (it wouldn't quit to load an updated bridge, say): said, with what to do.
+    if (const host::Host *h = session_->host(); h && h->error != hostError_) {
+        hostError_ = h->error;
+        if (!hostError_.isEmpty() && h->doing.isEmpty())
+            showBanner(hostError_.section(QStringLiteral(" (its windows"), 0, 0) + QStringLiteral(" · close Rekordbox, then press CONNECT"), "warn",
+                       QStringLiteral("CONNECT"), [this] { connectRekordbox(); }, 20000, "host");
+    }
     // Rekordbox behind Wave can stop at its own questions (library sync, My Tag, sign-in…), show a popup Wave
     // could not close for the DJ, or hang on a music drive that stopped answering. Then Wave steps aside and
     // puts Rekordbox in front, and comes back once Rekordbox is running again.

@@ -218,8 +218,17 @@ double Session::knobZoom(int value, bool reverse) {
 }
 
 void Session::previewHold(int idx, double seconds) {
+    const auto was = previews_.find(idx);
+    const bool touched = was == previews_.end() || was->second.second;  // a new touch, not the finger moving
     previews_[idx] = {seconds, std::nullopt};
     if (seekable(idx)) seekTo(idx, seconds);  // a paused deck goes there as the finger moves: CUE then plays from it
+    else if (touched && idx >= 0 && idx < 4) {
+        const DeckView &d = decks_[size_t(idx)];
+        const QString why = demo_ ? QStringLiteral("demo") : !bridged() ? QStringLiteral("the bridge isn't connected")
+                          : !d.status || !d.status->loaded ? QStringLiteral("no track") : d.status->playing ? QStringLiteral("playing")
+                          : d.status->loop ? QStringLiteral("in a loop") : QStringLiteral("no waveform yet");
+        qCInfo(lcSession) << "Deck" << idx + 1 << "looked at" << seconds << "s, not moved:" << why;
+    }
     emit changed();
 }
 
@@ -252,6 +261,8 @@ void Session::seekTo(int idx, double seconds) {
                 Seeking &s = seeking_[idx];
                 s.asked = false;
                 if (!ok) qCInfo(lcSession) << "Deck" << idx + 1 << "to" << seconds << "s:" << message;
+                if (!ok && message.contains(QLatin1String("Unknown request")))
+                    emit notice(QStringLiteral("Moving a deck needs Wave's updated bridge in Rekordbox: press CONNECT"));
                 if (s.next && ok && seekable(idx)) { seekTo(idx, *s.next); return; }
                 const auto p = previews_.find(idx);
                 const bool held = p != previews_.end() && !p->second.second;
