@@ -53,7 +53,7 @@ enum : int { NUM_PLAYERS, IS_LOADED, IS_LOADING, IS_PLAYING, POSITION_MS, TOTAL_
              TRACK_CTOR, TRACK_DTOR, TRACK_BASIC_INFO, BROWSE_INSTANCE, BROWSE_MANAGERS, LIST_CONTAINER,
              CONTAINER_LIST, TREE_VIEWER, ROW_TRACK, SELECTED_ROWS, LIST_BOX, HAS_FOCUS, DEVICE_ROOT,
              ALL_DEVICES, CRT_FREE, STICK_DATABASE, STICK_LOAD, STICK_ROW, MIDI_CALLBACK, MIDI_OPEN, PERFORM, SPLIT_SCREEN,
-             SET_TEXT, SEARCH_RETURN, SEARCH_RUN, STRING_CTOR, PREFERENCES, CODE_COUNT };
+             SET_TEXT, SEARCH_RETURN, SEARCH_RUN, STRING_CTOR, PREFERENCES, SEEK, CODE_COUNT };
 // FNV-1a of each function's first bytes; entries never called pin what the bridge reads directly:
 // PLAYER_CONTROL the graph's players (+0x430/+0x43c), ENGINE_GET and DATABASE_GET the singletons,
 // MAIN_COMPONENT its static, LOAD_TEMPLATE (whole) the load message and UiManager offset.
@@ -128,6 +128,9 @@ constexpr Code kCode[CODE_COUNT] = {
     // MainComponent::perform's case for its Preferences command (0x200A): MainComponent::showPreference(-1), the page
     // it was last on, as File > Preferences opens it.
     {0x141825070, 0x18, 0x4b091471eea1d316ULL},
+    // DjEngineIF's jump to a time (channel, ms): what Rekordbox's own Needle Search runs (UiPlayer's needle search,
+    // 0x142598a40, from the MIDI NeedleSearch control), its player's slot 0x138. 0 when it took.
+    {0x14253ba10, 0x20, 0x8f8fe9146d05beb1ULL},
 };
 constexpr int kPreferencesCommand = 0x200A;
 constexpr uint64_t kSearchFilterVtable = 0x143938ca0ULL;   // browse::SearchFilter (its Component)
@@ -152,6 +155,7 @@ using DeckInt = int (*)(const void *engine, int channel);
 using DeckPath = JString *(*)(const void *engine, JString *out, int channel);
 using DeckLoop = CueInfo *(*)(const void *engine, CueInfo *out, int channel);
 using SetDeckFlag = void (*)(const void *engine, int channel, bool);
+using DeckSeek = int (*)(const void *engine, int channel, int ms);
 using EngineInt = int (*)(const void *engine);
 using StringDtor = void (*)(JString *);
 using OperatorNew = void *(*)(size_t);
@@ -181,6 +185,7 @@ struct Api {
     DeckPath file_path;
     DeckLoop running_loop;
     SetDeckFlag set_master_tempo;
+    DeckSeek seek;
     EngineInt master;
     StringDtor string_dtor;
     OperatorNew alloc;
@@ -383,6 +388,7 @@ const char *verify_build() {
     api.is_looping = at<DeckFlag>(IS_LOOPING);
     api.master_tempo = at<DeckBool>(MASTER_TEMPO);
     api.set_master_tempo = at<SetDeckFlag>(SET_MASTER_TEMPO);
+    api.seek = at<DeckSeek>(SEEK);
     api.master = at<EngineInt>(GET_MASTER);
     api.is_sync = at<DeckBool>(IS_SYNC);
     api.key_shift = at<DeckInt>(KEY_SHIFT);
@@ -754,6 +760,27 @@ void run_command(const void *dj, int players) {
     } else if (c.kind == kCommandMasterTempo) {
         snprintf(message, sizeof message, "Deck %u has no track", c.deck + 1);
         result = kReplyBadDeck;
+    } else if (c.kind == kCommandSeek) {
+        // A paused deck to a time in its track (content_id, ms), as Rekordbox's Needle Search does: CUE then sets
+        // the cue there. Never a playing deck, nor one in a loop (Wave's touch is only a look then).
+        const int deck = int(c.deck);
+        if (deck >= players || !api.is_loaded(dj, deck)) {
+            snprintf(message, sizeof message, "Deck %d has no track", deck + 1);
+            result = kReplyNoTrack;
+        } else if (api.is_playing(dj, deck)) {
+            snprintf(message, sizeof message, "Deck %d is playing", deck + 1);
+            result = kReplyDeckPlaying;
+        } else if (api.is_looping(dj, deck, false)) {
+            snprintf(message, sizeof message, "Deck %d is in a loop", deck + 1);
+            result = kReplyDeckBusy;
+        } else if (int(c.content_id) < 0 || int(c.content_id) > api.total_ms(dj, deck)) {
+            snprintf(message, sizeof message, "Past the end of deck %d's track", deck + 1);
+            result = kReplyBadRequest;
+        } else {
+            const int took = api.seek(dj, deck, int(c.content_id));
+            snprintf(message, sizeof message, "Deck %d to %.1f s%s", deck + 1, c.content_id / 1000.0, took == 0 ? "" : " (refused)");
+            result = took == 0 ? kReplyRequested : kReplyNotReady;
+        }
     } else if (c.kind == kCommandLoadRow || c.kind == kCommandSearch) {
         result = guarded_browser_command(dj, players, c, message, sizeof message);
     } else if (c.kind == kCommandRekordbox) {

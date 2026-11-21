@@ -161,6 +161,7 @@ private:
     double minimisedAt_ = 0;
     bool splitAsked_ = false;
     quintptr splitWindow_ = 0;
+    std::set<quintptr> splitWindows_;  // every one Rekordbox has given: none left showing
     QWidget *blank_ = nullptr;   // black behind Rekordbox's Preferences
     QWidget *pageBeforePrefs_ = nullptr;
     double prefsOpeningUntil_ = 0;  // Rekordbox's Preferences are opening: no popup handling for them meanwhile
