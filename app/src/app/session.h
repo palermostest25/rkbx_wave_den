@@ -17,6 +17,7 @@
 
 #include <array>
 #include <map>
+#include <set>
 #include <memory>
 
 namespace wave {
@@ -122,6 +123,8 @@ private:
     // latest place sent when it is answered.
     struct Seeking { bool asked = false; std::optional<double> next; };
     std::map<int, Seeking> seeking_;
+    uint32_t mtPid_ = 0;      // the Rekordbox the decks below had master tempo set on
+    std::set<int> mtDone_;
     bool seekable(int idx) const;
     void seekTo(int idx, double seconds);
     std::optional<double> knobBeats_;

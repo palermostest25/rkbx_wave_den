@@ -316,6 +316,8 @@ void SettingsPage::build() {
     controller_ = p->row(QStringLiteral("Controller"), nullptr, QStringLiteral(" "));
     p->row(QStringLiteral("Open a playlist with"), seg("tap_to_open", {{QStringLiteral("Double tap"), "double"}, {QStringLiteral("Single tap"), "single"}}),
            QStringLiteral("Double tap lets a finger scroll the list and pick without opening anything by accident."));
+    p->row(QStringLiteral("Master tempo on at start"), sw("master_tempo_on"),
+           QStringLiteral("Each deck's first track after Rekordbox starts gets master tempo, if Rekordbox came back with it off."));
     p->row(QStringLiteral("The knob drives Wave's browser"), sw("knob_loads_wave"),
            QStringLiteral("The browse knob, its push, BACK and VIEW move Wave's browser and load the track picked here; "
                           "Rekordbox's browser doesn't move with them."));
