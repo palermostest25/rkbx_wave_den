@@ -329,6 +329,27 @@ private slots:
         return path;
     }
 
+    void aHotCueSetMeanwhileIsSeen() {
+        // Rekordbox writes a hot cue while Wave has the library open: data_version tells Wave to read the cues again.
+        QTemporaryDir dir;
+        const QString path = makeLibrary(dir);
+        auto lib = Library::openFile(path, false);
+        QVERIFY(lib);
+        const QString folder = QStringLiteral("/PIONEER/USBANLZ/aa/ten");
+        const auto before = lib->cues(folder);
+        const qint64 version = lib->dataVersion();
+        QVERIFY(version >= 0);
+        QCOMPARE(lib->dataVersion(), version);  // nothing written: unchanged
+        sqlite3 *db = nullptr;
+        sqlite3_open(path.toUtf8().constData(), &db);
+        const QByteArray key = databaseKey(false);
+        sqlite3_key(db, key.constData(), int(key.size()));
+        QCOMPARE(sqlite3_exec(db, "INSERT INTO djmdCue VALUES('1',20000,-1,3,0)", nullptr, nullptr, nullptr), SQLITE_OK);
+        sqlite3_close(db);
+        QVERIFY(lib->dataVersion() != version);
+        QCOMPARE(lib->cues(folder).size(), before.size() + 1);
+    }
+
     void theLibraryOpensOnlyWithRekordboxsKey() {
         QTemporaryDir dir;
         const QString path = makeLibrary(dir);
