@@ -773,7 +773,10 @@ void MainWindow::watch() {
     // it is, a large untitled panel of Rekordbox's beside its main window (its Preferences and dialogs have titles).
     // Never while Wave has asked for the browser itself (BEATPORT, BROWSE): the window that opens is that one, and is
     // Wave's to take, not to hide.
-    if (!rekordboxShown_ && aside_.isEmpty() && !splitAsked_ && now() >= splitScanAt_) {
+    // Only while Wave shows its own screens: while Rekordbox's browser is up in Wave, the other windows Rekordbox opens
+    // (a sign-in, a streaming service's panel) are Rekordbox's business, and hiding them left its browser stuck.
+    const bool waveScreens = !rekordboxBrowsing_ && !pendingStreaming_;
+    if (waveScreens && !rekordboxShown_ && aside_.isEmpty() && !splitAsked_ && now() >= splitScanAt_) {
         splitScanAt_ = now() + 1;  // once a second is enough
         const auto f = session_->lastFrame();
         if (const uint32_t pid = f && f->pid ? f->pid : 0) {
@@ -794,8 +797,10 @@ void MainWindow::watch() {
         const quintptr hwnd = *it;
         if (!host::exists(hwnd)) { it = splitWindows_.erase(it); continue; }
         ++it;
-        const bool shown = rekordboxBrowsing_ && !rekordboxBrowsing_->whole && rekordboxBrowsing_->hwnd == hwnd;
-        if (!shown && !rekordboxShown_ && aside_.isEmpty() && host::alive(hwnd)) {
+        // Hidden while Wave shows its own screens, or Rekordbox's whole window (they'd come up on top of it); left alone
+        // while one of them is Rekordbox's browser in Wave.
+        const bool hide = !rekordboxBrowsing_ || rekordboxBrowsing_->whole;
+        if (hide && !splitAsked_ && !rekordboxShown_ && aside_.isEmpty() && host::alive(hwnd)) {
             host::stash(hwnd);
             if (hwnd != splitWindow_) qCInfo(lcWindow) << "An earlier Rekordbox browser window was still up: put away" << QString::number(hwnd, 16);
             else if (now() - splitReshownLogged_ > 10) {
@@ -912,6 +917,7 @@ void MainWindow::stepAside(const QString &why, const std::vector<host::Popup> &p
         if (std::find(presented_.begin(), presented_.end(), hwnd) == presented_.end()) {
             host::present(hwnd, std::nullopt, centre);
             presented_.push_back(hwnd);
+            qCInfo(lcWindow) << "Rekordbox's window brought in front of Wave:" << QString::number(hwnd, 16);
         }
 #else
     Q_UNUSED(popups);
@@ -935,6 +941,8 @@ void MainWindow::comeBack() {
 }
 
 void MainWindow::setOnTop(bool on) {
+    if (on != onTop_) qCInfo(lcWindow) << "Wave" << (on ? "on top" : "no longer on top");
+    onTop_ = on;
 #ifdef Q_OS_WIN
     host::setTopmost(quintptr(winId()), on);  // without leaving full screen
 #else
@@ -1120,6 +1128,19 @@ bool MainWindow::browseInRekordbox(const QString &service) {
     if (embedded && c.main) host::sendToBack(c.main->hwnd);  // opening the split browser can bring Rekordbox forward
     if (!embedded) host::present(target->hwnd, pageRect(), std::nullopt, true, !streaming);
     rekordboxBrowsing_ = Browsing{"window", deckPaths(), target->hwnd, c.main && target->hwnd == c.main->hwnd, windowState(), service, embedded};
+    {
+        // Logged as it opens and a moment later (where it is, whether it shows), and shown again if it went away.
+        const quintptr hwnd = target->hwnd;
+        qCInfo(lcWindow) << "Rekordbox's browser" << QString::number(hwnd, 16) << (embedded ? "inside Wave" : "over Wave") << "for" << service
+                         << "; its windows:" << windowList(pid, quintptr(winId()));
+        QTimer::singleShot(700, this, [this, hwnd, pid] {
+            if (!rekordboxBrowsing_ || rekordboxBrowsing_->hwnd != hwnd) return;
+            const bool up = host::alive(hwnd) && !host::iconic(hwnd);
+            qCInfo(lcWindow) << "Rekordbox's browser a moment later:" << (up ? "showing" : "NOT showing, shown again") << "; its windows:"
+                             << windowList(pid, quintptr(winId()));
+            if (!up && rekordboxBrowsing_->embedded) host::reshow(hwnd, pageRect());
+        });
+    }
     if (streaming) {
         // Rekordbox's tree has the service by name: select it there, off the UI thread (Rekordbox may be slow to answer).
         const quintptr hwnd = target->hwnd;
@@ -1247,6 +1268,18 @@ void MainWindow::leaveRekordbox(bool minimising) {
         // visit shows it again rather than toggling split screen, which would close it.
         if (!browsing->main) host::stash(browsing->hwnd);
         else host::putBack(browsing->hwnd, session_->settings.flag("hide_rekordbox"));
+        if (!browsing->main) {
+            // Checked a moment later: Rekordbox can show it again by itself (a load, a sync), and it would stay up.
+            const quintptr hwnd = browsing->hwnd;
+            QTimer::singleShot(400, this, [this, hwnd] {
+                if (rekordboxBrowsing_ && rekordboxBrowsing_->hwnd == hwnd) return;  // shown again by Wave meanwhile
+                if (!host::alive(hwnd)) return;
+                const auto f = session_->lastFrame();
+                qCWarning(lcWindow) << "Rekordbox's browser came back up after Wave put it away: hidden again; its windows:"
+                                    << windowList(f && f->pid ? f->pid : host::rekordboxPid(), quintptr(winId()));
+                host::stash(hwnd);
+            });
+        }
         // A load can bring Rekordbox's main window forward (and Wave down): Wave back in front, Rekordbox behind it.
         const auto f = session_->lastFrame();
         const uint32_t pid = f && f->pid ? f->pid : host::rekordboxPid();
