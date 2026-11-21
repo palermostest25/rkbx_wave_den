@@ -7,6 +7,7 @@
 #include <QDateTime>
 #include <QFileInfo>
 #include <QLoggingCategory>
+#include <QTimer>
 #include <set>
 #include <QtConcurrent>
 
@@ -254,7 +255,15 @@ void Session::seekTo(int idx, double seconds) {
                 if (s.next && ok && seekable(idx)) { seekTo(idx, *s.next); return; }
                 const auto p = previews_.find(idx);
                 const bool held = p != previews_.end() && !p->second.second;
-                if (!held) seeking_.erase(idx);  // let go: done
+                if (!held) {  // let go: done
+                    seeking_.erase(idx);
+                    if (ok)
+                        QTimer::singleShot(600, this, [this, idx, seconds, message] {
+                            const auto at = position(idx);
+                            qCInfo(lcSession) << "Deck" << idx + 1 << "moved to" << seconds << "s (" << message << "); Rekordbox's playhead now"
+                                              << (at ? *at : -1.0) << (playing(idx) ? "playing" : "paused");
+                        });
+                }
                 if (!ok && p != previews_.end() && p->second.second) p->second.second = now();  // didn't take: back to the deck
             });
 }

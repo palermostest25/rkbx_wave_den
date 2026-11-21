@@ -53,7 +53,8 @@ enum : int { NUM_PLAYERS, IS_LOADED, IS_LOADING, IS_PLAYING, POSITION_MS, TOTAL_
              TRACK_CTOR, TRACK_DTOR, TRACK_BASIC_INFO, BROWSE_INSTANCE, BROWSE_MANAGERS, LIST_CONTAINER,
              CONTAINER_LIST, TREE_VIEWER, ROW_TRACK, SELECTED_ROWS, LIST_BOX, HAS_FOCUS, DEVICE_ROOT,
              ALL_DEVICES, CRT_FREE, STICK_DATABASE, STICK_LOAD, STICK_ROW, MIDI_CALLBACK, MIDI_OPEN, PERFORM, SPLIT_SCREEN,
-             SET_TEXT, SEARCH_RETURN, SEARCH_RUN, STRING_CTOR, PREFERENCES, SEEK, CODE_COUNT };
+             SET_TEXT, SEARCH_RETURN, SEARCH_RUN, STRING_CTOR, PREFERENCES, SEEK, NEEDLE_NOTIFY, NEEDLE_LISTENERS,
+             CODE_COUNT };
 // FNV-1a of each function's first bytes; entries never called pin what the bridge reads directly:
 // PLAYER_CONTROL the graph's players (+0x430/+0x43c), ENGINE_GET and DATABASE_GET the singletons,
 // MAIN_COMPONENT its static, LOAD_TEMPLATE (whole) the load message and UiManager offset.
@@ -131,7 +132,11 @@ constexpr Code kCode[CODE_COUNT] = {
     // DjEngineIF's jump to a time (channel, ms): what Rekordbox's own Needle Search runs (UiPlayer's needle search,
     // 0x142598a40, from the MIDI NeedleSearch control), its player's slot 0x138. 0 when it took.
     {0x14253ba10, 0x20, 0x8f8fe9146d05beb1ULL},
+    // ... and after it, as that needle search does, the deck's listeners told the new place (each one's slot 0x248)
+    {0x14259b100, 0x1b, 0x24109ed68d1a4c3eULL},
+    {0x142598bfa, 0xe, 0x4bb49ef590a7124aULL},   // ... from UiPlayer +0x590, in that needle search
 };
+constexpr uint64_t kNeedleListeners = 0x590;               // djplay::UiPlayer -> the listeners told of a needle search
 constexpr int kPreferencesCommand = 0x200A;
 constexpr uint64_t kSearchFilterVtable = 0x143938ca0ULL;   // browse::SearchFilter (its Component)
 constexpr uint64_t kSearchListenerVtable = 0x143938e38ULL; // its TextEditor::Listener, at +0xf0
@@ -156,6 +161,7 @@ using DeckPath = JString *(*)(const void *engine, JString *out, int channel);
 using DeckLoop = CueInfo *(*)(const void *engine, CueInfo *out, int channel);
 using SetDeckFlag = void (*)(const void *engine, int channel, bool);
 using DeckSeek = int (*)(const void *engine, int channel, int ms);
+using NeedleNotify = void (*)(void *listeners, int ms);
 using EngineInt = int (*)(const void *engine);
 using StringDtor = void (*)(JString *);
 using OperatorNew = void *(*)(size_t);
@@ -186,6 +192,7 @@ struct Api {
     DeckLoop running_loop;
     SetDeckFlag set_master_tempo;
     DeckSeek seek;
+    NeedleNotify needle_notify;
     EngineInt master;
     StringDtor string_dtor;
     OperatorNew alloc;
@@ -389,6 +396,7 @@ const char *verify_build() {
     api.master_tempo = at<DeckBool>(MASTER_TEMPO);
     api.set_master_tempo = at<SetDeckFlag>(SET_MASTER_TEMPO);
     api.seek = at<DeckSeek>(SEEK);
+    api.needle_notify = at<NeedleNotify>(NEEDLE_NOTIFY);
     api.master = at<EngineInt>(GET_MASTER);
     api.is_sync = at<DeckBool>(IS_SYNC);
     api.key_shift = at<DeckInt>(KEY_SHIFT);
@@ -739,6 +747,20 @@ int guarded_browser_command(const void *dj, int players, const BridgeCommand &c,
     }
 }
 
+// After a jump, the deck's own listeners are told the new place, as Rekordbox's Needle Search tells them (its CUE
+// then knows the deck moved). A fault here leaves the jump as it is.
+bool tell_needle_listeners(int deck, int ms) {
+    __try {
+        void *player = ui_player(deck);
+        void *listeners = player ? field<void *>(player, kNeedleListeners) : nullptr;
+        if (!listeners) return false;
+        api.needle_notify(listeners, ms);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 void run_command(const void *dj, int players) {
     const BridgeCommand c = shared->command;  // a copy: Wave may be writing the next one
     if (c.seq == shared->reply.seq || command_check(c) != c.check) return;
@@ -778,7 +800,9 @@ void run_command(const void *dj, int players) {
             result = kReplyBadRequest;
         } else {
             const int took = api.seek(dj, deck, int(c.content_id));
-            snprintf(message, sizeof message, "Deck %d to %.1f s%s", deck + 1, c.content_id / 1000.0, took == 0 ? "" : " (refused)");
+            const bool told = took == 0 && tell_needle_listeners(deck, int(c.content_id));
+            snprintf(message, sizeof message, "Deck %d to %.1f s%s", deck + 1, c.content_id / 1000.0,
+                     took != 0 ? " (refused)" : told ? "" : " (its listeners not told)");
             result = took == 0 ? kReplyRequested : kReplyNotReady;
         }
     } else if (c.kind == kCommandLoadRow || c.kind == kCommandSearch) {
