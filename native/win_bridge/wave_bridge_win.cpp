@@ -53,7 +53,7 @@ enum : int { NUM_PLAYERS, IS_LOADED, IS_LOADING, IS_PLAYING, POSITION_MS, TOTAL_
              TRACK_CTOR, TRACK_DTOR, TRACK_BASIC_INFO, BROWSE_INSTANCE, BROWSE_MANAGERS, LIST_CONTAINER,
              CONTAINER_LIST, TREE_VIEWER, ROW_TRACK, SELECTED_ROWS, LIST_BOX, HAS_FOCUS, DEVICE_ROOT,
              ALL_DEVICES, CRT_FREE, STICK_DATABASE, STICK_LOAD, STICK_ROW, MIDI_CALLBACK, MIDI_OPEN, PERFORM, SPLIT_SCREEN,
-             SET_TEXT, SEARCH_RETURN, SEARCH_RUN, STRING_CTOR, CODE_COUNT };
+             SET_TEXT, SEARCH_RETURN, SEARCH_RUN, STRING_CTOR, PREFERENCES, CODE_COUNT };
 // FNV-1a of each function's first bytes; entries never called pin what the bridge reads directly:
 // PLAYER_CONTROL the graph's players (+0x430/+0x43c), ENGINE_GET and DATABASE_GET the singletons,
 // MAIN_COMPONENT its static, LOAD_TEMPLATE (whole) the load message and UiManager offset.
@@ -125,7 +125,11 @@ constexpr Code kCode[CODE_COUNT] = {
     {0x14163e420, 0x15, 0x58dc6bf2e1f56077ULL},  // SearchFilter::textEditorReturnKeyPressed(TextEditor &)
     {0x14163e2e0, 0x30, 0xd2fac023c246035cULL},  // ... what it runs: the search, posted to run next
     {0x142a6e420, 0x20, 0xdc98d15944a5e9f5ULL},  // juce::String::String(const char *)
+    // MainComponent::perform's case for its Preferences command (0x200A): MainComponent::showPreference(-1), the page
+    // it was last on, as File > Preferences opens it.
+    {0x141825070, 0x18, 0x4b091471eea1d316ULL},
 };
+constexpr int kPreferencesCommand = 0x200A;
 constexpr uint64_t kSearchFilterVtable = 0x143938ca0ULL;   // browse::SearchFilter (its Component)
 constexpr uint64_t kSearchListenerVtable = 0x143938e38ULL; // its TextEditor::Listener, at +0xf0
 constexpr uint64_t kSearchEditor = 0x110;                  // its juce::TextEditor*
@@ -675,6 +679,26 @@ int search(const BridgeCommand &c, char *message, size_t size) {
 
 // Rekordbox's Show Split Screen, as its View menu and the browser's split-screen button run it: the browser in a
 // window of its own. A toggle: Wave asks only while that window isn't open.
+bool show_split_screen(char *message, size_t size);
+
+// One of Rekordbox's own menu commands, run as its menu runs it (through MainComponent::perform).
+bool perform_command(int command, char *message, size_t size) {
+    const void *main = global(kMainComponent);
+    void *target = main ? const_cast<uint8_t *>(static_cast<const uint8_t *>(main)) + kCommandTarget : nullptr;
+    if (!target || field<uint64_t>(target, 0) != kCommandTargetVtable - kBase + api.slide ||
+        field<uint64_t>(reinterpret_cast<const void *>(kCommandTargetVtable - kBase + api.slide), 4 * 8) !=
+            kCode[PERFORM].address - kBase + api.slide) {
+        snprintf(message, size, "Rekordbox is still starting");
+        return false;
+    }
+    alignas(16) uint8_t info[0x60] = {};  // juce::ApplicationCommandTarget::InvocationInfo: the command, invoked directly
+    memcpy(info, &command, sizeof command);
+    using Perform = bool (*)(void *target, const void *info);
+    reinterpret_cast<Perform>(kCode[PERFORM].address - kBase + api.slide)(target, info);
+    snprintf(message, size, "Rekordbox command 0x%X run", command);
+    return true;
+}
+
 bool show_split_screen(char *message, size_t size) {
     const void *main = global(kMainComponent);
     void *target = main ? const_cast<uint8_t *>(static_cast<const uint8_t *>(main)) + kCommandTarget : nullptr;
@@ -732,6 +756,13 @@ void run_command(const void *dj, int players) {
         result = kReplyBadDeck;
     } else if (c.kind == kCommandLoadRow || c.kind == kCommandSearch) {
         result = guarded_browser_command(dj, players, c, message, sizeof message);
+    } else if (c.kind == kCommandRekordbox) {
+        if (c.content_id != kPreferencesCommand) {
+            snprintf(message, sizeof message, "Only Rekordbox's Preferences can be opened this way");
+            result = kReplyBadRequest;
+        } else {
+            result = perform_command(kPreferencesCommand, message, sizeof message) ? kReplyRequested : kReplyNotReady;
+        }
     } else if (c.kind == kCommandBrowser && c.content_id) {
         result = show_split_screen(message, sizeof message) ? kReplyRequested : kReplyNotReady;
     } else if (c.kind == kCommandBrowser) {

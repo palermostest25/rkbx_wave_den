@@ -71,6 +71,7 @@ std::vector<Win> windowsOf(uint32_t pid) {
 
 bool alive(quintptr hwnd) { return hwnd && IsWindow(h(hwnd)) && IsWindowVisible(h(hwnd)); }
 bool exists(quintptr hwnd) { return hwnd && IsWindow(h(hwnd)); }
+void closeWindow(quintptr hwnd) { if (IsWindow(h(hwnd))) PostMessageW(h(hwnd), WM_CLOSE, 0, 0); }
 void stash(quintptr hwnd) { if (IsWindow(h(hwnd))) ShowWindow(h(hwnd), SW_HIDE); }
 void reveal(quintptr hwnd) { if (IsWindow(h(hwnd)) && !IsWindowVisible(h(hwnd))) ShowWindow(h(hwnd), SW_SHOWNA); }
 
@@ -162,6 +163,10 @@ void unembed(const Embedded &e) {
 }
 
 void setTopmost(quintptr hwnd, bool on) {
+    // Only a change: setting it again also brings the window to the front of every other on-top window (Wave's startup
+    // screen flickered each time Wave checked it was still on top).
+    const bool now = GetWindowLongPtrW(h(hwnd), GWL_EXSTYLE) & WS_EX_TOPMOST;
+    if (now == on) return;
     SetWindowPos(h(hwnd), on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
@@ -315,6 +320,7 @@ std::vector<Win> windowsOf(uint32_t) { return {}; }
 bool alive(quintptr) { return false; }
 bool exists(quintptr) { return false; }
 void stash(quintptr) {}
+void closeWindow(quintptr) {}
 void reveal(quintptr) {}
 QRect windowRect(quintptr) { return {}; }
 QRect clientRect(quintptr) { return {}; }

@@ -528,6 +528,15 @@ void Session::showRekordboxBrowser(bool on, int x, int y, std::function<void(boo
             [answered](bool ok, const QString &message) { if (answered) answered(ok, message); });
 }
 
+void Session::openRekordboxPreferences(std::function<void(bool, QString)> answered) {
+    if (!bridged()) {
+        if (answered) answered(false, QStringLiteral("Rekordbox is not connected"));
+        return;
+    }
+    request([](bridge::Client &c) { return c.request(bridge::Rekordbox, 0, 0x200A, 0); },
+            [answered](bool ok, const QString &message) { if (answered) answered(ok, message); });
+}
+
 void Session::searchRekordbox(const QString &query, std::function<void(bool, QString)> answered) {
     if (!bridged()) {
         if (answered) answered(false, QStringLiteral("Rekordbox is not connected"));

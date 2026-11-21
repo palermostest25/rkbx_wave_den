@@ -25,6 +25,10 @@
 
 Q_LOGGING_CATEGORY(lcMain, "wave")
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 namespace {
 // While Wave starts (and starts Rekordbox): one calm screen over everything, instead of windows coming and going.
 class Splash : public QWidget {
@@ -140,7 +144,12 @@ int main(int argc, char **argv) {
             const bool live = f && f->state == wave::host::State::Live;
             const bool noRekordbox = !wave::host::rekordboxPid() && t > 3;
             splash->setText(live ? QStringLiteral("Ready") : session.status().isEmpty() ? QStringLiteral("Starting…") : session.status());
-            splash->raise();  // above Wave and anything Rekordbox opens while it starts
+            // Above Wave and anything Rekordbox opens while it starts; raised only when something covers it, as raising
+            // it again and again made it flicker.
+            const HWND own = reinterpret_cast<HWND>(splash->winId());
+            const QPoint mid = splash->geometry().center() * splash->devicePixelRatioF();
+            if (GetAncestor(WindowFromPoint(POINT{mid.x(), mid.y()}), GA_ROOT) != own)
+                SetWindowPos(own, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             if (t < 1.2 || (!live && !noRekordbox && t < 15)) return;
             poll->stop();
             poll->deleteLater();
