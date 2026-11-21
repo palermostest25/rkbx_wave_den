@@ -1118,6 +1118,9 @@ void MainWindow::openStreaming(const QString &service) {
 }
 
 std::optional<host::Embedded> MainWindow::take(quintptr hwnd, const QRect &rect, quintptr owner) {
+    // Wave off always-on-top meanwhile: Rekordbox's window, Wave's from now on, goes above Wave only among windows that
+    // aren't on top (Windows keeps on-top windows above all others), so with Wave on top it was hidden behind it.
+    setOnTop(false);
     auto e = host::embed(hwnd, quintptr(winId()), rect, owner);
     if (!e) return e;
     if (const auto it = taken_.find(hwnd); it != taken_.end()) return it->second;  // taken before: as it was the first time
@@ -1167,7 +1170,8 @@ void MainWindow::leaveRekordbox(bool minimising) {
     syncNav();
     if (!browsing) return;
     hideBanner("streaming");
-    if (!browsing->service.isEmpty()) setOnTop(session_->settings.flag("always_on_top"));
+    // Off while Rekordbox's window was inside Wave (Windows), or while a streaming service was up.
+    if (browsing->kind == "window" || !browsing->service.isEmpty()) setOnTop(session_->settings.flag("always_on_top"));
     if (browsing->kind == "mac") session_->showRekordboxBrowser(false, 0, 0);
     else if (browsing->kind == "window") {
         if (browsing->embedded) giveBack(*browsing->embedded);  // its own frame back, before it goes away
