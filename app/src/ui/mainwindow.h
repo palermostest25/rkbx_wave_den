@@ -57,6 +57,7 @@ public:
     void setColoursChanged();
     void setScale(double scale);
     void setOnTop(bool on);
+    void redrawAll();  // Wave repainted at once, window and screen (after a window over it went away)
     void selectScreen(const QString &key);
     void changeFullscreen(bool on);
     void zoomBy(double factor);

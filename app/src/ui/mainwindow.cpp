@@ -940,6 +940,14 @@ void MainWindow::comeBack() {
     qCInfo(lcWindow) << "Rekordbox answered: Wave is back in front";
 }
 
+void MainWindow::redrawAll() {
+    update();
+    if (canvas_) canvas_->update();
+#ifdef Q_OS_WIN
+    RedrawWindow(reinterpret_cast<HWND>(winId()), nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME | RDW_UPDATENOW);
+#endif
+}
+
 void MainWindow::setOnTop(bool on) {
     if (on != onTop_) qCInfo(lcWindow) << "Wave" << (on ? "on top" : "no longer on top");
     onTop_ = on;
@@ -1251,8 +1259,14 @@ void MainWindow::leaveRekordbox(bool minimising) {
     syncNav();
     if (!browsing) return;
     hideBanner("streaming");
-    // Off while Rekordbox's window was inside Wave (Windows), or while a streaming service was up.
-    if (browsing->kind == "window" || !browsing->service.isEmpty()) setOnTop(session_->settings.flag("always_on_top"));
+    // Wave back on top (off while Rekordbox's window was inside it, or a streaming service was up) only once Rekordbox's
+    // window is no longer Wave's: Windows takes a window's own windows on top with it, and the browser, put away so,
+    // stayed on screen as a picture over Wave (until shown and put away again).
+    const bool backOnTop = browsing->kind == "window" || !browsing->service.isEmpty();
+    struct OnTopAfter {
+        MainWindow *w; bool on, want;
+        ~OnTopAfter() { if (on) { w->setOnTop(want); w->redrawAll(); } }
+    } onTopAfter{this, backOnTop, session_->settings.flag("always_on_top")};
     if (browsing->kind == "mac") session_->showRekordboxBrowser(false, 0, 0);
     else if (browsing->kind == "window") {
         if (browsing->embedded) giveBack(*browsing->embedded);  // its own frame back, before it goes away
