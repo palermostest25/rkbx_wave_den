@@ -771,7 +771,9 @@ void MainWindow::watch() {
 #ifdef Q_OS_WIN
     // And one Wave didn't open this time (left from an earlier run, or shown again by Rekordbox itself): known by what
     // it is, a large untitled panel of Rekordbox's beside its main window (its Preferences and dialogs have titles).
-    if (!rekordboxShown_ && aside_.isEmpty() && now() >= splitScanAt_) {
+    // Never while Wave has asked for the browser itself (BEATPORT, BROWSE): the window that opens is that one, and is
+    // Wave's to take, not to hide.
+    if (!rekordboxShown_ && aside_.isEmpty() && !splitAsked_ && now() >= splitScanAt_) {
         splitScanAt_ = now() + 1;  // once a second is enough
         const auto f = session_->lastFrame();
         if (const uint32_t pid = f && f->pid ? f->pid : 0) {
@@ -780,6 +782,9 @@ void MainWindow::watch() {
                 if (w.visible && !w.tool && (w.title.isEmpty() || w.title == splitTitle) && !splitWindows_.count(w.hwnd) &&
                     !(rekordboxBrowsing_ && rekordboxBrowsing_->hwnd == w.hwnd)) {
                     splitWindows_.insert(w.hwnd);
+                    // Rekordbox's browser all the same: the next BROWSE shows this one rather than asking for split screen
+                    // again (which, a toggle, would close it).
+                    if (!splitWindow_ || !host::exists(splitWindow_)) splitWindow_ = w.hwnd;
                     qCInfo(lcWindow) << "A Rekordbox browser window Wave didn't open is up:" << QString::number(w.hwnd, 16) << w.rect;
                 }
         }
