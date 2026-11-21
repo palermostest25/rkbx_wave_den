@@ -264,6 +264,7 @@ void Session::seekTo(int idx, double seconds) {
                 if (!ok && message.contains(QLatin1String("Unknown request")))
                     emit notice(QStringLiteral("Moving a deck needs Wave's updated bridge in Rekordbox: press CONNECT"));
                 if (s.next && ok && seekable(idx)) { seekTo(idx, *s.next); return; }
+                s.next.reset();  // not sent (refused, or the deck plays now): dropped
                 const auto p = previews_.find(idx);
                 const bool held = p != previews_.end() && !p->second.second;
                 if (!held) {  // let go: done
@@ -312,7 +313,13 @@ void Session::receive(std::shared_ptr<const ReaderFrame> f) {
                 mtDone_.insert(idx);
                 if (!live.masterTempo) {
                     qCInfo(lcSession) << "Master tempo on for deck" << idx + 1 << "(Rekordbox started with it off)";
-                    request([idx](bridge::Client &c) { return c.request(bridge::MasterTempo, uint32_t(idx), 1); }, [](bool, const QString &) {});
+                    const uint32_t pid = f->pid;
+                    request([idx](bridge::Client &c) { return c.request(bridge::MasterTempo, uint32_t(idx), 1); },
+                            [this, idx, pid](bool ok, const QString &message) {
+                                if (ok || pid != mtPid_) return;
+                                mtDone_.erase(idx);  // refused (still starting?): tried again on a later frame
+                                qCInfo(lcSession) << "Master tempo on deck" << idx + 1 << "not yet:" << message;
+                            });
                 }
             }
             if (live.bpm > 0) d.currentBpm = live.bpm;
@@ -392,30 +399,31 @@ void Session::openTrack(int idx, const QString &folder) {
 }
 
 void Session::pollCues() {
-    // Re-read the collection tracks' cues a few times a second, so edits made anywhere appear.
-    if (cuePolling_ || demo_) return;
+    // Re-read the collection tracks' cues whenever Rekordbox has written to its library, so a hot cue set on a loaded
+    // track appears. Asked of SQLite itself (data_version, which another connection's commit changes): the file's
+    // modified time isn't enough, as Windows can leave it unchanged while Rekordbox keeps the file open.
+    if (cuePolling_ || demo_ || now() < cueNextPoll_) return;
     std::map<int, QString> folders;
     for (int i = 0; i < 4; ++i)
         if (decks_[size_t(i)].analysis && inCollection(decks_[size_t(i)].requested)) folders[i] = decks_[size_t(i)].requested;
     if (folders.empty()) return;
-    // Only when Rekordbox wrote to its library since the last look (or another track came): a stat, not a query.
-    if (masterPath_.isEmpty() || now() > masterCheckedAt_ + 30) { masterPath_ = masterDatabase(); masterCheckedAt_ = now(); }
-    const QFileInfo db(masterPath_), wal(masterPath_ + "-wal");
-    const QString signature = QStringLiteral("%1|%2|%3").arg(db.lastModified().toMSecsSinceEpoch())
-                                  .arg(wal.lastModified().toMSecsSinceEpoch()).arg(wal.size());
+    cueNextPoll_ = now() + .4;
     QStringList all;
     for (const auto &[idx, folder] : folders) all << QString::number(idx) + folder;
-    if (signature == cueSignature_ && all == cueFolders_) return;
-    cueSignature_ = signature;
+    const bool sameDecks = all == cueFolders_;
     cueFolders_ = all;
     cuePolling_ = true;
+    using Result = std::pair<qint64, std::optional<std::map<int, std::vector<Cue>>>>;
     auto libraries = cueLibraries_;
-    auto *watcher = new QFutureWatcher<std::map<int, std::vector<Cue>>>(this);
+    auto *watcher = new QFutureWatcher<Result>(this);
     connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, folders] {
         watcher->deleteLater();
         cuePolling_ = false;
+        const auto [version, read] = watcher->result();
+        cueVersion_ = version;
+        if (!read) return;
         bool changedAny = false;
-        for (const auto &[idx, cues] : watcher->result()) {
+        for (const auto &[idx, cues] : *read) {
             DeckView &d = decks_[size_t(idx)];
             if (d.requested != folders.at(idx) || !d.analysis) continue;
             auto same = [](const std::vector<Cue> &a, const std::vector<Cue> &b) {
@@ -425,14 +433,21 @@ void Session::pollCues() {
                         return false;
                 return true;
             };
-            if (!same(d.cues, cues)) { d.cues = cues; changedAny = true; }
+            if (!same(d.cues, cues)) {
+                qCInfo(lcSession) << "Deck" << idx + 1 << "cues now" << cues.size() << "(Rekordbox's library changed)";
+                d.cues = cues;
+                changedAny = true;
+            }
         }
         if (changedAny) emit changed();
     });
-    watcher->setFuture(QtConcurrent::run(&analysisPool_, [folders, libraries] {
+    const qint64 seen = sameDecks ? cueVersion_ : -2;  // other tracks: read them whatever the version
+    watcher->setFuture(QtConcurrent::run(&analysisPool_, [folders, libraries, seen]() -> Result {
+        const qint64 version = libraries->dataVersion();
+        if (version == seen && version >= 0) return {version, std::nullopt};  // nothing written since the last look
         std::map<int, std::vector<Cue>> out;
         for (const auto &[idx, folder] : folders) out[idx] = libraries->cues(folder);
-        return out;
+        return {version, out};
     }));
 }
 

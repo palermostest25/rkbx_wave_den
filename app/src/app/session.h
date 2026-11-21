@@ -131,9 +131,9 @@ private:
     QThreadPool analysisPool_, requestPool_;
     std::shared_ptr<Libraries> cueLibraries_;  // used only on the analysis pool's one thread
     bool cuePolling_ = false;
-    QString masterPath_, cueSignature_;
     QStringList cueFolders_;
-    double masterCheckedAt_ = 0;
+    qint64 cueVersion_ = -1;     // master.db's data_version at the last read of the cues
+    double cueNextPoll_ = 0;
     QTimer cueTimer_, hostTimer_;
     uint64_t nextGeneration_ = 1;
     struct Loading { int deck; QString title, path; double deadline; bool answered = false, accepted = false; };

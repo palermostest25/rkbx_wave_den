@@ -786,7 +786,7 @@ void run_command(const void *dj, int players) {
         // A paused deck to a time in its track (content_id, ms), as Rekordbox's Needle Search does: CUE then sets
         // the cue there. Never a playing deck, nor one in a loop (Wave's touch is only a look then).
         const int deck = int(c.deck);
-        if (deck >= players || !api.is_loaded(dj, deck)) {
+        if (deck < 0 || deck >= players || !api.is_loaded(dj, deck)) {
             snprintf(message, sizeof message, "Deck %d has no track", deck + 1);
             result = kReplyNoTrack;
         } else if (api.is_playing(dj, deck)) {

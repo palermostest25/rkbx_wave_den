@@ -56,6 +56,7 @@ public:
     QString root() const;  // where its analysis and artwork paths start
     std::optional<LibraryTrack> resolvePath(const QString &audioPath);
     std::vector<Cue> cues(const QString &analysisFolder);  // master.db's cues for a collection track
+    qint64 dataVersion();  // SQLite's data_version: changes whenever another connection (Rekordbox) commits
 
     // The browser's lists. ``kind``: PLAYLIST, HISTORY, ARTIST, ALBUM, KEY.
     std::vector<Category> categories(const QString &kind, const QString &parent = {});
@@ -79,6 +80,7 @@ class Libraries {
 public:
     std::optional<LibraryTrack> resolvePath(const QString &audioPath);
     std::vector<Cue> cues(const QString &analysisFolder);  // the collection's, for its tracks
+    qint64 dataVersion();                                  // master.db's, -1 if it can't be read
     void close();
 
 private:

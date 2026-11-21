@@ -249,6 +249,11 @@ std::optional<LibraryTrack> Library::resolvePath(const QString &audioPath) {
     return best;
 }
 
+qint64 Library::dataVersion() {
+    Query q(db_, QStringLiteral("PRAGMA data_version"));
+    return q.next() ? q.integer(0) : -1;
+}
+
 std::vector<Cue> Library::cues(const QString &analysisFolder) {
     std::vector<Cue> out;
     if (device_) return out;
@@ -493,6 +498,11 @@ std::optional<LibraryTrack> Libraries::resolvePath(const QString &audioPath) {
         if (stick.library) if (auto track = stick.library->resolvePath(audioPath)) return track;
     }
     return std::nullopt;
+}
+
+qint64 Libraries::dataVersion() {
+    if (!main_) main_ = Library::open({});
+    return main_ ? main_->dataVersion() : -1;
 }
 
 std::vector<Cue> Libraries::cues(const QString &analysisFolder) {

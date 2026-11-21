@@ -771,7 +771,8 @@ void MainWindow::watch() {
 #ifdef Q_OS_WIN
     // And one Wave didn't open this time (left from an earlier run, or shown again by Rekordbox itself): known by what
     // it is, a large untitled panel of Rekordbox's beside its main window (its Preferences and dialogs have titles).
-    if (!rekordboxShown_ && aside_.isEmpty()) {
+    if (!rekordboxShown_ && aside_.isEmpty() && now() >= splitScanAt_) {
+        splitScanAt_ = now() + 1;  // once a second is enough
         const auto f = session_->lastFrame();
         if (const uint32_t pid = f && f->pid ? f->pid : 0) {
             const QString splitTitle = session_->settings.text("split_window_title");
@@ -833,7 +834,9 @@ void MainWindow::watchRekordbox() {
     if (const host::Host *h = session_->host(); h && h->error != hostError_) {
         hostError_ = h->error;
         if (!hostError_.isEmpty() && h->doing.isEmpty())
-            showBanner(hostError_.section(QStringLiteral(" (its windows"), 0, 0) + QStringLiteral(" · close Rekordbox, then press CONNECT"), "warn",
+            showBanner(hostError_.section(QStringLiteral(" (its windows"), 0, 0) +
+                           (hostError_.contains(QLatin1String("Rekordbox")) && (hostError_.contains(QLatin1String("open")) || hostError_.contains(QLatin1String("Quit")))
+                                ? QStringLiteral(" · close Rekordbox, then press CONNECT") : QString()), "warn",
                        QStringLiteral("CONNECT"), [this] { connectRekordbox(); }, 20000, "host");
     }
     // Rekordbox behind Wave can stop at its own questions (library sync, My Tag, sign-in…), show a popup Wave
@@ -975,12 +978,15 @@ void MainWindow::showRekordboxPreferences() {
         std::optional<host::Win> prefs;
         int best = -1;
         for (const host::Win &w : windows) {
-            if ((c.main && w.hwnd == c.main->hwnd) || w.hwnd == splitWindow_) continue;
+            if ((c.main && w.hwnd == c.main->hwnd) || w.hwnd == splitWindow_ || splitWindows_.count(w.hwnd)) continue;
             if (w.rect.width() < 300 || w.rect.height() < 200) continue;  // tooltips, menus, helpers
             const auto old = before.find(w.hwnd);
             const bool fresh = old == before.end() || (!old->second && w.visible);
             const bool named = w.title.contains(QLatin1String("pref"), Qt::CaseInsensitive);
             if (!fresh && !(named && !(old != before.end() && old->second))) continue;
+            // Untitled (another language?) only once nothing titled came for 3 s: a notice ("Loading Spotify Library")
+            // opening meanwhile is never taken for the Preferences.
+            if (!named && (left > 28 || w.rect.width() < 800 || w.rect.height() < 500)) continue;
             const int score = (named ? 4 : 0) + (w.visible ? 2 : 0) + (w.tool ? 0 : 1);
             if (score > best) { best = score; prefs = w; }
         }
@@ -995,6 +1001,7 @@ void MainWindow::showRekordboxPreferences() {
         pages_->setCurrentWidget(blank_);
         Browsing b{"window", deckPaths(), prefs->hwnd, false, windowState(), QString(), std::nullopt, false, prefs->rect.size()};
         rekordboxBrowsing_ = b;
+        prefsTaken_ = prefs->hwnd;
         rekordboxBrowsing_->embedded = take(prefs->hwnd, browsingRect(), c.main ? c.main->hwnd : 0);
         syncNav();
         qCInfo(lcWindow) << "Rekordbox's Preferences are up inside Wave" << prefs->title << prefs->rect << (prefs->visible ? "" : "(opened hidden)");
@@ -1195,10 +1202,12 @@ void MainWindow::putAwayStrays() {
         taken_.erase(e.hwnd);
         if (!host::exists(e.hwnd)) continue;
         host::unembed(e);
-        const bool main = c.main && c.main->hwnd == e.hwnd;
+        // Its main window is known by how Wave took it (classify can't tell while Wave owns it): never closed, which
+        // would quit Rekordbox. Only its Preferences are closed; anything else is hidden.
+        const bool main = e.hwnd == mainTaken_ || (c.main && c.main->hwnd == e.hwnd);
         if (main) host::putBack(e.hwnd, session_->settings.flag("hide_rekordbox"));
-        else if (e.hwnd == splitWindow_) host::stash(e.hwnd);
-        else host::closeWindow(e.hwnd);
+        else if (e.hwnd == prefsTaken_) host::closeWindow(e.hwnd);
+        else host::stash(e.hwnd);
         qCWarning(lcWindow) << "A Rekordbox window was left over Wave: put away" << QString::number(e.hwnd, 16) << (main ? "(main)" : "");
     }
     // Wave minimised: Rekordbox's own window goes too, rather than being left on the desktop.
@@ -1273,6 +1282,7 @@ void MainWindow::showRekordbox() {
         }
     qCInfo(lcWindow) << "Opening Rekordbox's window inside Wave; its windows:" << windowList(pid, quintptr(winId()));
     const quintptr main = c.main->hwnd;
+    mainTaken_ = main;
     const auto embedded = take(main, pageRect(), 0);
     if (embedded) {
         rekordboxBrowsing_ = Browsing{"window", deckPaths(), main, true, windowState(), QString(), embedded, true};
