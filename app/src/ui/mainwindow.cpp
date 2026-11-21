@@ -1012,7 +1012,7 @@ void MainWindow::showRekordboxPreferences() {
         if (rekordboxBrowsing_) leaveRekordbox();  // something else was opened meanwhile
         pageBeforePrefs_ = pages_->currentWidget() == blank_ ? canvas_ : pages_->currentWidget();
         pages_->setCurrentWidget(blank_);
-        Browsing b{"window", deckPaths(), prefs->hwnd, false, windowState(), QString(), std::nullopt, false, prefs->rect.size()};
+        Browsing b{"window", deckPaths(), prefs->hwnd, false, windowState(), QString(), std::nullopt, false, prefs->rect.size(), prefs->rect};
         rekordboxBrowsing_ = b;
         prefsTaken_ = prefs->hwnd;
         rekordboxBrowsing_->embedded = take(prefs->hwnd, browsingRect(), c.main ? c.main->hwnd : 0);
@@ -1259,6 +1259,8 @@ void MainWindow::leaveRekordbox(bool minimising) {
         qCInfo(lcWindow) << "Rekordbox's" << (browsing->whole ? "window" : !browsing->prefs.isEmpty() ? "Preferences" : "browser")
                          << "put away" << QString::number(browsing->hwnd, 16) << (minimising ? "(minimising)" : "");
         if (!browsing->prefs.isEmpty()) {  // Rekordbox's Preferences: closed (it keeps what was changed), Wave's page back
+            // At the size Rekordbox gave them (with their frame back, they'd otherwise be a frame wider each time).
+            if (browsing->was.isValid()) host::place(browsing->hwnd, browsing->was);
             host::closeWindow(browsing->hwnd);
             if (pages_->currentWidget() == blank_) pages_->setCurrentWidget(pageBeforePrefs_ ? pageBeforePrefs_ : canvas_);
             if (!minimising) { raise(); activateWindow(); }
