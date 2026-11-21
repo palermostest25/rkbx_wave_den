@@ -50,7 +50,8 @@ std::optional<Win> describe(HWND hwnd) {
     }
     w.rect = QRect(QPoint(r.left, r.top), QPoint(r.right - 1, r.bottom - 1));
     w.visible = IsWindowVisible(hwnd);
-    w.owned = GetWindow(hwnd, GW_OWNER) != nullptr;
+    w.owner = reinterpret_cast<quintptr>(GetWindow(hwnd, GW_OWNER));
+    w.owned = w.owner != 0;
     w.resizable = style & (WS_THICKFRAME | WS_MAXIMIZEBOX);
     w.tool = ex & WS_EX_TOOLWINDOW;
     return w;
@@ -139,8 +140,19 @@ std::optional<Embedded> embed(quintptr hwnd, quintptr wave, const QRect &rect, q
     SetWindowLongPtrW(w, GWL_EXSTYLE, e.exStyle & ~LONG_PTR(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE |
                                                            WS_EX_APPWINDOW | WS_EX_TOPMOST));
     SetWindowPos(w, HWND_TOP, rect.left(), rect.top(), rect.width(), rect.height(), SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    if (!IsWindowVisible(w)) ShowWindow(w, SW_SHOWNOACTIVATE);  // hidden with a minimised owner, before it was Wave's
     SetForegroundWindow(w);
     return e;
+}
+
+bool iconic(quintptr hwnd) { return IsWindow(h(hwnd)) && IsIconic(h(hwnd)); }
+
+void reshow(quintptr hwnd, const QRect &rect) {
+    HWND w = h(hwnd);
+    if (!IsWindow(w)) return;
+    ShowWindow(w, IsIconic(w) ? SW_RESTORE : SW_SHOWNOACTIVATE);
+    if (IsZoomed(w)) ShowWindow(w, SW_RESTORE);
+    SetWindowPos(w, HWND_TOP, rect.left(), rect.top(), rect.width(), rect.height(), SWP_SHOWWINDOW);
 }
 
 void place(quintptr hwnd, const QRect &rect) {
@@ -330,6 +342,8 @@ void sendToBack(quintptr) {}
 void setTopmost(quintptr, bool) {}
 std::optional<Embedded> embed(quintptr, quintptr, const QRect &, quintptr) { return std::nullopt; }
 void place(quintptr, const QRect &) {}
+bool iconic(quintptr) { return false; }
+void reshow(quintptr, const QRect &) {}
 void unembed(const Embedded &) {}
 bool splitScreenFromMenu(quintptr) { return false; }
 Automation::Automation() {}

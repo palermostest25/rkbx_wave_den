@@ -44,6 +44,19 @@ Q_LOGGING_CATEGORY(lcWindow, "wave.window")
 namespace wave {
 namespace {
 
+// Rekordbox's windows as they are, for the log, when one of them didn't do what Wave expected.
+QString windowList(uint32_t pid, quintptr wave) {
+    QStringList out;
+    for (const host::Win &w : host::windowsOf(pid)) {
+        if (w.area() < 100 * 100) continue;
+        out << QStringLiteral("[%1 \"%2\" %3%4%5%6 %7,%8 %9x%10]")
+                   .arg(QString::number(w.hwnd, 16), w.title, w.visible ? "shown" : "hidden", w.minimized ? " minimised" : "",
+                        w.tool ? " tool" : "", w.owner == wave ? " in-Wave" : w.owned ? " owned" : "")
+                   .arg(w.rect.x()).arg(w.rect.y()).arg(w.rect.width()).arg(w.rect.height());
+    }
+    return out.join(' ');
+}
+
 // The booth dimmer: a black veil over the whole window that touches pass straight through.
 class Dimmer : public QWidget {
 public:
@@ -746,6 +759,7 @@ void MainWindow::watch() {
     // it, on top) and while Wave is minimised (it would be left on the desktop). Not while Wave stepped aside.
     const bool splitShown = rekordboxBrowsing_ && !rekordboxBrowsing_->whole && rekordboxBrowsing_->hwnd == splitWindow_;
     if (splitWindow_ && !splitShown && !rekordboxShown_ && aside_.isEmpty() && host::alive(splitWindow_)) host::stash(splitWindow_);
+    putAwayStrays();
     if (midi_ && !session_->demo()) {
         const auto f = session_->lastFrame();
         const bool live = f && f->state == host::State::Live;
@@ -901,30 +915,46 @@ void MainWindow::showRekordboxPreferences() {
         showBanner(QStringLiteral("Rekordbox isn't connected: press CONNECT to start it with Wave"), "warn", {}, {}, 6000, "rekordbox");
         return;
     }
-    std::set<quintptr> before;
-    for (const host::Win &w : host::windowsOf(pid)) if (w.visible) before.insert(w.hwnd);
-    prefsOpeningUntil_ = now() + 5;
+    // Every window Rekordbox has, shown or not: its Preferences belong to its main window, which Wave keeps minimised,
+    // and Windows keeps a minimised window's own windows hidden, so they open hidden.
+    std::map<quintptr, bool> before;
+    for (const host::Win &w : host::windowsOf(pid)) before[w.hwnd] = w.visible;
+    qCInfo(lcWindow) << "Opening Rekordbox's Preferences; its windows:" << windowList(pid, quintptr(winId()));
+    prefsOpeningUntil_ = now() + 8;
     auto look = std::make_shared<std::function<void(int)>>();
     *look = [this, pid, before, look](int left) {
-        // The window it adds: Rekordbox's Preferences (a window of its own, centred over Rekordbox).
+        // The window it adds (or brings out): Rekordbox's Preferences, a window of its own, often hidden at first.
+        const auto windows = host::windowsOf(pid);
+        const auto c = host::classify(windows);
         std::optional<host::Win> prefs;
-        for (const host::Win &w : host::windowsOf(pid))
-            if (w.visible && !w.tool && !before.count(w.hwnd) && w.area() > 0) prefs = w;
+        int best = -1;
+        for (const host::Win &w : windows) {
+            if ((c.main && w.hwnd == c.main->hwnd) || w.hwnd == splitWindow_) continue;
+            if (w.rect.width() < 300 || w.rect.height() < 200) continue;  // tooltips, menus, helpers
+            const auto old = before.find(w.hwnd);
+            const bool fresh = old == before.end() || (!old->second && w.visible);
+            const bool named = w.title.contains(QLatin1String("pref"), Qt::CaseInsensitive);
+            if (!fresh && !(named && !(old != before.end() && old->second))) continue;
+            const int score = (named ? 4 : 0) + (w.visible ? 2 : 0) + (w.tool ? 0 : 1);
+            if (score > best) { best = score; prefs = w; }
+        }
         if (!prefs) {
-            if (left > 0) QTimer::singleShot(150, this, [look, left] { (*look)(left - 1); });
-            else showBanner(QStringLiteral("Rekordbox's Preferences didn't open"), "warn", {}, {}, 6000, "rekordbox");
+            if (left > 0) { QTimer::singleShot(150, this, [look, left] { (*look)(left - 1); }); return; }
+            qCWarning(lcWindow) << "Rekordbox's Preferences didn't open; its windows:" << windowList(pid, quintptr(winId()));
+            showBanner(QStringLiteral("Rekordbox's Preferences didn't open"), "warn", {}, {}, 6000, "rekordbox");
             return;
         }
+        if (rekordboxBrowsing_) leaveRekordbox();  // something else was opened meanwhile
         pageBeforePrefs_ = pages_->currentWidget() == blank_ ? canvas_ : pages_->currentWidget();
         pages_->setCurrentWidget(blank_);
         Browsing b{"window", deckPaths(), prefs->hwnd, false, windowState(), QString(), std::nullopt, false, prefs->rect.size()};
         rekordboxBrowsing_ = b;
-        rekordboxBrowsing_->embedded = host::embed(prefs->hwnd, quintptr(winId()), browsingRect(), 0);
+        rekordboxBrowsing_->embedded = take(prefs->hwnd, browsingRect(), c.main ? c.main->hwnd : 0);
         syncNav();
-        qCInfo(lcWindow) << "Rekordbox's Preferences are up inside Wave" << prefs->title << prefs->rect;
+        qCInfo(lcWindow) << "Rekordbox's Preferences are up inside Wave" << prefs->title << prefs->rect << (prefs->visible ? "" : "(opened hidden)");
     };
     session_->openRekordboxPreferences([this, look](bool ok, const QString &message) {
-        if (ok) { (*look)(20); return; }
+        if (ok) { (*look)(48); return; }
         qCWarning(lcWindow) << "Rekordbox's Preferences:" << message;
         showBanner(QStringLiteral("Rekordbox's Preferences: %1 (press CONNECT if Wave was just updated)").arg(message), "warn", {}, {}, 8000, "rekordbox");
     });
@@ -1027,7 +1057,7 @@ bool MainWindow::browseInRekordbox(const QString &service) {
     std::optional<host::Embedded> embedded;
     if (rekordboxBrowsing_ && rekordboxBrowsing_->embedded && rekordboxBrowsing_->hwnd == target->hwnd)
         embedded = rekordboxBrowsing_->embedded;  // already inside Wave (a second tap): kept as first taken
-    if (split && !embedded) embedded = host::embed(target->hwnd, quintptr(winId()), pageRect(), c.main ? c.main->hwnd : 0);
+    if (split && !embedded) embedded = take(target->hwnd, pageRect(), c.main ? c.main->hwnd : 0);
     else if (embedded) host::place(target->hwnd, pageRect());
     if (embedded && c.main) host::sendToBack(c.main->hwnd);  // opening the split browser can bring Rekordbox forward
     if (!embedded) host::present(target->hwnd, pageRect(), std::nullopt, true, !streaming);
@@ -1087,6 +1117,49 @@ void MainWindow::openStreaming(const QString &service) {
                "info", QStringLiteral("CANCEL"), [this] { pendingStreaming_.reset(); hideBanner("streaming"); }, 0, "streaming");
 }
 
+std::optional<host::Embedded> MainWindow::take(quintptr hwnd, const QRect &rect, quintptr owner) {
+    auto e = host::embed(hwnd, quintptr(winId()), rect, owner);
+    if (!e) return e;
+    if (const auto it = taken_.find(hwnd); it != taken_.end()) return it->second;  // taken before: as it was the first time
+    taken_[hwnd] = *e;
+    return e;
+}
+
+void MainWindow::giveBack(const host::Embedded &e) {
+    host::unembed(e);
+    taken_.erase(e.hwnd);
+}
+
+void MainWindow::putAwayStrays() {
+#ifdef Q_OS_WIN
+    // A Rekordbox window Wave took in and no longer shows sits above Wave for good (it belongs to Wave): given back
+    // and put away. Its Preferences are closed, its browser hidden, its main window minimised.
+    const quintptr current = rekordboxBrowsing_ ? rekordboxBrowsing_->hwnd : 0;
+    std::vector<host::Embedded> strays;
+    for (const auto &[hwnd, e] : taken_) if (hwnd != current) strays.push_back(e);
+    const bool justMinimised = isMinimized() && now() - minimisedAt_ < 4 && aside_.isEmpty() && !rekordboxShown_;
+    if (strays.empty() && !justMinimised) return;
+    const auto f = session_->lastFrame();
+    const uint32_t pid = f && f->pid ? f->pid : host::rekordboxPid();
+    const auto c = host::classify(host::windowsOf(pid));
+    for (const host::Embedded &e : strays) {
+        taken_.erase(e.hwnd);
+        if (!host::exists(e.hwnd)) continue;
+        host::unembed(e);
+        const bool main = c.main && c.main->hwnd == e.hwnd;
+        if (main) host::putBack(e.hwnd, session_->settings.flag("hide_rekordbox"));
+        else if (e.hwnd == splitWindow_) host::stash(e.hwnd);
+        else host::closeWindow(e.hwnd);
+        qCWarning(lcWindow) << "A Rekordbox window was left over Wave: put away" << QString::number(e.hwnd, 16) << (main ? "(main)" : "");
+    }
+    // Wave minimised: Rekordbox's own window goes too, rather than being left on the desktop.
+    if (justMinimised && c.main && c.main->visible && !c.main->minimized && session_->settings.flag("hide_rekordbox")) {
+        host::putBack(c.main->hwnd, true);
+        qCInfo(lcWindow) << "Wave minimised: Rekordbox's window minimised with it";
+    }
+#endif
+}
+
 void MainWindow::leaveRekordbox(bool minimising) {
     // Put Rekordbox's browser away and come back to the waveforms.
     const auto browsing = rekordboxBrowsing_;
@@ -1097,7 +1170,7 @@ void MainWindow::leaveRekordbox(bool minimising) {
     if (!browsing->service.isEmpty()) setOnTop(session_->settings.flag("always_on_top"));
     if (browsing->kind == "mac") session_->showRekordboxBrowser(false, 0, 0);
     else if (browsing->kind == "window") {
-        if (browsing->embedded) host::unembed(*browsing->embedded);  // its own frame back, before it goes away
+        if (browsing->embedded) giveBack(*browsing->embedded);  // its own frame back, before it goes away
         if (!browsing->prefs.isEmpty()) {  // Rekordbox's Preferences: closed (it keeps what was changed), Wave's page back
             host::closeWindow(browsing->hwnd);
             if (pages_->currentWidget() == blank_) pages_->setCurrentWidget(pageBeforePrefs_ ? pageBeforePrefs_ : canvas_);
@@ -1146,11 +1219,20 @@ void MainWindow::showRekordbox() {
             if (!splitWindow_ && w.title.isEmpty()) splitWindow_ = w.hwnd;
             host::stash(w.hwnd);
         }
-    const auto embedded = host::embed(c.main->hwnd, quintptr(winId()), pageRect(), 0);
+    qCInfo(lcWindow) << "Opening Rekordbox's window inside Wave; its windows:" << windowList(pid, quintptr(winId()));
+    const quintptr main = c.main->hwnd;
+    const auto embedded = take(main, pageRect(), 0);
     if (embedded) {
-        rekordboxBrowsing_ = Browsing{"window", deckPaths(), c.main->hwnd, true, windowState(), QString(), embedded, true};
+        rekordboxBrowsing_ = Browsing{"window", deckPaths(), main, true, windowState(), QString(), embedded, true};
         syncNav();
         qCInfo(lcWindow) << "Rekordbox's window is up inside Wave";
+        // Rekordbox can take a moment to come back from minimised (and can minimise itself again): checked, and put
+        // in Wave's page once more if it isn't there.
+        QTimer::singleShot(700, this, [this, main, pid] {
+            if (!rekordboxBrowsing_ || rekordboxBrowsing_->hwnd != main) return;
+            qCInfo(lcWindow) << "Rekordbox's window inside Wave, a moment later:" << windowList(pid, quintptr(winId()));
+            if (!host::alive(main) || host::iconic(main)) host::reshow(main, pageRect());
+        });
         return;
     }
 #endif
@@ -1188,7 +1270,9 @@ void MainWindow::changeEvent(QEvent *e) {
 #endif
     if (e->type() == QEvent::WindowStateChange) {
         // Minimised: Rekordbox's window or browser goes away with Wave rather than staying on the desktop.
+        if (isMinimized()) minimisedAt_ = now();
         if (isMinimized() && rekordboxBrowsing_) QTimer::singleShot(0, this, [this] { if (rekordboxBrowsing_) leaveRekordbox(true); });
+        if (isMinimized()) QTimer::singleShot(300, this, [this] { putAwayStrays(); });
         paceFrames();
         const bool full = isFullScreen();
         minimiseButton_->setVisible(full);

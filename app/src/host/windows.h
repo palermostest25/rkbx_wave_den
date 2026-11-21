@@ -19,6 +19,7 @@ struct Win {
     bool visible = false, minimized = false;
     QRect rect;            // the restored rectangle when minimised
     bool owned = false, resizable = false, tool = false;
+    quintptr owner = 0;    // the window it belongs to (shown above it, hidden with it)
     qint64 area() const { return qint64(std::max(0, rect.width())) * std::max(0, rect.height()); }
 };
 
@@ -47,7 +48,9 @@ void putBack(quintptr hwnd, bool minimize = true);         // undo present
 // title bar, filling ``rect`` (physical pixels). unembed gives it back its frame and owner as they were.
 struct Embedded { quintptr hwnd = 0; qint64 style = 0, exStyle = 0, owner = 0; };
 std::optional<Embedded> embed(quintptr hwnd, quintptr wave, const QRect &rect, quintptr owner = 0);  // owner: its own, if Wave has it already
-void place(quintptr hwnd, const QRect &rect);              // an embedded window, kept where Wave's page is
+void place(quintptr hwnd, const QRect &rect);
+bool iconic(quintptr hwnd);
+void reshow(quintptr hwnd, const QRect &rect);              // an embedded window that went away: up in Wave's page again              // an embedded window, kept where Wave's page is
 void unembed(const Embedded &embedded);
 bool splitScreenFromMenu(quintptr hwnd);                   // View › Show Split Screen, when there is a native menu
 void setTopmost(quintptr hwnd, bool on);

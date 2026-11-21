@@ -153,6 +153,12 @@ private:
                       bool whole = false;
                       QSize prefs; };  // Rekordbox's Preferences (its own size, centred on black), when not empty  // the split browser (or, for REKORDBOX, Rekordbox's main window) inside Wave's page
     std::optional<Browsing> rekordboxBrowsing_;
+    // Every Rekordbox window Wave has taken in (as it was), until given back: one left behind is put away by watch().
+    std::map<quintptr, host::Embedded> taken_;
+    std::optional<host::Embedded> take(quintptr hwnd, const QRect &rect, quintptr owner);
+    void giveBack(const host::Embedded &e);
+    void putAwayStrays();
+    double minimisedAt_ = 0;
     bool splitAsked_ = false;
     quintptr splitWindow_ = 0;
     QWidget *blank_ = nullptr;   // black behind Rekordbox's Preferences
