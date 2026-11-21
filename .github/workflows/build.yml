@@ -88,7 +88,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-15, macos-15-intel]
+        os: [windows-latest, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -194,7 +194,7 @@ jobs:
           path: validation/packaged-native.png
   app:
     # Wave (app/). Windows: one static exe (Qt from vcpkg, built once and cached). macOS: Qt's
-    # frameworks, one build per architecture. Linux: tests only. SQLCipher is built in (app/third_party).
+    # frameworks, one build per architecture. SQLCipher is built in (app/third_party).
     if: ${{ !startsWith(inputs.publish_tag, 'v') && inputs.mirror_rekordbox != 'yes' }}
     strategy:
       fail-fast: false
@@ -204,17 +204,11 @@ jobs:
             triplet: x64-windows-wave
           - os: macos-15
             arch: arm64
-          - os: macos-15-intel
-            arch: x86_64
-          - os: ubuntu-24.04
     runs-on: ${{ matrix.os }}
     env:
       VCPKG_TAG: '2025.07.25'
     steps:
       - uses: actions/checkout@v4
-      - name: Linux packages
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev ninja-build
       - uses: jurplel/install-qt-action@v4
         if: runner.os != 'Windows'
         with:

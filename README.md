@@ -11,7 +11,7 @@ of the CPU the earlier versions did (about a fifth with four decks playing), so 
 cool through a set. Your settings carry over.
 
 [**Download the latest release**](https://github.com/palermostest25/rkbx_wave_den/releases/latest) ·
-Windows 10/11 (x64) · macOS (Apple Silicon and Intel)
+Windows 10/11 (x64) · macOS (Apple Silicon)
 
 ![Four decks in Rekordbox Wave](docs/images/wave-4deck.png)
 
@@ -79,9 +79,8 @@ once, and it can be removed from **Settings → Apps**.
 
 ### macOS
 
-1. Download the DMG for your Mac from the
-   [latest release](https://github.com/palermostest25/rkbx_wave_den/releases/latest):
-   **Apple Silicon** (M1 and later) or **Intel**. Not sure? Apple menu → About This Mac → *Chip*.
+1. Download the Apple Silicon DMG (M1 and later; Intel Macs aren't supported) from the
+   [latest release](https://github.com/palermostest25/rkbx_wave_den/releases/latest).
 2. Open it and drag **Rekordbox Wave** to **Applications**.
 3. Open it from Applications. The app is not notarized by Apple, so the first time macOS says it
    *cannot verify* it: click **Done**, then open **System Settings → Privacy & Security**, scroll down,
