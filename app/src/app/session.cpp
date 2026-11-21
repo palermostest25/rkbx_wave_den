@@ -218,29 +218,45 @@ double Session::knobZoom(int value, bool reverse) {
 
 void Session::previewHold(int idx, double seconds) {
     previews_[idx] = {seconds, std::nullopt};
+    if (seekable(idx)) seekTo(idx, seconds);  // a paused deck goes there as the finger moves: CUE then plays from it
     emit changed();
 }
 
 void Session::previewRelease(int idx) {
     auto it = previews_.find(idx);
     if (it == previews_.end()) return;
-    // A paused deck (not in a loop) goes there for real, as Rekordbox's Needle Search does: CUE then sets the cue there
-    // and plays from it. A playing deck is only looked at, and the view glides back to it.
-    const double target = it->second.first;
+    // A paused deck has gone (is going) where the finger left it: held there while Rekordbox's playhead arrives. A
+    // playing deck, or one in a loop, was only looked at: the view glides back to it.
+    const auto sk = seeking_.find(idx);
+    const bool went = sk != seeking_.end();
+    it->second.second = now() + (went ? 1.0 : kPreviewHold);
+    if (went && !sk->second.asked && !sk->second.next) seeking_.erase(sk);  // nothing still on its way
+}
+
+bool Session::seekable(int idx) const {
+    if (demo_ || !bridged() || idx < 0 || idx >= 4) return false;
     const DeckView &d = decks_[size_t(idx)];
-    if (!demo_ && bridged() && d.status && d.status->loaded && !d.status->playing && !d.status->loop && d.analysis) {
-        it->second.second = now() + 1.5;  // held there while Rekordbox moves its playhead to it
-        const auto ms = uint32_t(std::lround(std::clamp(target, 0.0, d.analysis->duration) * 1000));
-        request([idx, ms](bridge::Client &c) { return c.request(bridge::Seek, uint32_t(idx), ms, 0); },
-                [this, idx, target](bool ok, const QString &message) {
-                    qCInfo(lcSession) << "Deck" << idx + 1 << "to" << target << "s:" << message;
-                    if (ok) return;
-                    const auto p = previews_.find(idx);
-                    if (p != previews_.end() && p->second.second) p->second.second = now();  // didn't take: back to the deck
-                });
-        return;
-    }
-    it->second.second = now() + kPreviewHold;
+    return d.status && d.status->loaded && !d.status->playing && !d.status->loop && d.analysis;
+}
+
+void Session::seekTo(int idx, double seconds) {
+    Seeking &s = seeking_[idx];
+    if (s.asked) { s.next = seconds; return; }  // one at a time: the latest place goes when this one is answered
+    s.asked = true;
+    s.next.reset();
+    const DeckView &d = decks_[size_t(idx)];
+    const auto ms = uint32_t(std::lround(std::clamp(seconds, 0.0, d.analysis->duration) * 1000));
+    request([idx, ms](bridge::Client &c) { return c.request(bridge::Seek, uint32_t(idx), ms, 0); },
+            [this, idx, seconds](bool ok, const QString &message) {
+                Seeking &s = seeking_[idx];
+                s.asked = false;
+                if (!ok) qCInfo(lcSession) << "Deck" << idx + 1 << "to" << seconds << "s:" << message;
+                if (s.next && ok && seekable(idx)) { seekTo(idx, *s.next); return; }
+                const auto p = previews_.find(idx);
+                const bool held = p != previews_.end() && !p->second.second;
+                if (!held) seeking_.erase(idx);  // let go: done
+                if (!ok && p != previews_.end() && p->second.second) p->second.second = now();  // didn't take: back to the deck
+            });
 }
 
 void Session::receive(std::shared_ptr<const ReaderFrame> f) {

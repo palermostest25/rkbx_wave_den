@@ -117,6 +117,12 @@ private:
     host::Host *host_ = nullptr;
     QString status_;
     std::map<int, std::pair<double, std::optional<double>>> previews_;  // deck -> (seconds, held until)
+    // A paused deck follows the finger on its overview, as with a needle search strip: one request at a time, the
+    // latest place sent when it is answered.
+    struct Seeking { bool asked = false; std::optional<double> next; };
+    std::map<int, Seeking> seeking_;
+    bool seekable(int idx) const;
+    void seekTo(int idx, double seconds);
     std::optional<double> knobBeats_;
     QThreadPool analysisPool_, requestPool_;
     std::shared_ptr<Libraries> cueLibraries_;  // used only on the analysis pool's one thread

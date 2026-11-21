@@ -791,6 +791,10 @@ void MainWindow::watch() {
         if (!shown && !rekordboxShown_ && aside_.isEmpty() && host::alive(hwnd)) {
             host::stash(hwnd);
             if (hwnd != splitWindow_) qCInfo(lcWindow) << "An earlier Rekordbox browser window was still up: put away" << QString::number(hwnd, 16);
+            else if (now() - splitReshownLogged_ > 10) {
+                splitReshownLogged_ = now();
+                qCInfo(lcWindow) << "Rekordbox showed its browser again while Wave didn't: put away" << QString::number(hwnd, 16);
+            }
         }
     }
     putAwayStrays();
@@ -1209,6 +1213,8 @@ void MainWindow::leaveRekordbox(bool minimising) {
     if (browsing->kind == "mac") session_->showRekordboxBrowser(false, 0, 0);
     else if (browsing->kind == "window") {
         if (browsing->embedded) giveBack(*browsing->embedded);  // its own frame back, before it goes away
+        qCInfo(lcWindow) << "Rekordbox's" << (browsing->whole ? "window" : !browsing->prefs.isEmpty() ? "Preferences" : "browser")
+                         << "put away" << QString::number(browsing->hwnd, 16) << (minimising ? "(minimising)" : "");
         if (!browsing->prefs.isEmpty()) {  // Rekordbox's Preferences: closed (it keeps what was changed), Wave's page back
             host::closeWindow(browsing->hwnd);
             if (pages_->currentWidget() == blank_) pages_->setCurrentWidget(pageBeforePrefs_ ? pageBeforePrefs_ : canvas_);
