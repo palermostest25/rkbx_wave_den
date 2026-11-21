@@ -96,6 +96,7 @@ signals:
     void analysisChanged();
     void statusChanged(const QString &status);
     void loadStatus(const QString &message);
+    void notice(const QString &message);  // for a banner: something the DJ did that couldn't happen
     void frameArrived(std::shared_ptr<const ReaderFrame> frame);
 
 private:

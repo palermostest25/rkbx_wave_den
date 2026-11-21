@@ -1,6 +1,7 @@
 #include "host/rekordbox.h"
 
 #include "core/bridge.h"
+#include "host/windows.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -410,7 +411,12 @@ QString restart(bool hidden) {
 #endif
         askToQuit(pid);
         for (int i = 0; i < 60 && rekordboxPid(); ++i) pause(500);
-        if (rekordboxPid()) return QStringLiteral("Rekordbox is still open; it may be waiting for you to confirm quitting");
+        if (const uint32_t still = rekordboxPid()) {
+            QStringList up;  // what it shows meanwhile (a question?), for the log
+            for (const Win &w : windowsOf(still))
+                if (w.visible && w.area() > 100 * 100) up << QStringLiteral("\"%1\"%2 %3x%4").arg(w.title, w.tool ? " tool" : "").arg(w.rect.width()).arg(w.rect.height());
+            return QStringLiteral("Rekordbox is still open; it may be waiting for you to confirm quitting (its windows: %1)").arg(up.join(", "));
+        }
     }
     return launch(hidden, executable);
 }

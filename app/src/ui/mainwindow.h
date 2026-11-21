@@ -162,6 +162,7 @@ private:
     bool splitAsked_ = false;
     quintptr splitWindow_ = 0;
     double splitReshownLogged_ = 0;
+    QString hostError_;  // the last start or restart failure shown
     std::set<quintptr> splitWindows_;  // every one Rekordbox has given: none left showing
     QWidget *blank_ = nullptr;   // black behind Rekordbox's Preferences
     QWidget *pageBeforePrefs_ = nullptr;
